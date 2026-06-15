@@ -39,6 +39,8 @@ export default function NavBar({
 
   const adminLinks = [
     { href: "/admin", label: "Dashboard" },
+    { href: "/admin/jobs", label: "Jobs" },
+    { href: "/admin/customers", label: "Customers" },
     { href: "/admin/suppliers", label: "Suppliers" },
     { href: "/admin/raw-materials", label: "Raw Materials" },
     { href: "/admin/inventory/raw-materials", label: "Raw Material Inventory" },

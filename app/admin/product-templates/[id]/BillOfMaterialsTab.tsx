@@ -75,6 +75,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
   const [materials, setMaterials] = useState<MaterialRow[]>([]);
   const [parts, setParts] = useState<PartRow[]>([]);
   const [subs, setSubs] = useState<SubRow[]>([]);
+  const [subAssemblyCosts, setSubAssemblyCosts] = useState<Record<string, number>>({});
   const [allMaterials, setAllMaterials] = useState<RawMaterial[]>([]);
   const [allParts, setAllParts] = useState<PurchasedPart[]>([]);
   const [allTemplates, setAllTemplates] = useState<Template[]>([]);
@@ -135,9 +136,53 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         .order("name"),
     ]);
 
+    const subRows = (subsRes.data || []) as SubRow[];
+
+    // For each sub-assembly, calculate its per-unit cost by summing its own materials and parts
+    const subTemplateIds = Array.from(new Set(subRows.map((s) => s.child_template_id)));
+    const subCosts: Record<string, number> = {};
+
+    if (subTemplateIds.length > 0) {
+      const [subMatsRes, subPartsRes] = await Promise.all([
+        supabase
+          .from("product_template_materials")
+          .select("product_template_id, feet_per_unit, raw_materials(current_cost_per_foot)")
+          .in("product_template_id", subTemplateIds),
+        supabase
+          .from("product_template_parts")
+          .select("product_template_id, quantity_per_unit, purchased_parts(current_cost_each)")
+          .in("product_template_id", subTemplateIds),
+      ]);
+
+      type SubMatRow = {
+        product_template_id: string;
+        feet_per_unit: number;
+        raw_materials: { current_cost_per_foot: number } | null;
+      };
+      type SubPartRow = {
+        product_template_id: string;
+        quantity_per_unit: number;
+        purchased_parts: { current_cost_each: number } | null;
+      };
+
+      const subMats = (subMatsRes.data || []) as SubMatRow[];
+      const subParts = (subPartsRes.data || []) as SubPartRow[];
+
+      for (const id of subTemplateIds) {
+        const matCost = subMats
+          .filter((m) => m.product_template_id === id)
+          .reduce((sum, m) => sum + Number(m.feet_per_unit) * Number(m.raw_materials?.current_cost_per_foot || 0), 0);
+        const partCost = subParts
+          .filter((p) => p.product_template_id === id)
+          .reduce((sum, p) => sum + Number(p.quantity_per_unit) * Number(p.purchased_parts?.current_cost_each || 0), 0);
+        subCosts[id] = matCost + partCost;
+      }
+    }
+
     setMaterials((matsRes.data || []) as MaterialRow[]);
     setParts((partsRes.data || []) as PartRow[]);
-    setSubs((subsRes.data || []) as SubRow[]);
+    setSubs(subRows);
+    setSubAssemblyCosts(subCosts);
     setAllMaterials((allMatsRes.data || []) as RawMaterial[]);
     setAllParts((allPartsRes.data || []) as PurchasedPart[]);
     setAllTemplates((allTplRes.data || []) as Template[]);
@@ -253,6 +298,10 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     (sum, p) => sum + Number(p.quantity_per_unit) * Number(p.purchased_parts?.current_cost_each || 0),
     0
   );
+  const subAssemblyCost = subs.reduce(
+    (sum, s) => sum + Number(s.quantity_per_unit) * (subAssemblyCosts[s.child_template_id] || 0),
+    0
+  );
 
   if (loading) {
     return <p className="text-gray-600">Loading...</p>;
@@ -262,19 +311,23 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     <div className="space-y-8">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Material cost per unit</div>
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Material cost</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">${materialCost.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Parts cost per unit</div>
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Parts cost</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">${partCost.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Subtotal (mat + parts)</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">${(materialCost + partCost).toFixed(2)}</div>
-          <div className="text-xs text-gray-500 mt-1">Sub-assemblies and labor not included</div>
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Sub-assemblies</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">${subAssemblyCost.toFixed(2)}</div>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-blue-700 font-medium">Total cost per unit</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">${(materialCost + partCost + subAssemblyCost).toFixed(2)}</div>
+          <div className="text-xs text-gray-500 mt-1">Labor not included</div>
         </div>
       </div>
 
@@ -463,21 +516,29 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               <tr>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Sub-assembly</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Qty / unit</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / sub</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / unit</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {subs.map((s) => (
-                <tr key={s.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm text-gray-900">{s.product_templates?.name || "Unknown"}{s.product_templates?.product_number ? " (" + s.product_templates.product_number + ")" : ""}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(s.quantity_per_unit).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{s.notes || "-"}</td>
-                  <td className="px-4 py-3 text-sm text-right">
-                    <button onClick={() => deleteSub(s.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
-                  </td>
-                </tr>
-              ))}
+              {subs.map((s) => {
+                const costPerSub = subAssemblyCosts[s.child_template_id] || 0;
+                const unitCost = Number(s.quantity_per_unit) * costPerSub;
+                return (
+                  <tr key={s.id} className="border-b border-gray-100 last:border-0">
+                    <td className="px-4 py-3 text-sm text-gray-900">{s.product_templates?.name || "Unknown"}{s.product_templates?.product_number ? " (" + s.product_templates.product_number + ")" : ""}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(s.quantity_per_unit).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${costPerSub.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{s.notes || "-"}</td>
+                    <td className="px-4 py-3 text-sm text-right">
+                      <button onClick={() => deleteSub(s.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

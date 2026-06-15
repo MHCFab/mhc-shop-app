@@ -10,6 +10,7 @@ type ProductTemplate = {
   product_number: string | null;
   description: string | null;
   is_active: boolean;
+  is_sub_assembly: boolean;
   created_at: string;
 };
 
@@ -18,6 +19,7 @@ type Form = {
   product_number: string;
   description: string;
   is_active: boolean;
+  is_sub_assembly: boolean;
 };
 
 const emptyForm: Form = {
@@ -25,6 +27,7 @@ const emptyForm: Form = {
   product_number: "",
   description: "",
   is_active: true,
+  is_sub_assembly: false,
 };
 
 export default function ProductTemplatesPage() {
@@ -37,6 +40,7 @@ export default function ProductTemplatesPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState<"all" | "products" | "sub_assemblies">("all");
   const [companyId, setCompanyId] = useState<string | null>(null);
 
   async function loadCompanyId() {
@@ -67,12 +71,17 @@ export default function ProductTemplatesPage() {
   }, []);
 
   const filtered = useMemo(() => {
-    if (!search) return templates;
-    const s = search.toLowerCase();
-    return templates.filter((t) =>
-      (t.name + " " + (t.product_number || "") + " " + (t.description || "")).toLowerCase().includes(s)
-    );
-  }, [templates, search]);
+    return templates.filter((t) => {
+      if (filterType === "products" && t.is_sub_assembly) return false;
+      if (filterType === "sub_assemblies" && !t.is_sub_assembly) return false;
+      if (search) {
+        const s = search.toLowerCase();
+        const text = (t.name + " " + (t.product_number || "") + " " + (t.description || "")).toLowerCase();
+        if (!text.includes(s)) return false;
+      }
+      return true;
+    });
+  }, [templates, search, filterType]);
 
   function openNew() {
     setForm(emptyForm);
@@ -87,6 +96,7 @@ export default function ProductTemplatesPage() {
       product_number: t.product_number || "",
       description: t.description || "",
       is_active: t.is_active,
+      is_sub_assembly: t.is_sub_assembly,
     });
     setEditingId(t.id);
     setError(null);
@@ -121,6 +131,7 @@ export default function ProductTemplatesPage() {
       product_number: form.product_number.trim() || null,
       description: form.description.trim() || null,
       is_active: form.is_active,
+      is_sub_assembly: form.is_sub_assembly,
     };
 
     const { error } = editingId
@@ -165,13 +176,24 @@ export default function ProductTemplatesPage() {
         </button>
       </div>
 
-      <input
-        type="text"
-        placeholder="Search by name, product number, or description..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
-      />
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <select
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value as "all" | "products" | "sub_assemblies")}
+          className="px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="all">All templates</option>
+          <option value="products">Products only</option>
+          <option value="sub_assemblies">Sub-assemblies only</option>
+        </select>
+        <input
+          type="text"
+          placeholder="Search by name, product number, or description..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
 
       {loading ? (
         <p className="text-gray-600">Loading...</p>
@@ -194,11 +216,16 @@ export default function ProductTemplatesPage() {
                     {t.product_number && <p className="text-sm text-gray-500">{t.product_number}</p>}
                   </Link>
                 </div>
-                {t.is_active ? (
-                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
-                ) : (
-                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
-                )}
+                <div className="flex flex-col items-end gap-1">
+                  {t.is_active ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
+                  )}
+                  {t.is_sub_assembly && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">Sub-assembly</span>
+                  )}
+                </div>
               </div>
               {t.description && <p className="text-sm text-gray-700 mb-4 line-clamp-3">{t.description}</p>}
               <div className="flex items-center justify-between text-sm">
@@ -269,6 +296,16 @@ export default function ProductTemplatesPage() {
                     className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="text-sm text-gray-700">Active (uncheck to hide from new jobs)</span>
+                </label>
+
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.is_sub_assembly}
+                    onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
+                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700">Sub-assembly (used as a component, not built standalone)</span>
                 </label>
 
                 {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}

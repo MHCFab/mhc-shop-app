@@ -11,6 +11,7 @@ type Template = {
   description: string | null;
   sops: string | null;
   is_active: boolean;
+  is_sub_assembly: boolean;
 };
 
 export default function SettingsTab({ templateId }: { templateId: string }) {
@@ -29,6 +30,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     description: "",
     sops: "",
     is_active: true,
+    is_sub_assembly: false,
   });
 
   const loadTemplate = useCallback(async () => {
@@ -48,6 +50,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: data.description || "",
         sops: data.sops || "",
         is_active: data.is_active,
+        is_sub_assembly: data.is_sub_assembly,
       });
     }
     setLoading(false);
@@ -76,6 +79,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: form.description.trim() || null,
         sops: form.sops.trim() || null,
         is_active: form.is_active,
+        is_sub_assembly: form.is_sub_assembly,
       })
       .eq("id", templateId);
 
@@ -158,6 +162,15 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           <span className="text-sm text-gray-700">Active (uncheck to hide from new jobs)</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={form.is_sub_assembly}
+            onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
+            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
         </label>
 
         <div className="pt-4 border-t border-gray-200">

@@ -1,0 +1,515 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { createClient } from "../../../lib/supabase";
+
+type Customer = { id: string; name: string };
+type Template = { id: string; name: string; product_number: string | null };
+
+type LineItem = {
+  id: string;
+  product_template_id: string;
+  quantity: string;
+  notes: string;
+};
+
+const SHAPES_MAP: Record<string, string> = {
+  round_tube: "Round Tube",
+  square_tube: "Square Tube",
+  rectangle_tube: "Rectangle Tube",
+  channel: "Channel",
+  i_beam: "I-Beam",
+  angle: "Angle",
+};
+
+function makeId() {
+  return Math.random().toString(36).slice(2);
+}
+
+export default function NewJobPage() {
+  const supabase = createClient();
+  const router = useRouter();
+
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(null);
+
+  const [customerId, setCustomerId] = useState("");
+  const [jobNumber, setJobNumber] = useState("");
+  const [customerPo, setCustomerPo] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [lineItems, setLineItems] = useState<LineItem[]>([
+    { id: makeId(), product_template_id: "", quantity: "1", notes: "" },
+  ]);
+
+  const loadCompanyId = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+    if (data) setCompanyId(data.company_id);
+  }, [supabase]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const [custsRes, tplsRes] = await Promise.all([
+      supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+      supabase.from("product_templates").select("id, name, product_number").eq("is_active", true).order("name"),
+    ]);
+    if (custsRes.data) setCustomers(custsRes.data as Customer[]);
+    if (tplsRes.data) setTemplates(tplsRes.data as Template[]);
+    setLoading(false);
+  }, [supabase]);
+
+  const loadDefaultJobNumber = useCallback(async () => {
+    // Generate a default like JOB-2026-001 by counting existing jobs
+    const year = new Date().getFullYear();
+    const { count } = await supabase
+      .from("jobs")
+      .select("id", { count: "exact", head: true });
+    const seq = String((count || 0) + 1).padStart(3, "0");
+    setJobNumber("JOB-" + year + "-" + seq);
+  }, [supabase]);
+
+  useEffect(() => {
+    loadCompanyId();
+    loadData();
+    loadDefaultJobNumber();
+  }, [loadCompanyId, loadData, loadDefaultJobNumber]);
+
+  function addLineItem() {
+    setLineItems([...lineItems, { id: makeId(), product_template_id: "", quantity: "1", notes: "" }]);
+  }
+
+  function removeLineItem(id: string) {
+    setLineItems(lineItems.filter((li) => li.id !== id));
+  }
+
+  function updateLineItem(id: string, field: keyof LineItem, value: string) {
+    setLineItems(lineItems.map((li) => (li.id === id ? { ...li, [field]: value } : li)));
+  }
+
+  function describeMaterial(m: {
+    shape: string;
+    size: string;
+    wall_thickness: string | null;
+    grade: string;
+  }) {
+    const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
+    return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
+  }
+
+  async function generatePickListAndTasks(jobId: string, items: { lineItemId: string; templateId: string; quantity: number }[]) {
+    if (!companyId) return;
+
+    // Aggregate raw materials across all line items
+    const matMap = new Map<string, { quantity: number; description: string }>();
+    const partMap = new Map<string, { quantity: number; name: string; partNumber: string | null }>();
+
+    // Fetch BOM and tasks for all templates in parallel
+    const templateIds = Array.from(new Set(items.map((i) => i.templateId)));
+    const [matsRes, partsRes, tasksRes] = await Promise.all([
+      supabase
+        .from("product_template_materials")
+        .select("product_template_id, feet_per_unit, raw_materials(id, shape, size, wall_thickness, grade)")
+        .in("product_template_id", templateIds),
+      supabase
+        .from("product_template_parts")
+        .select("product_template_id, quantity_per_unit, purchased_parts(id, name, part_number)")
+        .in("product_template_id", templateIds),
+      supabase
+        .from("product_template_tasks")
+        .select("*")
+        .in("product_template_id", templateIds)
+        .order("sort_order"),
+    ]);
+
+    const tplMaterials = (matsRes.data || []) as Array<{
+      product_template_id: string;
+      feet_per_unit: number;
+      raw_materials: { id: string; shape: string; size: string; wall_thickness: string | null; grade: string } | null;
+    }>;
+
+    const tplParts = (partsRes.data || []) as Array<{
+      product_template_id: string;
+      quantity_per_unit: number;
+      purchased_parts: { id: string; name: string; part_number: string | null } | null;
+    }>;
+
+    const tplTasks = (tasksRes.data || []) as Array<{
+      id: string;
+      product_template_id: string;
+      name: string;
+      description: string | null;
+      estimated_minutes_per_unit: number;
+      sort_order: number;
+    }>;
+
+    // Aggregate pick list items
+    for (const item of items) {
+      const matsForTemplate = tplMaterials.filter((m) => m.product_template_id === item.templateId);
+      for (const m of matsForTemplate) {
+        if (!m.raw_materials) continue;
+        const key = m.raw_materials.id;
+        const total = Number(m.feet_per_unit) * item.quantity;
+        const existing = matMap.get(key);
+        if (existing) existing.quantity += total;
+        else matMap.set(key, { quantity: total, description: describeMaterial(m.raw_materials) });
+      }
+      const partsForTemplate = tplParts.filter((p) => p.product_template_id === item.templateId);
+      for (const p of partsForTemplate) {
+        if (!p.purchased_parts) continue;
+        const key = p.purchased_parts.id;
+        const total = Number(p.quantity_per_unit) * item.quantity;
+        const existing = partMap.get(key);
+        if (existing) existing.quantity += total;
+        else partMap.set(key, { quantity: total, name: p.purchased_parts.name, partNumber: p.purchased_parts.part_number });
+      }
+    }
+
+    // Insert pick list rows
+    const pickListRows = [
+      ...Array.from(matMap.entries()).map(([rawMaterialId, info]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "raw_material" as const,
+        raw_material_id: rawMaterialId,
+        purchased_part_id: null,
+        planned_quantity: info.quantity,
+        actual_quantity: 0,
+        unit: "ft",
+        notes: null,
+      })),
+      ...Array.from(partMap.entries()).map(([partId, info]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "purchased_part" as const,
+        purchased_part_id: partId,
+        raw_material_id: null,
+        planned_quantity: info.quantity,
+        actual_quantity: 0,
+        unit: "ea",
+        notes: null,
+      })),
+    ];
+
+    if (pickListRows.length > 0) {
+      await supabase.from("job_pick_list_items").insert(pickListRows);
+    }
+
+    // Insert job task rows (one per template task per line item)
+    const taskRows: Array<{
+      company_id: string;
+      job_id: string;
+      job_line_item_id: string;
+      source_task_id: string;
+      name: string;
+      description: string | null;
+      batch_quantity: number;
+      estimated_minutes_total: number;
+      sort_order: number;
+    }> = [];
+
+    for (const item of items) {
+      const tasksForTemplate = tplTasks.filter((t) => t.product_template_id === item.templateId);
+      for (const t of tasksForTemplate) {
+        taskRows.push({
+          company_id: companyId,
+          job_id: jobId,
+          job_line_item_id: item.lineItemId,
+          source_task_id: t.id,
+          name: t.name,
+          description: t.description,
+          batch_quantity: item.quantity,
+          estimated_minutes_total: Number(t.estimated_minutes_per_unit) * item.quantity,
+          sort_order: t.sort_order,
+        });
+      }
+    }
+
+    if (taskRows.length > 0) {
+      await supabase.from("job_tasks").insert(taskRows);
+    }
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (!companyId) {
+      setError("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    if (!customerId) {
+      setError("Please select a customer.");
+      return;
+    }
+    if (!jobNumber.trim()) {
+      setError("Job number is required.");
+      return;
+    }
+    const validLines = lineItems.filter((li) => li.product_template_id && parseInt(li.quantity) > 0);
+    if (validLines.length === 0) {
+      setError("Please add at least one product line item with a quantity greater than 0.");
+      return;
+    }
+
+    setSaving(true);
+
+    // Create job
+    const { data: job, error: jobError } = await supabase
+      .from("jobs")
+      .insert({
+        company_id: companyId,
+        customer_id: customerId,
+        job_number: jobNumber.trim(),
+        customer_po: customerPo.trim() || null,
+        status: "quoted",
+        due_date: dueDate || null,
+        notes: notes.trim() || null,
+      })
+      .select()
+      .single();
+
+    if (jobError || !job) {
+      setError(jobError?.message || "Failed to create job.");
+      setSaving(false);
+      return;
+    }
+
+    // Insert line items
+    const lineItemRows = validLines.map((li, i) => ({
+      company_id: companyId,
+      job_id: job.id,
+      product_template_id: li.product_template_id,
+      quantity: parseInt(li.quantity),
+      notes: li.notes.trim() || null,
+      sort_order: i,
+    }));
+
+    const { data: insertedLineItems, error: lineError } = await supabase
+      .from("job_line_items")
+      .insert(lineItemRows)
+      .select();
+
+    if (lineError || !insertedLineItems) {
+      setError(lineError?.message || "Failed to create line items.");
+      setSaving(false);
+      return;
+    }
+
+    // Generate pick list and tasks
+    const itemsForGeneration = insertedLineItems.map((li, i) => ({
+      lineItemId: li.id,
+      templateId: validLines[i].product_template_id,
+      quantity: parseInt(validLines[i].quantity),
+    }));
+
+    try {
+      await generatePickListAndTasks(job.id, itemsForGeneration);
+    } catch (e) {
+      console.error("Pick list/task generation failed:", e);
+      setError("Job created, but failed to generate pick list or tasks. You can regenerate them from the job page.");
+      router.push("/admin/jobs/" + job.id);
+      return;
+    }
+
+    setSaving(false);
+    router.push("/admin/jobs/" + job.id);
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <p className="text-gray-600">Loading...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8">
+      <Link href="/admin/jobs" className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">
+        &larr; Back to jobs
+      </Link>
+
+      <h1 className="text-3xl font-bold text-gray-900 mb-6">New Job</h1>
+
+      {customers.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
+          <p className="text-sm text-amber-800">You need to add at least one customer before creating a job. <Link href="/admin/customers" className="underline font-medium">Add a customer</Link></p>
+        </div>
+      )}
+
+      {templates.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
+          <p className="text-sm text-amber-800">You need to add at least one product template before creating a job. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
+        </div>
+      )}
+
+      <form onSubmit={handleSave} className="space-y-6">
+        <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+          <h2 className="text-base font-semibold text-gray-900">Job details</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Customer <span className="text-red-600">*</span>
+              </label>
+              <select
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Select customer --</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Job number <span className="text-red-600">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={jobNumber}
+                onChange={(e) => setJobNumber(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Customer PO</label>
+              <input
+                type="text"
+                value={customerPo}
+                onChange={(e) => setCustomerPo(e.target.value)}
+                placeholder="Optional"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Due date</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-gray-900">Line items</h2>
+            <button
+              type="button"
+              onClick={addLineItem}
+              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+            >
+              + Add line item
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-600">
+            Each line item is a product template you&apos;re building, and how many. The system will auto-generate the pick list and task list when you save.
+          </p>
+
+          <div className="space-y-3">
+            {lineItems.map((li, idx) => (
+              <div key={li.id} className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Line {idx + 1}</span>
+                  {lineItems.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeLineItem(li.id)}
+                      className="text-xs text-red-600 hover:text-red-800 font-medium"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Product template</label>
+                    <select
+                      value={li.product_template_id}
+                      onChange={(e) => updateLineItem(li.id, "product_template_id", e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select template --</option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={li.quantity}
+                      onChange={(e) => updateLineItem(li.id, "quantity", e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Notes for this line (optional)</label>
+                  <input
+                    type="text"
+                    value={li.notes}
+                    onChange={(e) => updateLineItem(li.id, "notes", e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
+
+        <div className="flex justify-end gap-2">
+          <Link
+            href="/admin/jobs"
+            className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors"
+          >
+            Cancel
+          </Link>
+          <button
+            type="submit"
+            disabled={saving || customers.length === 0 || templates.length === 0}
+            className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {saving ? "Creating job..." : "Create job"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

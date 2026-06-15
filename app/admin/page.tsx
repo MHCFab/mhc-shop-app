@@ -22,9 +22,19 @@ export default async function AdminDashboard() {
 
   const cards = [
     {
+      title: "Jobs",
+      description: "Customer work orders. Create and track jobs from quote through shipping.",
+      href: "/admin/jobs",
+    },
+    {
       title: "Suppliers",
       description: "Manage the vendors you buy raw materials and parts from.",
       href: "/admin/suppliers",
+    },
+    {
+      title: "Customers",
+      description: "Manage the companies and contacts you build jobs for.",
+      href: "/admin/customers",
     },
     {
       title: "Raw Materials",
