@@ -36,6 +36,16 @@ export default async function AdminDashboard() {
       description: "Track sticks on hand, purchase batches, and supplier history.",
       href: "/admin/inventory/raw-materials",
     },
+    {
+      title: "Purchased Parts",
+      description: "Catalog of laser parts, fasteners, casters, machined parts, and more.",
+      href: "/admin/purchased-parts",
+    },
+    {
+      title: "Parts Inventory",
+      description: "Track quantities on hand, purchase batches, and supplier history per part.",
+      href: "/admin/inventory/purchased-parts",
+    },
   ];
 
   return (
