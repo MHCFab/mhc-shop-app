@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
 import BillOfMaterialsTab from "./BillOfMaterialsTab";
+import TasksTab from "./TasksTab";
+import PhotosTab from "./PhotosTab";
+import NotesTab from "./NotesTab";
+import SettingsTab from "./SettingsTab";
 
 type ProductTemplate = {
   id: string;
@@ -110,18 +114,10 @@ export default function ProductTemplateDetailPage() {
       </div>
 
       {tab === "bom" && <BillOfMaterialsTab templateId={template.id} />}
-      {tab === "tasks" && <ComingSoon label="Tasks" />}
-      {tab === "photos" && <ComingSoon label="Photos" />}
-      {tab === "notes" && <ComingSoon label="Build Notes" />}
-      {tab === "settings" && <ComingSoon label="SOPs and Settings" />}
-    </div>
-  );
-}
-
-function ComingSoon({ label }: { label: string }) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
-      <p className="text-gray-600">{label} coming in the next sub-phase.</p>
+      {tab === "tasks" && <TasksTab templateId={template.id} />}
+      {tab === "photos" && <PhotosTab templateId={template.id} />}
+      {tab === "notes" && <NotesTab templateId={template.id} />}
+      {tab === "settings" && <SettingsTab templateId={template.id} />}
     </div>
   );
 }
