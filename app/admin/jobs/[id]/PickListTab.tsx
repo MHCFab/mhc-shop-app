@@ -60,6 +60,15 @@ export default function PickListTab({ jobId }: { jobId: string }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValues, setEditValues] = useState({ planned_quantity: "", notes: "" });
   const [error, setError] = useState<string | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [companyId, setCompanyId] = useState<string | null>(null);
+
+  const loadCompanyId = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+    if (data) setCompanyId(data.company_id);
+  }, [supabase]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -75,8 +84,9 @@ export default function PickListTab({ jobId }: { jobId: string }) {
   }, [supabase, jobId]);
 
   useEffect(() => {
+    loadCompanyId();
     loadItems();
-  }, [loadItems]);
+  }, [loadCompanyId, loadItems]);
 
   function openEdit(item: PickListItem) {
     setEditingId(item.id);
@@ -117,6 +127,168 @@ export default function PickListTab({ jobId }: { jobId: string }) {
     loadItems();
   }
 
+  async function regeneratePickList() {
+    if (!companyId) {
+      alert("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    const ok = confirm(
+      "Regenerate the pick list from the current product templates? This will delete the existing pick list (including any edits you've made) and rebuild it from scratch."
+    );
+    if (!ok) return;
+
+    setRegenerating(true);
+
+    // Get all line items for this job
+    const { data: lineItems, error: liError } = await supabase
+      .from("job_line_items")
+      .select("id, product_template_id, quantity")
+      .eq("job_id", jobId);
+
+    if (liError || !lineItems) {
+      alert("Failed to load line items: " + (liError?.message || "Unknown error"));
+      setRegenerating(false);
+      return;
+    }
+
+    // Delete existing pick list
+    const { error: delError } = await supabase
+      .from("job_pick_list_items")
+      .delete()
+      .eq("job_id", jobId);
+
+    if (delError) {
+      alert("Failed to clear existing pick list: " + delError.message);
+      setRegenerating(false);
+      return;
+    }
+
+    // Recursively expand all template ids (top-level + sub-assemblies)
+    const allTemplateIds = new Set<string>();
+    const queue = [...new Set(lineItems.map((li) => li.product_template_id))];
+    while (queue.length > 0) {
+      const tid = queue.shift()!;
+      if (allTemplateIds.has(tid)) continue;
+      allTemplateIds.add(tid);
+      const { data: subData } = await supabase
+        .from("product_template_sub_assemblies")
+        .select("child_template_id")
+        .eq("parent_template_id", tid);
+      if (subData) {
+        for (const row of subData) {
+          if (!allTemplateIds.has(row.child_template_id)) {
+            queue.push(row.child_template_id);
+          }
+        }
+      }
+    }
+
+    const templateIdArr = Array.from(allTemplateIds);
+
+    // Fetch all materials, parts, and sub-assembly links
+    const [matsRes, partsRes, subLinksRes] = await Promise.all([
+      supabase
+        .from("product_template_materials")
+        .select("product_template_id, feet_per_unit, raw_materials(id)")
+        .in("product_template_id", templateIdArr),
+      supabase
+        .from("product_template_parts")
+        .select("product_template_id, quantity_per_unit, purchased_parts(id)")
+        .in("product_template_id", templateIdArr),
+      supabase
+        .from("product_template_sub_assemblies")
+        .select("parent_template_id, child_template_id, quantity_per_unit")
+        .in("parent_template_id", templateIdArr),
+    ]);
+
+    type MatRow = {
+      product_template_id: string;
+      feet_per_unit: number;
+      raw_materials: { id: string } | null;
+    };
+    type PartRow = {
+      product_template_id: string;
+      quantity_per_unit: number;
+      purchased_parts: { id: string } | null;
+    };
+    type SubLinkRow = {
+      parent_template_id: string;
+      child_template_id: string;
+      quantity_per_unit: number;
+    };
+
+    const tplMaterials = (matsRes.data || []) as MatRow[];
+    const tplParts = (partsRes.data || []) as PartRow[];
+    const tplSubs = (subLinksRes.data || []) as SubLinkRow[];
+
+    // Calculate total quantity needed of each template
+    const templateQtyTotals = new Map<string, number>();
+    function expandTemplate(templateId: string, multiplier: number) {
+      templateQtyTotals.set(templateId, (templateQtyTotals.get(templateId) || 0) + multiplier);
+      const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
+      for (const link of childLinks) {
+        expandTemplate(link.child_template_id, multiplier * Number(link.quantity_per_unit));
+      }
+    }
+    for (const li of lineItems) {
+      expandTemplate(li.product_template_id, Number(li.quantity));
+    }
+
+    // Aggregate materials and parts
+    const matMap = new Map<string, number>();
+    const partMap = new Map<string, number>();
+    for (const [tid, totalQty] of templateQtyTotals.entries()) {
+      for (const m of tplMaterials.filter((x) => x.product_template_id === tid)) {
+        if (!m.raw_materials) continue;
+        const total = Number(m.feet_per_unit) * totalQty;
+        matMap.set(m.raw_materials.id, (matMap.get(m.raw_materials.id) || 0) + total);
+      }
+      for (const p of tplParts.filter((x) => x.product_template_id === tid)) {
+        if (!p.purchased_parts) continue;
+        const total = Number(p.quantity_per_unit) * totalQty;
+        partMap.set(p.purchased_parts.id, (partMap.get(p.purchased_parts.id) || 0) + total);
+      }
+    }
+
+    // Insert new pick list rows
+    const rows = [
+      ...Array.from(matMap.entries()).map(([rmId, qty]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "raw_material" as const,
+        raw_material_id: rmId,
+        purchased_part_id: null,
+        planned_quantity: qty,
+        actual_quantity: 0,
+        unit: "ft",
+        notes: null,
+      })),
+      ...Array.from(partMap.entries()).map(([ppId, qty]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "purchased_part" as const,
+        purchased_part_id: ppId,
+        raw_material_id: null,
+        planned_quantity: qty,
+        actual_quantity: 0,
+        unit: "ea",
+        notes: null,
+      })),
+    ];
+
+    if (rows.length > 0) {
+      const { error: insError } = await supabase.from("job_pick_list_items").insert(rows);
+      if (insError) {
+        alert("Failed to insert new pick list: " + insError.message);
+        setRegenerating(false);
+        return;
+      }
+    }
+
+    setRegenerating(false);
+    loadItems();
+  }
+
   const totalPlannedCost = items.reduce((sum, i) => sum + Number(i.planned_quantity) * itemCostPerUnit(i), 0);
   const totalActualCost = items.reduce((sum, i) => sum + Number(i.actual_quantity) * itemCostPerUnit(i), 0);
   const rawMaterialItems = items.filter((i) => i.item_type === "raw_material");
@@ -128,15 +300,25 @@ export default function PickListTab({ jobId }: { jobId: string }) {
     <div className="space-y-6">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Planned material cost</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">${totalPlannedCost.toFixed(2)}</div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
+            <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Planned material cost</div>
+            <div className="text-2xl font-bold text-gray-900 mt-1">${totalPlannedCost.toFixed(2)}</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
+            <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Actual material cost (so far)</div>
+            <div className="text-2xl font-bold text-gray-900 mt-1">${totalActualCost.toFixed(2)}</div>
+          </div>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Actual material cost (so far)</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">${totalActualCost.toFixed(2)}</div>
-        </div>
+        <button
+          onClick={regeneratePickList}
+          disabled={regenerating}
+          className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+          title="Rebuild the pick list from the current product templates (includes sub-assemblies)"
+        >
+          {regenerating ? "Regenerating..." : "Regenerate pick list"}
+        </button>
       </div>
 
       <PickListSection title="Raw Materials" items={rawMaterialItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} />
