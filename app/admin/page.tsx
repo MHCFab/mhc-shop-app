@@ -46,6 +46,11 @@ export default async function AdminDashboard() {
       description: "Track quantities on hand, purchase batches, and supplier history per part.",
       href: "/admin/inventory/purchased-parts",
     },
+    {
+      title: "Product Templates",
+      description: "Define product recipes with materials, parts, tasks, SOPs, photos, and notes.",
+      href: "/admin/product-templates",
+    },
   ];
 
   return (

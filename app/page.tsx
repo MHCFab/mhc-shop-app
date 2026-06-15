@@ -1,50 +1,34 @@
-export default function Home() {
+import { redirect } from "next/navigation";
+import { createServerSupabaseClient } from "./lib/supabase-server";
+
+export default async function HomePage() {
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (profile?.role === "admin") {
+    redirect("/admin");
+  }
+
+  // Employees will eventually land on a job board view (Phase 4/5).
+  // For now, show a simple placeholder.
   return (
-    <main className="min-h-screen bg-gray-900 text-white p-8">
-      <h1 className="text-4xl font-bold mb-8">
-        MHC Shop Management
-      </h1>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <a
-          href="/jobs"
-          className="bg-gray-800 hover:bg-gray-700 rounded-xl p-8"
-        >
-          <h2 className="text-2xl font-semibold mb-2">
-            Job Boards
-          </h2>
-
-          <p className="text-gray-400">
-            Create jobs and track workflow.
-          </p>
-        </a>
-
-        <a
-          href="/product-templates"
-          className="bg-gray-800 hover:bg-gray-700 rounded-xl p-8"
-        >
-          <h2 className="text-2xl font-semibold mb-2">
-            Products
-          </h2>
-
-          <p className="text-gray-400">
-            Build product templates and SOPs.
-          </p>
-        </a>
-
-        <a
-          href="/cost-sheets"
-          className="bg-gray-800 hover:bg-gray-700 rounded-xl p-8"
-        >
-          <h2 className="text-2xl font-semibold mb-2">
-            Cost Sheets
-          </h2>
-
-          <p className="text-gray-400">
-            Manage raw material and part costs.
-          </p>
-        </a>
-      </div>
-    </main>
+    <div className="max-w-3xl mx-auto px-4 py-12 text-center">
+      <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome to ShopWorks</h1>
+      <p className="text-gray-600">
+        Your job board is coming soon. Sit tight while we finish setting things up.
+      </p>
+    </div>
   );
 }

@@ -44,6 +44,7 @@ export default function NavBar({
     { href: "/admin/inventory/raw-materials", label: "Raw Material Inventory" },
     { href: "/admin/purchased-parts", label: "Purchased Parts" },
     { href: "/admin/inventory/purchased-parts", label: "Parts Inventory" },
+    { href: "/admin/product-templates", label: "Product Templates" },
   ];
 
   return (
