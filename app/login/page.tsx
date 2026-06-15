@@ -36,7 +36,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">
-          MHC Shop App
+          ShopWorks
         </h1>
         <p className="text-gray-600 mb-6">Sign in to continue</p>
 

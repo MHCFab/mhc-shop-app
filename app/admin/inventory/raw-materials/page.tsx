@@ -83,7 +83,19 @@ export default function RawMaterialInventoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [companyId, setCompanyId] = useState<string | null>(null);
 
+  async function loadCompanyId() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", user.id)
+      .single();
+    if (data) setCompanyId(data.company_id);
+  }
+  
   async function loadAll() {
     setLoading(true);
     const [batchesRes, matsRes, supsRes] = await Promise.all([
@@ -105,6 +117,7 @@ export default function RawMaterialInventoryPage() {
   }
 
   useEffect(() => {
+    loadCompanyId();
     loadAll();
   }, []);
 
@@ -176,6 +189,12 @@ export default function RawMaterialInventoryPage() {
       return;
     }
 
+    if (!companyId) {
+      setError("Could not determine your company. Try refreshing the page.");
+      setSaving(false);
+      return;
+    }
+    
     const payload = {
       raw_material_id: form.raw_material_id,
       supplier_id: form.supplier_id || null,
@@ -188,7 +207,7 @@ export default function RawMaterialInventoryPage() {
 
     const { error } = editingId
       ? await supabase.from("raw_material_inventory").update(payload).eq("id", editingId)
-      : await supabase.from("raw_material_inventory").insert(payload);
+      : await supabase.from("raw_material_inventory").insert({ ...payload, company_id: companyId });
 
     if (error) {
       setError(error.message);

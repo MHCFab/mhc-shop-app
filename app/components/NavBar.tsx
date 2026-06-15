@@ -11,12 +11,21 @@ type Profile = {
   role: string;
 };
 
-export default function NavBar({ profile }: { profile: Profile }) {
+type Company = {
+  name: string;
+} | null;
+
+export default function NavBar({
+  profile,
+  company,
+}: {
+  profile: Profile;
+  company: Company;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Hide the nav bar on the login page
   if (pathname === "/login") return null;
 
   const isAdmin = profile.role === "admin";
@@ -40,8 +49,11 @@ export default function NavBar({ profile }: { profile: Profile }) {
       <div className="max-w-7xl mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-8">
-            <Link href="/" className="text-xl font-bold text-gray-900">
-              MHC Shop
+            <Link href="/" className="flex flex-col leading-tight">
+              <span className="text-xl font-bold text-gray-900">ShopWorks</span>
+              {company && (
+                <span className="text-xs text-gray-500">{company.name}</span>
+              )}
             </Link>
 
             {isAdmin && (

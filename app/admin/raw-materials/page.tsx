@@ -60,6 +60,18 @@ export default function RawMaterialsPage() {
   const [saving, setSaving] = useState(false);
   const [filterShape, setFilterShape] = useState<Shape | "all">("all");
   const [search, setSearch] = useState("");
+  const [companyId, setCompanyId] = useState<string | null>(null);
+
+  async function loadCompanyId() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", user.id)
+      .single();
+    if (data) setCompanyId(data.company_id);
+  }
 
   async function loadMaterials() {
     setLoading(true);
@@ -77,6 +89,7 @@ export default function RawMaterialsPage() {
   }
 
   useEffect(() => {
+    loadCompanyId();
     loadMaterials();
   }, []);
 
@@ -138,6 +151,12 @@ export default function RawMaterialsPage() {
       return;
     }
 
+    if (!companyId) {
+      setError("Could not determine your company. Try refreshing the page.");
+      setSaving(false);
+      return;
+    }
+
     const payload = {
       shape: form.shape,
       size: form.size.trim(),
@@ -150,7 +169,7 @@ export default function RawMaterialsPage() {
 
     const { error } = editingId
       ? await supabase.from("raw_materials").update(payload).eq("id", editingId)
-      : await supabase.from("raw_materials").insert(payload);
+      : await supabase.from("raw_materials").insert({ ...payload, company_id: companyId });
 
     if (error) {
       setError(error.message);

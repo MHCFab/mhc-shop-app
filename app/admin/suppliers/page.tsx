@@ -40,7 +40,19 @@ export default function SuppliersPage() {
   const [form, setForm] = useState<SupplierForm>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState<string | null>(null);
 
+  async function loadCompanyId() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", user.id)
+      .single();
+    if (data) setCompanyId(data.company_id);
+  }
+  
   async function loadSuppliers() {
     setLoading(true);
     const { data, error } = await supabase
@@ -56,8 +68,8 @@ export default function SuppliersPage() {
   }
 
   useEffect(() => {
+    loadCompanyId();
     loadSuppliers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function openNew() {
@@ -93,6 +105,12 @@ export default function SuppliersPage() {
     setError(null);
     setSaving(true);
 
+    if (!companyId) {
+      setError("Could not determine your company. Try refreshing the page.");
+      setSaving(false);
+      return;
+    }
+
     const payload = {
       name: form.name.trim(),
       contact_name: form.contact_name.trim() || null,
@@ -110,7 +128,7 @@ export default function SuppliersPage() {
 
     const { error } = editingId
       ? await supabase.from("suppliers").update(payload).eq("id", editingId)
-      : await supabase.from("suppliers").insert(payload);
+      : await supabase.from("suppliers").insert({ ...payload, company_id: companyId });
 
     if (error) {
       setError(error.message);
