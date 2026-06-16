@@ -58,7 +58,7 @@ export default function PickListTab({ jobId }: { jobId: string }) {
   const [items, setItems] = useState<PickListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState({ planned_quantity: "", notes: "" });
+  const [editValues, setEditValues] = useState({ planned_quantity: "", actual_quantity: "", notes: "" });
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -92,6 +92,7 @@ export default function PickListTab({ jobId }: { jobId: string }) {
     setEditingId(item.id);
     setEditValues({
       planned_quantity: String(item.planned_quantity),
+      actual_quantity: String(item.actual_quantity),
       notes: item.notes || "",
     });
   }
@@ -102,10 +103,16 @@ export default function PickListTab({ jobId }: { jobId: string }) {
       alert("Planned quantity must be 0 or more.");
       return;
     }
+    const actualQty = parseFloat(editValues.actual_quantity);
+    if (isNaN(actualQty) || actualQty < 0) {
+      alert("Actual quantity must be 0 or more.");
+      return;
+    }
     const { error } = await supabase
       .from("job_pick_list_items")
       .update({
         planned_quantity: qty,
+        actual_quantity: actualQty,
         notes: editValues.notes.trim() || null,
       })
       .eq("id", itemId);
@@ -299,6 +306,10 @@ export default function PickListTab({ jobId }: { jobId: string }) {
   return (
     <div className="space-y-6">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
+      
+      <p className="text-sm text-gray-600">
+        Planned comes from the product templates. For raw materials, Actual reflects net consumed from the cutting nest (sticks pulled minus drops saved).
+      </p>
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
@@ -341,8 +352,8 @@ function PickListSection({
   title: string;
   items: PickListItem[];
   editingId: string | null;
-  editValues: { planned_quantity: string; notes: string };
-  setEditValues: (v: { planned_quantity: string; notes: string }) => void;
+  editValues: { planned_quantity: string; actual_quantity: string; notes: string };
+  setEditValues: (v: { planned_quantity: string; actual_quantity: string; notes: string }) => void;
   openEdit: (item: PickListItem) => void;
   saveEdit: (id: string) => void;
   closeEdit: () => void;
@@ -390,8 +401,19 @@ function PickListSection({
                       <span className="text-gray-900">{Number(item.planned_quantity).toFixed(2)} {item.unit}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">
-                    {Number(item.actual_quantity).toFixed(2)} {item.unit}
+                  <td className="px-4 py-3 text-sm text-right font-mono">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={editValues.actual_quantity}
+                        onChange={(e) => setEditValues({ ...editValues, actual_quantity: e.target.value })}
+                        className="w-20 px-2 py-1 border border-gray-300 rounded text-right text-gray-900"
+                      />
+                    ) : (
+                      <span className="text-gray-700">{Number(item.actual_quantity).toFixed(2)} {item.unit}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${cost.toFixed(4)}</td>
                   <td className="px-4 py-3 text-sm text-right font-mono text-gray-900">${plannedCost.toFixed(2)}</td>

@@ -4,9 +4,11 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
+import { allocateJobInventory, releaseJobInventory } from "../../../lib/inventory";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import TasksTab from "./TasksTab";
+import CuttingNestTab from "./CuttingNestTab";
 
 const STATUSES = [
   { value: "quoted", label: "Quoted", color: "bg-gray-100 text-gray-800" },
@@ -32,7 +34,7 @@ type Job = {
   customers: { id: string; name: string } | null;
 };
 
-type Tab = "overview" | "picklist" | "tasks";
+type Tab = "overview" | "picklist" | "cuttingnest" | "tasks";
 
 function statusBadge(status: Status) {
   const s = STATUSES.find((x) => x.value === status);
@@ -79,18 +81,48 @@ export default function JobDetailPage() {
     if (newStatus === "shipped" && !job.shipped_at) updates.shipped_at = nowIso;
 
     const { error } = await supabase.from("jobs").update(updates).eq("id", job.id);
-    setChangingStatus(false);
 
     if (error) {
+      setChangingStatus(false);
       alert("Failed to change status: " + error.message);
       return;
     }
+
+    // Handle inventory allocation based on the new status
+    try {
+      const prevStatus = job.status;
+
+      // Get company id for allocation
+      const { data: { user } } = await supabase.auth.getUser();
+      let companyId: string | null = null;
+      if (user) {
+        const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+        companyId = profile?.company_id || null;
+      }
+
+      // Releasing a job (from quoted) allocates inventory
+      if (newStatus === "released" && prevStatus === "quoted" && companyId) {
+        await allocateJobInventory(job.id, companyId);
+      }
+
+      // Going back to quoted, or cancelling, releases inventory
+      if (newStatus === "quoted" || newStatus === "cancelled") {
+        await releaseJobInventory(job.id);
+      }
+    } catch (e) {
+      console.error("Inventory allocation update failed:", e);
+      // Status already changed; just warn
+      alert("Status changed, but inventory allocation update ran into an issue. Check the inventory page.");
+    }
+
+    setChangingStatus(false);
     loadJob();
   }
 
   const tabs: { value: Tab; label: string }[] = [
     { value: "overview", label: "Overview" },
     { value: "picklist", label: "Pick List" },
+    { value: "cuttingnest", label: "Cutting Nest" },
     { value: "tasks", label: "Tasks" },
   ];
 
@@ -165,6 +197,7 @@ export default function JobDetailPage() {
 
       {tab === "overview" && <OverviewTab jobId={job.id} />}
       {tab === "picklist" && <PickListTab jobId={job.id} />}
+      {tab === "cuttingnest" && <CuttingNestTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
       {tab === "tasks" && <TasksTab jobId={job.id} />}
     </div>
   );

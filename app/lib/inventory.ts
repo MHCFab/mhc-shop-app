@@ -133,3 +133,203 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
     };
   });
 }
+// ============================================
+// Allocation management
+// ============================================
+
+// Allocate a job's pick list quantities from inventory (called when a job is released).
+// Creates allocation rows at basis 'estimated' based on the current pick list.
+export async function allocateJobInventory(jobId: string, companyId: string): Promise<void> {
+  const supabase = createClient();
+
+  // Don't double-allocate: clear any existing allocations for this job first
+  await supabase.from("inventory_allocations").delete().eq("job_id", jobId);
+
+  // Read the job's pick list
+  const { data: pickList } = await supabase
+    .from("job_pick_list_items")
+    .select("item_type, raw_material_id, purchased_part_id, planned_quantity, unit")
+    .eq("job_id", jobId);
+
+  if (!pickList || pickList.length === 0) return;
+
+  const rows = pickList
+    .filter((item) => Number(item.planned_quantity) > 0)
+    .map((item) => ({
+      company_id: companyId,
+      job_id: jobId,
+      item_type: item.item_type,
+      raw_material_id: item.raw_material_id,
+      purchased_part_id: item.purchased_part_id,
+      allocated_quantity: Number(item.planned_quantity),
+      unit: item.unit,
+      basis: "estimated" as const,
+    }));
+
+  if (rows.length > 0) {
+    await supabase.from("inventory_allocations").insert(rows);
+  }
+}
+
+// Release (delete) all allocations for a job (called when a job goes back to quoted or is cancelled).
+export async function releaseJobInventory(jobId: string): Promise<void> {
+  const supabase = createClient();
+  await supabase.from("inventory_allocations").delete().eq("job_id", jobId);
+}
+// ============================================
+// Cutting nest stick pulls and drops
+// ============================================
+
+// Available lengths in stock for a material: each distinct length and how many sticks.
+export async function getAvailableLengths(rawMaterialId: string): Promise<{ length: number; sticks: number }[]> {
+  const supabase = createClient();
+  const { data } = await supabase
+    .from("raw_material_inventory")
+    .select("stick_length_feet, quantity_sticks")
+    .eq("raw_material_id", rawMaterialId);
+
+  const map = new Map<number, number>();
+  for (const b of data || []) {
+    const len = Number(b.stick_length_feet);
+    map.set(len, (map.get(len) || 0) + Number(b.quantity_sticks));
+  }
+  return Array.from(map.entries())
+    .map(([length, sticks]) => ({ length, sticks }))
+    .filter((g) => g.sticks > 0)
+    .sort((a, b) => b.length - a.length);
+}
+
+// Pull sticks of a given length from inventory (inserts a negative-quantity batch) and logs the cutting nest entry.
+export async function pullSticks(params: {
+  companyId: string;
+  jobId: string;
+  rawMaterialId: string;
+  length: number;
+  quantity: number;
+  costPerFoot: number;
+}): Promise<void> {
+  const supabase = createClient();
+  const { companyId, jobId, rawMaterialId, length, quantity, costPerFoot } = params;
+
+  // Deplete inventory with a negative batch at this length
+  await supabase.from("raw_material_inventory").insert({
+    company_id: companyId,
+    raw_material_id: rawMaterialId,
+    supplier_id: null,
+    stick_length_feet: length,
+    quantity_sticks: -quantity,
+    cost_per_foot: costPerFoot,
+    purchase_date: new Date().toISOString().slice(0, 10),
+    source_note: "Pulled for cutting nest",
+    source_job_id: jobId,
+    notes: "Sticks pulled for job cutting nest",
+  });
+
+  // Log the pull entry
+  await supabase.from("cutting_nest_entries").insert({
+    company_id: companyId,
+    job_id: jobId,
+    raw_material_id: rawMaterialId,
+    entry_type: "pull",
+    length_feet: length,
+    quantity,
+    cost_per_foot: costPerFoot,
+  });
+}
+
+// Save a drop back to inventory and log the cutting nest entry (linked so it can be reversed).
+export async function saveDrop(params: {
+  companyId: string;
+  jobId: string;
+  rawMaterialId: string;
+  length: number;
+  quantity: number;
+  costPerFoot: number;
+  jobNumber: string;
+}): Promise<void> {
+  const supabase = createClient();
+  const { companyId, jobId, rawMaterialId, length, quantity, costPerFoot, jobNumber } = params;
+
+  // Add the drop back into inventory
+  const { data: inv } = await supabase
+    .from("raw_material_inventory")
+    .insert({
+      company_id: companyId,
+      raw_material_id: rawMaterialId,
+      supplier_id: null,
+      stick_length_feet: length,
+      quantity_sticks: quantity,
+      cost_per_foot: costPerFoot,
+      purchase_date: new Date().toISOString().slice(0, 10),
+      source_note: "Drop from job " + jobNumber,
+      source_job_id: jobId,
+      notes: "Saved remnant from cutting nest",
+    })
+    .select("id")
+    .single();
+
+  // Log the drop entry, linked to the inventory row it created
+  await supabase.from("cutting_nest_entries").insert({
+    company_id: companyId,
+    job_id: jobId,
+    raw_material_id: rawMaterialId,
+    entry_type: "drop",
+    length_feet: length,
+    quantity,
+    cost_per_foot: costPerFoot,
+    created_inventory_id: inv?.id || null,
+  });
+}
+
+// Reverse a cutting nest entry: undo its inventory effect and delete the log row.
+export async function reverseCuttingNestEntry(entry: {
+  id: string;
+  entry_type: string;
+  raw_material_id: string;
+  length_feet: number;
+  quantity: number;
+  cost_per_foot: number;
+  created_inventory_id: string | null;
+  company_id: string;
+  job_id: string;
+}): Promise<void> {
+  const supabase = createClient();
+
+  if (entry.entry_type === "pull") {
+    // Reverse a pull by adding the sticks back
+    await supabase.from("raw_material_inventory").insert({
+      company_id: entry.company_id,
+      raw_material_id: entry.raw_material_id,
+      supplier_id: null,
+      stick_length_feet: entry.length_feet,
+      quantity_sticks: entry.quantity,
+      cost_per_foot: entry.cost_per_foot,
+      purchase_date: new Date().toISOString().slice(0, 10),
+      source_note: "Reversed pull",
+      source_job_id: entry.job_id,
+      notes: "Reversed a cutting nest stick pull",
+    });
+  } else if (entry.entry_type === "drop") {
+    // Reverse a saved drop by removing the inventory it created (if still present)
+    if (entry.created_inventory_id) {
+      await supabase.from("raw_material_inventory").delete().eq("id", entry.created_inventory_id);
+    } else {
+      // Fallback: insert a negative batch to cancel it out
+      await supabase.from("raw_material_inventory").insert({
+        company_id: entry.company_id,
+        raw_material_id: entry.raw_material_id,
+        supplier_id: null,
+        stick_length_feet: entry.length_feet,
+        quantity_sticks: -entry.quantity,
+        cost_per_foot: entry.cost_per_foot,
+        purchase_date: new Date().toISOString().slice(0, 10),
+        source_note: "Reversed drop",
+        source_job_id: entry.job_id,
+        notes: "Reversed a saved drop",
+      });
+    }
+  }
+
+  // Delete the log entry
+  await supabase.from("cutting_nest_entries").delete().eq("id", entry.id);
+}
