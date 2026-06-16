@@ -52,7 +52,7 @@ export default function ProductTemplateDetailPage() {
     { value: "tasks", label: "Tasks" },
     { value: "photos", label: "Photos" },
     { value: "notes", label: "Build Notes" },
-    { value: "settings", label: "SOPs & Settings" },
+    { value: "settings", label: "Settings" },
   ];
 
   if (loading) {

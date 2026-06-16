@@ -28,7 +28,6 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     name: "",
     product_number: "",
     description: "",
-    sops: "",
     is_active: true,
     is_sub_assembly: false,
   });
@@ -48,7 +47,6 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         name: data.name,
         product_number: data.product_number || "",
         description: data.description || "",
-        sops: data.sops || "",
         is_active: data.is_active,
         is_sub_assembly: data.is_sub_assembly,
       });
@@ -77,7 +75,6 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         name: form.name.trim(),
         product_number: form.product_number.trim() || null,
         description: form.description.trim() || null,
-        sops: form.sops.trim() || null,
         is_active: form.is_active,
         is_sub_assembly: form.is_sub_assembly,
       })
@@ -172,24 +169,6 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           />
           <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
         </label>
-
-        <div className="pt-4 border-t border-gray-200">
-          <h3 className="text-base font-semibold text-gray-900 mb-2">Standard Operating Procedures (SOPs)</h3>
-          <p className="text-sm text-gray-600 mb-3">
-            Step-by-step build instructions, safety notes, quality checks, or anything else employees need to know when building this product.
-          </p>
-          <textarea
-            value={form.sops}
-            onChange={(e) => setForm({ ...form, sops: e.target.value })}
-            rows={12}
-            placeholder="e.g.
-1. Verify all cut tube lengths before prep.
-2. Bend angles must be within +/- 0.5 degrees.
-3. Tack weld in 3 places before full weld pass.
-..."
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <button
