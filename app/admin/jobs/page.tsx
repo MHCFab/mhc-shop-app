@@ -5,12 +5,10 @@ import Link from "next/link";
 import { createClient } from "../../lib/supabase";
 
 const STATUSES = [
-  { value: "quoted", label: "Quoted", color: "bg-gray-100 text-gray-800" },
-  { value: "released", label: "Released", color: "bg-blue-100 text-blue-800" },
+  { value: "ordered", label: "Ordered", color: "bg-gray-100 text-gray-800" },
+  { value: "ready", label: "Ready", color: "bg-blue-100 text-blue-800" },
   { value: "in_progress", label: "In Progress", color: "bg-amber-100 text-amber-800" },
   { value: "complete", label: "Complete", color: "bg-green-100 text-green-800" },
-  { value: "shipped", label: "Shipped", color: "bg-emerald-100 text-emerald-800" },
-  { value: "cancelled", label: "Cancelled", color: "bg-red-100 text-red-800" },
 ] as const;
 
 type Status = (typeof STATUSES)[number]["value"];
@@ -60,7 +58,7 @@ export default function JobsPage() {
   const filtered = useMemo(() => {
     return jobs.filter((j) => {
       if (filterStatus === "open") {
-        if (j.status === "shipped" || j.status === "cancelled") return false;
+        if (j.status === "complete") return false;
       } else if (filterStatus !== "all") {
         if (j.status !== filterStatus) return false;
       }

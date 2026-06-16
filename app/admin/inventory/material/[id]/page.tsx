@@ -136,7 +136,7 @@ export default function MaterialDetailPage() {
     loadData();
   }, [loadCompanyId, loadData]);
 
-  // Group batches by length, summing sticks
+  // Group batches by length, summing sticks. Only include lengths with sticks actually on hand.
   const lengthGroups: LengthGroup[] = (() => {
     const map = new Map<number, number>();
     for (const b of batches) {
@@ -145,6 +145,7 @@ export default function MaterialDetailPage() {
     }
     return Array.from(map.entries())
       .map(([length, sticks]) => ({ length, sticks }))
+      .filter((g) => g.sticks > 0)
       .sort((a, b) => b.length - a.length);
   })();
 

@@ -309,11 +309,11 @@ export default function CuttingNestTab({
 
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
-  if (jobStatus === "quoted") {
+  if (jobStatus === "ordered") {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-6">
         <p className="text-sm text-amber-800">
-          This job is still quoted. Release the job first to reserve material, then pull sticks for your cutting nest here.
+          This job is still in Ordered status. Mark it Ready first to reserve material, then pull sticks for your cutting nest here.
         </p>
       </div>
     );

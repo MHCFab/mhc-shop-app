@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
 import { allocateJobInventory, releaseJobInventory } from "../../../lib/inventory";
 import OverviewTab from "./OverviewTab";
@@ -11,12 +11,10 @@ import TasksTab from "./TasksTab";
 import CuttingNestTab from "./CuttingNestTab";
 
 const STATUSES = [
-  { value: "quoted", label: "Quoted", color: "bg-gray-100 text-gray-800" },
-  { value: "released", label: "Released", color: "bg-blue-100 text-blue-800" },
+  { value: "ordered", label: "Ordered", color: "bg-gray-100 text-gray-800" },
+  { value: "ready", label: "Ready", color: "bg-blue-100 text-blue-800" },
   { value: "in_progress", label: "In Progress", color: "bg-amber-100 text-amber-800" },
   { value: "complete", label: "Complete", color: "bg-green-100 text-green-800" },
-  { value: "shipped", label: "Shipped", color: "bg-emerald-100 text-emerald-800" },
-  { value: "cancelled", label: "Cancelled", color: "bg-red-100 text-red-800" },
 ] as const;
 
 type Status = (typeof STATUSES)[number]["value"];
@@ -53,6 +51,8 @@ export default function JobDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [changingStatus, setChangingStatus] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const router = useRouter();
 
   const loadJob = useCallback(async () => {
     setLoading(true);
@@ -76,9 +76,8 @@ export default function JobDetailPage() {
 
     const updates: Record<string, string | null> = { status: newStatus };
     const nowIso = new Date().toISOString();
-    if (newStatus === "released" && !job.released_at) updates.released_at = nowIso;
+    if (newStatus === "ready" && !job.released_at) updates.released_at = nowIso;
     if (newStatus === "complete" && !job.completed_at) updates.completed_at = nowIso;
-    if (newStatus === "shipped" && !job.shipped_at) updates.shipped_at = nowIso;
 
     const { error } = await supabase.from("jobs").update(updates).eq("id", job.id);
 
@@ -100,13 +99,13 @@ export default function JobDetailPage() {
         companyId = profile?.company_id || null;
       }
 
-      // Releasing a job (from quoted) allocates inventory
-      if (newStatus === "released" && prevStatus === "quoted" && companyId) {
+      // Moving to Ready (from Ordered) allocates inventory
+      if (newStatus === "ready" && prevStatus === "ordered" && companyId) {
         await allocateJobInventory(job.id, companyId);
       }
 
-      // Going back to quoted, or cancelling, releases inventory
-      if (newStatus === "quoted" || newStatus === "cancelled") {
+      // Going back to Ordered releases inventory
+      if (newStatus === "ordered") {
         await releaseJobInventory(job.id);
       }
     } catch (e) {
@@ -117,6 +116,31 @@ export default function JobDetailPage() {
 
     setChangingStatus(false);
     loadJob();
+  }
+
+  async function deleteJob() {
+    if (!job) return;
+    const ok = confirm(
+      "Delete job " + job.job_number + "? This will delete its line items, pick list, tasks, allocations, and cutting nest history. Drops you saved back to inventory from this job will also be removed. This cannot be undone."
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+
+    // Remove inventory rows created by this job (drops saved, sticks pulled negatives)
+    await supabase.from("raw_material_inventory").delete().eq("source_job_id", job.id);
+
+    // Delete the job - cascade deletes line items, pick list items, tasks, allocations,
+    // cutting nest entries, and variances
+    const { error } = await supabase.from("jobs").delete().eq("id", job.id);
+
+    setDeleting(false);
+
+    if (error) {
+      alert("Failed to delete job: " + error.message);
+      return;
+    }
+    router.push("/admin/jobs");
   }
 
   const tabs: { value: Tab; label: string }[] = [
@@ -174,6 +198,13 @@ export default function JobDetailPage() {
               <option key={s.value} value={s.value}>Change to {s.label}</option>
             ))}
           </select>
+          <button
+            onClick={deleteJob}
+            disabled={deleting}
+            className="text-sm text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
+          >
+            {deleting ? "Deleting..." : "Delete job"}
+          </button>
         </div>
       </div>
 

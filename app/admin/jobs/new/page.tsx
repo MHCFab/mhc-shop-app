@@ -353,7 +353,7 @@ export default function NewJobPage() {
         customer_id: customerId,
         job_number: jobNumber.trim(),
         customer_po: customerPo.trim() || null,
-        status: "quoted",
+        status: "ordered",
         due_date: dueDate || null,
         notes: notes.trim() || null,
       })
