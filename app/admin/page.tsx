@@ -27,6 +27,11 @@ export default async function AdminDashboard() {
       href: "/admin/jobs",
     },
     {
+      title: "Inventory",
+      description: "Available stock on hand for raw materials and purchased parts.",
+      href: "/admin/inventory",
+    },
+    {
       title: "Suppliers",
       description: "Manage the vendors you buy raw materials and parts from.",
       href: "/admin/suppliers",
@@ -35,26 +40,6 @@ export default async function AdminDashboard() {
       title: "Customers",
       description: "Manage the companies and contacts you build jobs for.",
       href: "/admin/customers",
-    },
-    {
-      title: "Raw Materials",
-      description: "Manage your catalog of materials and current cost per foot.",
-      href: "/admin/raw-materials",
-    },
-    {
-      title: "Raw Material Inventory",
-      description: "Track sticks on hand, purchase batches, and supplier history.",
-      href: "/admin/inventory/raw-materials",
-    },
-    {
-      title: "Purchased Parts",
-      description: "Catalog of laser parts, fasteners, casters, machined parts, and more.",
-      href: "/admin/purchased-parts",
-    },
-    {
-      title: "Parts Inventory",
-      description: "Track quantities on hand, purchase batches, and supplier history per part.",
-      href: "/admin/inventory/purchased-parts",
     },
     {
       title: "Product Templates",

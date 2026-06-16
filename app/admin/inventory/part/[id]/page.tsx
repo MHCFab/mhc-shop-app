@@ -1,0 +1,330 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { createClient } from "../../../../lib/supabase";
+
+const CATEGORIES = [
+  { value: "laser_part", label: "Laser Part" },
+  { value: "fastener", label: "Fastener" },
+  { value: "caster", label: "Caster" },
+  { value: "machined_part", label: "Machined Part" },
+  { value: "electrical", label: "Electrical" },
+  { value: "hardware", label: "Hardware" },
+  { value: "other", label: "Other" },
+] as const;
+
+function categoryLabel(c: string) {
+  return CATEGORIES.find((x) => x.value === c)?.label || c;
+}
+
+type PurchasedPart = {
+  id: string;
+  name: string;
+  part_number: string | null;
+  category: string;
+  description: string | null;
+  current_cost_each: number;
+};
+
+type Batch = {
+  id: string;
+  quantity: number;
+  cost_each: number;
+  purchase_date: string;
+  notes: string | null;
+  suppliers: { name: string } | null;
+};
+
+type Allocation = {
+  id: string;
+  allocated_quantity: number;
+  basis: string;
+  jobs: { id: string; job_number: string; status: string } | null;
+};
+
+export default function PartDetailPage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+  const supabase = createClient();
+  const router = useRouter();
+
+  const [part, setPart] = useState<PurchasedPart | null>(null);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    part_number: "",
+    category: "other",
+    description: "",
+    current_cost_each: "",
+  });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const [partRes, batchRes, allocRes] = await Promise.all([
+      supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each").eq("id", id).single(),
+      supabase
+        .from("purchased_parts_inventory")
+        .select("id, quantity, cost_each, purchase_date, notes, suppliers(name)")
+        .eq("purchased_part_id", id)
+        .order("purchase_date", { ascending: false }),
+      supabase
+        .from("inventory_allocations")
+        .select("id, allocated_quantity, basis, jobs(id, job_number, status)")
+        .eq("purchased_part_id", id),
+    ]);
+
+    if (partRes.error) {
+      setError(partRes.error.message);
+      setLoading(false);
+      return;
+    }
+    setPart(partRes.data as PurchasedPart);
+    setBatches((batchRes.data || []) as Batch[]);
+    setAllocations((allocRes.data || []) as Allocation[]);
+    setLoading(false);
+  }, [supabase, id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const totalInStock = batches.reduce((sum, b) => sum + Number(b.quantity), 0);
+  const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
+  const available = totalInStock - totalAllocated;
+
+  function openEdit() {
+    if (!part) return;
+    setEditError(null);
+    setEditForm({
+      name: part.name,
+      part_number: part.part_number || "",
+      category: part.category,
+      description: part.description || "",
+      current_cost_each: String(part.current_cost_each),
+    });
+    setShowEdit(true);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    setEditError(null);
+    if (!editForm.name.trim()) {
+      setEditError("Name is required.");
+      return;
+    }
+    const cost = parseFloat(editForm.current_cost_each);
+    if (isNaN(cost) || cost < 0) {
+      setEditError("Please enter a valid cost each.");
+      return;
+    }
+    setSavingEdit(true);
+    const { error } = await supabase
+      .from("purchased_parts")
+      .update({
+        name: editForm.name.trim(),
+        part_number: editForm.part_number.trim() || null,
+        category: editForm.category,
+        description: editForm.description.trim() || null,
+        current_cost_each: cost,
+      })
+      .eq("id", id);
+    setSavingEdit(false);
+    if (error) {
+      setEditError(error.message);
+      return;
+    }
+    setShowEdit(false);
+    loadData();
+  }
+
+  async function handleDelete() {
+    const ok = confirm(
+      "Delete this part from your catalog? This also removes its inventory batches. If it's used by any product template or job, the delete will be blocked."
+    );
+    if (!ok) return;
+    setDeleting(true);
+    const { error } = await supabase.from("purchased_parts").delete().eq("id", id);
+    setDeleting(false);
+    if (error) {
+      alert(
+        "Can't delete this part because it's used in a product template or job. Mark it inactive instead to hide it from new work.\n\nDetails: " + error.message
+      );
+      return;
+    }
+    router.push("/admin/inventory");
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <p className="text-gray-600">Loading...</p>
+      </div>
+    );
+  }
+
+  if (error || !part) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <Link href="/admin/inventory" className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">&larr; Back to inventory</Link>
+        <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700">{error || "Part not found."}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8">
+      <Link href="/admin/inventory" className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">&larr; Back to inventory</Link>
+
+      <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">{part.name}</h1>
+          <p className="text-gray-500 mt-1">
+            {part.part_number && <span>{part.part_number} &middot; </span>}
+            {categoryLabel(part.category)} &middot; ${Number(part.current_cost_each).toFixed(4)} each
+          </p>
+          {part.description && <p className="text-gray-700 mt-2 max-w-2xl">{part.description}</p>}
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={openEdit} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
+            Edit
+          </button>
+          <button onClick={handleDelete} disabled={deleting} className="bg-white border border-red-300 text-red-600 px-4 py-2 rounded-md font-medium hover:bg-red-50 disabled:opacity-50 transition-colors">
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-blue-700 font-medium">Available</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{available.toFixed(0)}</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Total in stock</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{totalInStock.toFixed(0)}</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Allocated to jobs</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{totalAllocated.toFixed(0)}</div>
+        </div>
+      </div>
+
+      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
+        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-base font-semibold text-gray-900">Purchase history</h3>
+        </div>
+        {batches.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-gray-600">No purchases recorded.</p>
+        ) : (
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Date</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Supplier</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Quantity</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Cost each</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batches.map((b) => (
+                <tr key={b.id} className="border-b border-gray-100 last:border-0">
+                  <td className="px-4 py-3 text-sm text-gray-900">{b.purchase_date}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
+                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(b.quantity).toFixed(0)}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_each).toFixed(4)}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{b.notes || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {allocations.length > 0 && (
+        <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+            <h3 className="text-base font-semibold text-gray-900">Allocated to jobs</h3>
+          </div>
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Job</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Basis</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Allocated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allocations.map((a) => (
+                <tr key={a.id} className="border-b border-gray-100 last:border-0">
+                  <td className="px-4 py-3 text-sm">
+                    {a.jobs ? (
+                      <Link href={"/admin/jobs/" + a.jobs.id} className="text-blue-600 hover:text-blue-800 font-medium">{a.jobs.job_number}</Link>
+                    ) : "Unknown job"}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700 capitalize">{a.basis}</td>
+                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(a.allocated_quantity).toFixed(0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {showEdit && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <form onSubmit={saveEdit} className="p-6 space-y-3">
+              <h2 className="text-xl font-bold text-gray-900">Edit part</h2>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input type="text" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Part number</label>
+                  <input type="text" value={editForm.part_number} onChange={(e) => setEditForm({ ...editForm, part_number: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                  <select
+                    value={editForm.category}
+                    onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Current cost each</label>
+                <input type="number" step="0.0001" min="0" value={editForm.current_cost_each} onChange={(e) => setEditForm({ ...editForm, current_cost_each: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <input type="text" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {editError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{editError}</div>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setShowEdit(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
+                <button type="submit" disabled={savingEdit} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingEdit ? "Saving..." : "Save"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

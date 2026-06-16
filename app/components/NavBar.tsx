@@ -41,11 +41,8 @@ export default function NavBar({
     { href: "/admin", label: "Dashboard" },
     { href: "/admin/jobs", label: "Jobs" },
     { href: "/admin/customers", label: "Customers" },
+    { href: "/admin/inventory", label: "Inventory" },
     { href: "/admin/suppliers", label: "Suppliers" },
-    { href: "/admin/raw-materials", label: "Raw Materials" },
-    { href: "/admin/inventory/raw-materials", label: "Raw Material Inventory" },
-    { href: "/admin/purchased-parts", label: "Purchased Parts" },
-    { href: "/admin/inventory/purchased-parts", label: "Parts Inventory" },
     { href: "/admin/product-templates", label: "Product Templates" },
   ];
 

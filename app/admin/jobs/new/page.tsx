@@ -59,7 +59,12 @@ export default function NewJobPage() {
     setLoading(true);
     const [custsRes, tplsRes] = await Promise.all([
       supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
-      supabase.from("product_templates").select("id, name, product_number").eq("is_active", true).order("name"),
+      supabase
+        .from("product_templates")
+        .select("id, name, product_number")
+        .eq("is_active", true)
+        .eq("is_sub_assembly", false)
+        .order("name"),
     ]);
     if (custsRes.data) setCustomers(custsRes.data as Customer[]);
     if (tplsRes.data) setTemplates(tplsRes.data as Template[]);
@@ -67,7 +72,6 @@ export default function NewJobPage() {
   }, [supabase]);
 
   const loadDefaultJobNumber = useCallback(async () => {
-    // Generate a default like JOB-2026-001 by counting existing jobs
     const year = new Date().getFullYear();
     const { count } = await supabase
       .from("jobs")
@@ -129,8 +133,8 @@ export default function NewJobPage() {
 
     const templateIdArr = Array.from(allTemplateIds);
 
-    // Fetch BOM, sub-assembly links, and tasks for ALL templates (top-level + nested)
-    const [matsRes, partsRes, subLinksRes, tasksRes] = await Promise.all([
+    // Fetch BOM, sub-assembly links, tasks, and names for ALL templates
+    const [matsRes, partsRes, subLinksRes, tasksRes, templatesData] = await Promise.all([
       supabase
         .from("product_template_materials")
         .select("product_template_id, feet_per_unit, raw_materials(id, shape, size, wall_thickness, grade)")
@@ -148,6 +152,10 @@ export default function NewJobPage() {
         .select("*")
         .in("product_template_id", templateIdArr)
         .order("sort_order"),
+      supabase
+        .from("product_templates")
+        .select("id, name")
+        .in("id", templateIdArr),
     ]);
 
     type TplMatRow = {
@@ -178,9 +186,11 @@ export default function NewJobPage() {
     const tplParts = (partsRes.data || []) as TplPartRow[];
     const tplSubs = (subLinksRes.data || []) as TplSubRow[];
     const tplTasks = (tasksRes.data || []) as TplTaskRow[];
+    const templateNames = new Map<string, string>(
+      (templatesData.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
+    );
 
     // Calculate total quantity of each template needed across the whole job
-    // (top-level line items + expanded sub-assemblies)
     const templateQtyTotals = new Map<string, number>();
 
     function expandTemplate(templateId: string, multiplier: number) {
@@ -195,7 +205,7 @@ export default function NewJobPage() {
       expandTemplate(item.templateId, item.quantity);
     }
 
-    // Aggregate raw materials and parts across all templates (with their expanded multipliers)
+    // Aggregate raw materials and parts across all templates
     const matMap = new Map<string, { quantity: number; description: string }>();
     const partMap = new Map<string, { quantity: number; name: string; partNumber: string | null }>();
 
@@ -250,15 +260,7 @@ export default function NewJobPage() {
       await supabase.from("job_pick_list_items").insert(pickListRows);
     }
 
-    // Fetch template name lookup for labeling sub-assembly tasks
-    const { data: templatesData } = await supabase
-      .from("product_templates")
-      .select("id, name")
-      .in("id", templateIdArr);
-    const templateNames = new Map<string, string>((templatesData || []).map((t: { id: string; name: string }) => [t.id, t.name]));
-
-    // Build a per-line-item map of (template id -> total quantity required for that line item)
-    // This accounts for sub-assemblies needed by the line item's top-level template.
+    // Build per-line-item template expansion for tasks
     function expandForLine(templateId: string, multiplier: number, accumulator: Map<string, number>) {
       accumulator.set(templateId, (accumulator.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
@@ -280,11 +282,9 @@ export default function NewJobPage() {
     }> = [];
 
     for (const item of items) {
-      // Build the per-template quantity map for this line item
       const perLineMap = new Map<string, number>();
       expandForLine(item.templateId, item.quantity, perLineMap);
 
-      // Sort entries so the top-level template comes first, then sub-assemblies
       const orderedEntries = Array.from(perLineMap.entries()).sort((a, b) => {
         if (a[0] === item.templateId) return -1;
         if (b[0] === item.templateId) return 1;
@@ -322,119 +322,6 @@ export default function NewJobPage() {
     }
   }
 
-    if (taskRows.length > 0) {
-      await supabase.from("job_tasks").insert(taskRows);
-    }
-  }
-
-    const tplMaterials = (matsRes.data || []) as Array<{
-      product_template_id: string;
-      feet_per_unit: number;
-      raw_materials: { id: string; shape: string; size: string; wall_thickness: string | null; grade: string } | null;
-    }>;
-
-    const tplParts = (partsRes.data || []) as Array<{
-      product_template_id: string;
-      quantity_per_unit: number;
-      purchased_parts: { id: string; name: string; part_number: string | null } | null;
-    }>;
-
-    const tplTasks = (tasksRes.data || []) as Array<{
-      id: string;
-      product_template_id: string;
-      name: string;
-      description: string | null;
-      estimated_minutes_per_unit: number;
-      sort_order: number;
-    }>;
-
-    // Aggregate pick list items
-    for (const item of items) {
-      const matsForTemplate = tplMaterials.filter((m) => m.product_template_id === item.templateId);
-      for (const m of matsForTemplate) {
-        if (!m.raw_materials) continue;
-        const key = m.raw_materials.id;
-        const total = Number(m.feet_per_unit) * item.quantity;
-        const existing = matMap.get(key);
-        if (existing) existing.quantity += total;
-        else matMap.set(key, { quantity: total, description: describeMaterial(m.raw_materials) });
-      }
-      const partsForTemplate = tplParts.filter((p) => p.product_template_id === item.templateId);
-      for (const p of partsForTemplate) {
-        if (!p.purchased_parts) continue;
-        const key = p.purchased_parts.id;
-        const total = Number(p.quantity_per_unit) * item.quantity;
-        const existing = partMap.get(key);
-        if (existing) existing.quantity += total;
-        else partMap.set(key, { quantity: total, name: p.purchased_parts.name, partNumber: p.purchased_parts.part_number });
-      }
-    }
-
-    // Insert pick list rows
-    const pickListRows = [
-      ...Array.from(matMap.entries()).map(([rawMaterialId, info]) => ({
-        company_id: companyId,
-        job_id: jobId,
-        item_type: "raw_material" as const,
-        raw_material_id: rawMaterialId,
-        purchased_part_id: null,
-        planned_quantity: info.quantity,
-        actual_quantity: 0,
-        unit: "ft",
-        notes: null,
-      })),
-      ...Array.from(partMap.entries()).map(([partId, info]) => ({
-        company_id: companyId,
-        job_id: jobId,
-        item_type: "purchased_part" as const,
-        purchased_part_id: partId,
-        raw_material_id: null,
-        planned_quantity: info.quantity,
-        actual_quantity: 0,
-        unit: "ea",
-        notes: null,
-      })),
-    ];
-
-    if (pickListRows.length > 0) {
-      await supabase.from("job_pick_list_items").insert(pickListRows);
-    }
-
-    // Insert job task rows (one per template task per line item)
-    const taskRows: Array<{
-      company_id: string;
-      job_id: string;
-      job_line_item_id: string;
-      source_task_id: string;
-      name: string;
-      description: string | null;
-      batch_quantity: number;
-      estimated_minutes_total: number;
-      sort_order: number;
-    }> = [];
-
-    for (const item of items) {
-      const tasksForTemplate = tplTasks.filter((t) => t.product_template_id === item.templateId);
-      for (const t of tasksForTemplate) {
-        taskRows.push({
-          company_id: companyId,
-          job_id: jobId,
-          job_line_item_id: item.lineItemId,
-          source_task_id: t.id,
-          name: t.name,
-          description: t.description,
-          batch_quantity: item.quantity,
-          estimated_minutes_total: Number(t.estimated_minutes_per_unit) * item.quantity,
-          sort_order: t.sort_order,
-        });
-      }
-    }
-
-    if (taskRows.length > 0) {
-      await supabase.from("job_tasks").insert(taskRows);
-    }
-  }
-
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -459,7 +346,6 @@ export default function NewJobPage() {
 
     setSaving(true);
 
-    // Create job
     const { data: job, error: jobError } = await supabase
       .from("jobs")
       .insert({
@@ -480,7 +366,6 @@ export default function NewJobPage() {
       return;
     }
 
-    // Insert line items
     const lineItemRows = validLines.map((li, i) => ({
       company_id: companyId,
       job_id: job.id,
@@ -501,7 +386,6 @@ export default function NewJobPage() {
       return;
     }
 
-    // Generate pick list and tasks
     const itemsForGeneration = insertedLineItems.map((li, i) => ({
       lineItemId: li.id,
       templateId: validLines[i].product_template_id,
@@ -545,7 +429,7 @@ export default function NewJobPage() {
 
       {templates.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
-          <p className="text-sm text-amber-800">You need to add at least one product template before creating a job. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
+          <p className="text-sm text-amber-800">You need to add at least one product template (not a sub-assembly) before creating a job. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
         </div>
       )}
 
@@ -630,7 +514,7 @@ export default function NewJobPage() {
           </div>
 
           <p className="text-sm text-gray-600">
-            Each line item is a product template you&apos;re building, and how many. The system will auto-generate the pick list and task list when you save.
+            Each line item is a product template you&apos;re building, and how many. Sub-assemblies are automatically pulled in. The system will auto-generate the pick list and task list when you save.
           </p>
 
           <div className="space-y-3">
