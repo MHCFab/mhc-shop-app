@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "../../lib/supabase";
 
@@ -19,10 +19,17 @@ type Job = {
   customer_po: string | null;
   status: Status;
   due_date: string | null;
-  notes: string | null;
+  board_order: number;
   created_at: string;
+  customer_id: string;
   customers: { id: string; name: string } | null;
   job_line_items: { id: string; quantity: number }[];
+};
+
+type CustomerGroup = {
+  customerId: string;
+  customerName: string;
+  jobs: Job[];
 };
 
 function statusBadge(status: Status) {
@@ -38,13 +45,19 @@ export default function JobsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState<Status | "all" | "open">("open");
+  const [savingOrder, setSavingOrder] = useState(false);
+
+  // Drag state scoped to a customer
+  const [dragCustomer, setDragCustomer] = useState<string | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   async function loadJobs() {
     setLoading(true);
     const { data, error } = await supabase
       .from("jobs")
       .select("*, customers(id, name), job_line_items(id, quantity)")
+      .in("status", ["ordered", "ready", "in_progress"])
+      .order("board_order", { ascending: true })
       .order("created_at", { ascending: false });
     if (error) setError(error.message);
     else setJobs((data || []) as Job[]);
@@ -55,28 +68,70 @@ export default function JobsPage() {
     loadJobs();
   }, []);
 
-  const filtered = useMemo(() => {
-    return jobs.filter((j) => {
-      if (filterStatus === "open") {
-        if (j.status === "complete") return false;
-      } else if (filterStatus !== "all") {
-        if (j.status !== filterStatus) return false;
-      }
-      if (search) {
-        const s = search.toLowerCase();
-        const text = (j.job_number + " " + (j.customer_po || "") + " " + (j.customers?.name || "")).toLowerCase();
-        if (!text.includes(s)) return false;
-      }
-      return true;
+  const canReorder = !search;
+
+  // Build customer groups (only customers with open jobs), alphabetical
+  const searchLower = search.toLowerCase();
+  const visibleJobs = jobs.filter((j) => {
+    if (!search) return true;
+    const text = (j.job_number + " " + (j.customer_po || "") + " " + (j.customers?.name || "")).toLowerCase();
+    return text.includes(searchLower);
+  });
+
+  const groupMap = new Map<string, CustomerGroup>();
+  for (const j of visibleJobs) {
+    const cid = j.customer_id;
+    const cname = j.customers?.name || "Unknown customer";
+    if (!groupMap.has(cid)) groupMap.set(cid, { customerId: cid, customerName: cname, jobs: [] });
+    groupMap.get(cid)!.jobs.push(j);
+  }
+  const groups = Array.from(groupMap.values()).sort((a, b) => a.customerName.localeCompare(b.customerName));
+
+  function onDragStart(customerId: string, index: number) {
+    if (!canReorder) return;
+    setDragCustomer(customerId);
+    setDragIndex(index);
+  }
+
+  function onDragOver(e: React.DragEvent, customerId: string, index: number) {
+    if (!canReorder || dragCustomer !== customerId) return;
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === index) return;
+
+    setJobs((prev) => {
+      // Work within this customer's jobs only
+      const customerJobs = prev.filter((j) => j.customer_id === customerId);
+      const others = prev.filter((j) => j.customer_id !== customerId);
+      const reordered = [...customerJobs];
+      const [moved] = reordered.splice(dragIndex, 1);
+      reordered.splice(index, 0, moved);
+      return [...others, ...reordered];
     });
-  }, [jobs, filterStatus, search]);
+    setDragIndex(index);
+  }
+
+  async function onDrop(customerId: string) {
+    if (!canReorder) return;
+    setDragCustomer(null);
+    setDragIndex(null);
+    setSavingOrder(true);
+
+    // Renumber this customer's jobs sequentially
+    const customerJobs = jobs.filter((j) => j.customer_id === customerId);
+    const updates = customerJobs.map((job, i) =>
+      supabase.from("jobs").update({ board_order: i }).eq("id", job.id)
+    );
+    await Promise.all(updates);
+    setSavingOrder(false);
+    loadJobs();
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Jobs</h1>
-          <p className="text-gray-600 mt-1">Customer work orders. Each job builds one or more product templates.</p>
+          <p className="text-gray-600 mt-1">Open work orders by customer. Completed jobs move to the invoice list.</p>
         </div>
         <Link
           href="/admin/jobs/new"
@@ -86,76 +141,88 @@ export default function JobsPage() {
         </Link>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        <select
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value as Status | "all" | "open")}
-          className="px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="open">Open jobs (not shipped or cancelled)</option>
-          <option value="all">All jobs</option>
-          {STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
+      <div className="mb-4">
         <input
           type="text"
           placeholder="Search by job #, PO, or customer..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
+
+      {canReorder ? (
+        <p className="text-xs text-gray-500 mb-3">{savingOrder ? "Saving order..." : "Drag the handle to set priority within each customer. This order shows on the floor board."}</p>
+      ) : (
+        <p className="text-xs text-gray-500 mb-3">Clear search to reorder priority.</p>
+      )}
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-4">{error}</div>}
 
       {loading ? (
         <p className="text-gray-600">Loading...</p>
-      ) : filtered.length === 0 ? (
+      ) : groups.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
           <p className="text-gray-600">
-            {jobs.length === 0 ? "No jobs yet. Click New job to create your first one." : "No jobs match your filters."}
+            {jobs.length === 0 ? "No open jobs. Click New job to create one." : "No jobs match your search."}
           </p>
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Job #</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Customer</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">PO</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Line items</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Total units</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Due</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((j) => {
-                const totalUnits = j.job_line_items.reduce((sum, li) => sum + Number(li.quantity), 0);
-                return (
-                  <tr key={j.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium">
-                      <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800">
-                        {j.job_number}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-900">{j.customers?.name || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{j.customer_po || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{j.job_line_items.length}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{totalUnits}</td>
-                    <td className="px-4 py-3 text-sm">{statusBadge(j.status)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{j.due_date || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-right">
-                      <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800 font-medium">Open</Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="space-y-6">
+          {groups.map((group) => (
+            <div key={group.customerId}>
+              <h2 className="text-lg font-bold text-gray-900 mb-2">{group.customerName}</h2>
+              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      {canReorder && <th className="w-10 px-2 py-3"></th>}
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Job #</th>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">PO</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Line items</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Total units</th>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Due</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.jobs.map((j, idx) => {
+                      const totalUnits = j.job_line_items.reduce((sum, li) => sum + Number(li.quantity), 0);
+                      return (
+                        <tr
+                          key={j.id}
+                          draggable={canReorder}
+                          onDragStart={() => onDragStart(group.customerId, idx)}
+                          onDragOver={(e) => onDragOver(e, group.customerId, idx)}
+                          onDrop={() => onDrop(group.customerId)}
+                          onDragEnd={() => { setDragCustomer(null); setDragIndex(null); }}
+                          className={"border-b border-gray-100 last:border-0 hover:bg-gray-50 " + (dragCustomer === group.customerId && dragIndex === idx ? "bg-blue-50" : "")}
+                        >
+                          {canReorder && (
+                            <td className="px-2 py-3 text-center text-gray-400 cursor-grab active:cursor-grabbing select-none" title="Drag to reorder">⠿</td>
+                          )}
+                          <td className="px-4 py-3 text-sm font-medium">
+                            <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800">
+                              {j.job_number}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{j.customer_po || "-"}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{j.job_line_items.length}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{totalUnits}</td>
+                          <td className="px-4 py-3 text-sm">{statusBadge(j.status)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{j.due_date || "-"}</td>
+                          <td className="px-4 py-3 text-sm text-right">
+                            <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800 font-medium">Open</Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
