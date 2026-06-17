@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../lib/supabase";
+import Link from "next/link";
 
 type Employee = {
   id: string;
@@ -181,7 +182,9 @@ export default function EmployeesPage() {
             <tbody>
               {employees.map((emp) => (
                 <tr key={emp.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">{emp.full_name || "-"}</td>
+                  <td className="px-4 py-3 text-sm font-medium">
+                    <Link href={"/admin/employees/" + emp.id} className="text-blue-600 hover:text-blue-800">{emp.full_name || emp.email}</Link>
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-700">{emp.email}</td>
                   <td className="px-4 py-3 text-sm">
                     <span className={"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium " + (emp.role === "admin" ? "bg-purple-100 text-purple-800" : "bg-gray-100 text-gray-700")}>

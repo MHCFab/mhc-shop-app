@@ -53,7 +53,7 @@ function itemCostPerUnit(item: PickListItem) {
   return Number(item.purchased_parts?.current_cost_each || 0);
 }
 
-export default function PickListTab({ jobId }: { jobId: string }) {
+export default function PickListTab({ jobId, readOnly = false }: { jobId: string; readOnly?: boolean }) {
   const supabase = createClient();
   const [items, setItems] = useState<PickListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -322,18 +322,20 @@ export default function PickListTab({ jobId }: { jobId: string }) {
             <div className="text-2xl font-bold text-gray-900 mt-1">${totalActualCost.toFixed(2)}</div>
           </div>
         </div>
-        <button
-          onClick={regeneratePickList}
-          disabled={regenerating}
-          className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
-          title="Rebuild the pick list from the current product templates (includes sub-assemblies)"
-        >
-          {regenerating ? "Regenerating..." : "Regenerate pick list"}
-        </button>
+        {!readOnly && (
+          <button
+            onClick={regeneratePickList}
+            disabled={regenerating}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            title="Rebuild the pick list from the current product templates (includes sub-assemblies)"
+          >
+            {regenerating ? "Regenerating..." : "Regenerate pick list"}
+          </button>
+        )}
       </div>
 
-      <PickListSection title="Raw Materials" items={rawMaterialItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} />
-      <PickListSection title="Purchased Parts" items={partItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} />
+      <PickListSection title="Raw Materials" items={rawMaterialItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
+      <PickListSection title="Purchased Parts" items={partItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
     </div>
   );
 }
@@ -348,6 +350,7 @@ function PickListSection({
   saveEdit,
   closeEdit,
   handleDelete,
+  readOnly,
 }: {
   title: string;
   items: PickListItem[];
@@ -358,6 +361,7 @@ function PickListSection({
   saveEdit: (id: string) => void;
   closeEdit: () => void;
   handleDelete: (item: PickListItem) => void;
+  readOnly: boolean;
 }) {
   return (
     <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -430,7 +434,9 @@ function PickListSection({
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                    {isEditing ? (
+                    {readOnly ? (
+                      <span className="text-gray-400">-</span>
+                    ) : isEditing ? (
                       <>
                         <button onClick={() => saveEdit(item.id)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Save</button>
                         <button onClick={closeEdit} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>

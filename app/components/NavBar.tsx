@@ -46,6 +46,8 @@ export default function NavBar({
     { href: "/admin/product-templates", label: "Product Templates" },
     { href: "/admin/employees", label: "Employees" },
     { href: "/floor", label: "Floor View" },
+    { href: "/admin/invoices", label: "Invoices" },
+    { href: "/admin/archive", label: "Archive" },
     { href: "/admin/settings", label: "Settings" },
   ];
 

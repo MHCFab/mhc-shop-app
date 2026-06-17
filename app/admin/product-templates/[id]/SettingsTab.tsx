@@ -30,6 +30,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     description: "",
     is_active: true,
     is_sub_assembly: false,
+    retail_price_per_unit: "",
   });
 
   const loadTemplate = useCallback(async () => {
@@ -49,6 +50,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: data.description || "",
         is_active: data.is_active,
         is_sub_assembly: data.is_sub_assembly,
+        retail_price_per_unit: String(data.retail_price_per_unit ?? ""),
       });
     }
     setLoading(false);
@@ -77,6 +79,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: form.description.trim() || null,
         is_active: form.is_active,
         is_sub_assembly: form.is_sub_assembly,
+        retail_price_per_unit: parseFloat(form.retail_price_per_unit) || 0,
       })
       .eq("id", templateId);
 
@@ -149,6 +152,19 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
             rows={3}
             className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Retail price per unit ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={form.retail_price_per_unit}
+            onChange={(e) => setForm({ ...form, retail_price_per_unit: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p className="text-xs text-gray-500 mt-1">What you currently charge customers per unit. Used to calculate margin and net profit on the job cost report.</p>
         </div>
 
         <label className="flex items-center gap-2">

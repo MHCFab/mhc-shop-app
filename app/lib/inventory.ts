@@ -333,3 +333,192 @@ export async function reverseCuttingNestEntry(entry: {
   // Delete the log entry
   await supabase.from("cutting_nest_entries").delete().eq("id", entry.id);
 }
+
+// ============================================
+// Job cost report
+// ============================================
+
+export type JobCostReport = {
+  units: number;
+  laborMinutes: number;
+  laborHours: number;
+  laborCost: number;
+  materialActualCost: number;
+  partsActualCost: number;
+  scrapCost: number;
+  totalActualCost: number;
+  costPerUnit: number;
+  // Estimate
+  estimateMaterialCost: number;
+  estimatePartsCost: number;
+  estimateLaborCost: number;
+  totalEstimate: number;
+  // Suggested retail
+  suggestedMaterial: number;
+  suggestedParts: number;
+  suggestedLabor: number;
+  suggestedRetailTotal: number;
+  suggestedRetailPerUnit: number;
+  // Your retail
+  retailPerUnit: number;
+  retailTotal: number;
+  // Margins
+  netProfitTotal: number;
+  netProfitPerUnit: number;
+  marginPercent: number;
+  // Settings used
+  burdenRate: number;
+  shopLaborRate: number;
+  markupPercent: number;
+};
+
+export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
+  const supabase = createClient();
+
+  // Company settings
+  const { data: { user } } = await supabase.auth.getUser();
+  let burdenRate = 0, shopLaborRate = 0, markupPercent = 0, companyId: string | null = null;
+  if (user) {
+    const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+    companyId = profile?.company_id || null;
+    if (companyId) {
+      const { data: company } = await supabase
+        .from("companies")
+        .select("burden_rate_per_hour, shop_labor_rate_per_hour, material_markup_percent")
+        .eq("id", companyId)
+        .single();
+      burdenRate = Number(company?.burden_rate_per_hour || 0);
+      shopLaborRate = Number(company?.shop_labor_rate_per_hour || 0);
+      markupPercent = Number(company?.material_markup_percent || 0);
+    }
+  }
+
+  const [liRes, pickRes, timeRes, varRes, tasksRes] = await Promise.all([
+    supabase.from("job_line_items").select("quantity, product_template_id, product_templates(retail_price_per_unit)").eq("job_id", jobId),
+    supabase
+      .from("job_pick_list_items")
+      .select("item_type, planned_quantity, actual_quantity, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .eq("job_id", jobId),
+    supabase.from("time_entries").select("started_at, ended_at").eq("job_id", jobId),
+    supabase
+      .from("job_material_variances")
+      .select("item_type, extra_quantity, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .eq("job_id", jobId),
+    supabase.from("job_tasks").select("estimated_minutes_total").eq("job_id", jobId),
+  ]);
+
+  type LiRow = { quantity: number; product_template_id: string; product_templates: { retail_price_per_unit: number } | null };
+  type PickRow = {
+    item_type: string;
+    planned_quantity: number;
+    actual_quantity: number;
+    raw_materials: { current_cost_per_foot: number } | null;
+    purchased_parts: { current_cost_each: number } | null;
+  };
+  type TimeRow = { started_at: string; ended_at: string | null };
+  type VarRow = {
+    item_type: string;
+    extra_quantity: number;
+    raw_materials: { current_cost_per_foot: number } | null;
+    purchased_parts: { current_cost_each: number } | null;
+  };
+  type TaskRow = { estimated_minutes_total: number };
+
+  const lineItems = (liRes.data || []) as LiRow[];
+  const pick = (pickRes.data || []) as PickRow[];
+  const times = (timeRes.data || []) as TimeRow[];
+  const variances = (varRes.data || []) as VarRow[];
+  const tasks = (tasksRes.data || []) as TaskRow[];
+
+  const units = lineItems.reduce((s, li) => s + Number(li.quantity), 0);
+
+  // Labor: sum completed time entries (open ones counted to now)
+  const nowMs = Date.now();
+  const laborMinutes = times.reduce((sum, t) => {
+    const end = t.ended_at ? new Date(t.ended_at).getTime() : nowMs;
+    return sum + Math.max(0, (end - new Date(t.started_at).getTime()) / 60000);
+  }, 0);
+  const laborHours = laborMinutes / 60;
+  const laborCost = laborHours * burdenRate;
+
+  // Material & parts actual cost
+  let materialActualCost = 0;
+  let partsActualCost = 0;
+  let estimateMaterialCost = 0;
+  let estimatePartsCost = 0;
+  for (const p of pick) {
+    if (p.item_type === "raw_material") {
+      const cost = Number(p.raw_materials?.current_cost_per_foot || 0);
+      materialActualCost += Number(p.actual_quantity) * cost;
+      estimateMaterialCost += Number(p.planned_quantity) * cost;
+    } else {
+      const cost = Number(p.purchased_parts?.current_cost_each || 0);
+      partsActualCost += Number(p.actual_quantity) * cost;
+      estimatePartsCost += Number(p.planned_quantity) * cost;
+    }
+  }
+
+  // Scrap cost (informational; already inside actuals)
+  let scrapCost = 0;
+  for (const v of variances) {
+    if (v.item_type === "raw_material") {
+      scrapCost += Number(v.extra_quantity) * Number(v.raw_materials?.current_cost_per_foot || 0);
+    } else {
+      scrapCost += Number(v.extra_quantity) * Number(v.purchased_parts?.current_cost_each || 0);
+    }
+  }
+
+  const totalActualCost = laborCost + materialActualCost + partsActualCost;
+  const costPerUnit = units > 0 ? totalActualCost / units : 0;
+
+  // Estimate labor from template task estimates
+  const estimateLaborMinutes = tasks.reduce((s, t) => s + Number(t.estimated_minutes_total), 0);
+  const estimateLaborCost = (estimateLaborMinutes / 60) * burdenRate;
+  const totalEstimate = estimateMaterialCost + estimatePartsCost + estimateLaborCost;
+
+  // Suggested retail: estimated material/parts with markup + actual labor at shop rate (no scrap)
+  const markupMult = 1 + markupPercent / 100;
+  const suggestedMaterial = estimateMaterialCost * markupMult;
+  const suggestedParts = estimatePartsCost * markupMult;
+  const suggestedLabor = laborHours * shopLaborRate;
+  const suggestedRetailTotal = suggestedMaterial + suggestedParts + suggestedLabor;
+  const suggestedRetailPerUnit = units > 0 ? suggestedRetailTotal / units : 0;
+
+  // Your retail (from product template, summed across line items)
+  const retailTotal = lineItems.reduce((s, li) => s + Number(li.product_templates?.retail_price_per_unit || 0) * Number(li.quantity), 0);
+  const retailPerUnit = units > 0 ? retailTotal / units : 0;
+
+  // Net profit based on YOUR retail
+  const netProfitTotal = retailTotal - totalActualCost;
+  const netProfitPerUnit = units > 0 ? netProfitTotal / units : 0;
+  const marginPercent = retailTotal > 0 ? (netProfitTotal / retailTotal) * 100 : 0;
+
+  return {
+    units,
+    laborMinutes,
+    laborHours,
+    laborCost,
+    materialActualCost,
+    partsActualCost,
+    scrapCost,
+    totalActualCost,
+    costPerUnit,
+    estimateMaterialCost,
+    estimatePartsCost,
+    estimateLaborCost,
+    totalEstimate,
+    suggestedMaterial,
+    suggestedParts,
+    suggestedLabor,
+    suggestedRetailTotal,
+    suggestedRetailPerUnit,
+    retailPerUnit,
+    retailTotal,
+    netProfitTotal,
+    netProfitPerUnit,
+    marginPercent,
+    burdenRate,
+    shopLaborRate,
+    markupPercent,
+  };
+}

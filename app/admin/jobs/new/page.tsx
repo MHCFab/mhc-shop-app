@@ -38,6 +38,7 @@ export default function NewJobPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [jobNumberEdited, setJobNumberEdited] = useState(false);
 
   const [customerId, setCustomerId] = useState("");
   const [jobNumber, setJobNumber] = useState("");
@@ -71,20 +72,23 @@ export default function NewJobPage() {
     setLoading(false);
   }, [supabase]);
 
-  const loadDefaultJobNumber = useCallback(async () => {
-    const year = new Date().getFullYear();
-    const { count } = await supabase
-      .from("jobs")
-      .select("id", { count: "exact", head: true });
-    const seq = String((count || 0) + 1).padStart(3, "0");
-    setJobNumber("JOB-" + year + "-" + seq);
-  }, [supabase]);
-
   useEffect(() => {
     loadCompanyId();
     loadData();
-    loadDefaultJobNumber();
-  }, [loadCompanyId, loadData, loadDefaultJobNumber]);
+  }, [loadCompanyId, loadData]);
+
+  function updateLineItem(id: string, field: keyof LineItem, value: string) {
+    setLineItems((prev) => {
+      const next = prev.map((li) => (li.id === id ? { ...li, [field]: value } : li));
+      // If this is the first line item's product and the job number hasn't been manually edited,
+      // pre-fill the job number with the product template name.
+      if (field === "product_template_id" && prev[0]?.id === id && !jobNumberEdited) {
+        const tpl = templates.find((t) => t.id === value);
+        if (tpl) setJobNumber(tpl.name);
+      }
+      return next;
+    });
+  }
 
   function addLineItem() {
     setLineItems([...lineItems, { id: makeId(), product_template_id: "", quantity: "1", notes: "" }]);
@@ -92,10 +96,6 @@ export default function NewJobPage() {
 
   function removeLineItem(id: string) {
     setLineItems(lineItems.filter((li) => li.id !== id));
-  }
-
-  function updateLineItem(id: string, field: keyof LineItem, value: string) {
-    setLineItems(lineItems.map((li) => (li.id === id ? { ...li, [field]: value } : li)));
   }
 
   function describeMaterial(m: {
@@ -111,7 +111,6 @@ export default function NewJobPage() {
   async function generatePickListAndTasks(jobId: string, items: { lineItemId: string; templateId: string; quantity: number }[]) {
     if (!companyId) return;
 
-    // Recursively gather all templates referenced by sub-assemblies
     const allTemplateIds = new Set<string>();
     const queue = [...new Set(items.map((i) => i.templateId))];
     while (queue.length > 0) {
@@ -124,16 +123,13 @@ export default function NewJobPage() {
         .eq("parent_template_id", tid);
       if (data) {
         for (const row of data) {
-          if (!allTemplateIds.has(row.child_template_id)) {
-            queue.push(row.child_template_id);
-          }
+          if (!allTemplateIds.has(row.child_template_id)) queue.push(row.child_template_id);
         }
       }
     }
 
     const templateIdArr = Array.from(allTemplateIds);
 
-    // Fetch BOM, sub-assembly links, tasks, and names for ALL templates
     const [matsRes, partsRes, subLinksRes, tasksRes, templatesData] = await Promise.all([
       supabase
         .from("product_template_materials")
@@ -168,11 +164,7 @@ export default function NewJobPage() {
       quantity_per_unit: number;
       purchased_parts: { id: string; name: string; part_number: string | null } | null;
     };
-    type TplSubRow = {
-      parent_template_id: string;
-      child_template_id: string;
-      quantity_per_unit: number;
-    };
+    type TplSubRow = { parent_template_id: string; child_template_id: string; quantity_per_unit: number };
     type TplTaskRow = {
       id: string;
       product_template_id: string;
@@ -190,9 +182,7 @@ export default function NewJobPage() {
       (templatesData.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
     );
 
-    // Calculate total quantity of each template needed across the whole job
     const templateQtyTotals = new Map<string, number>();
-
     function expandTemplate(templateId: string, multiplier: number) {
       templateQtyTotals.set(templateId, (templateQtyTotals.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
@@ -200,18 +190,15 @@ export default function NewJobPage() {
         expandTemplate(link.child_template_id, multiplier * Number(link.quantity_per_unit));
       }
     }
-
     for (const item of items) {
       expandTemplate(item.templateId, item.quantity);
     }
 
-    // Aggregate raw materials and parts across all templates
     const matMap = new Map<string, { quantity: number; description: string }>();
     const partMap = new Map<string, { quantity: number; name: string; partNumber: string | null }>();
 
     for (const [tid, totalQty] of templateQtyTotals.entries()) {
-      const matsForTpl = tplMaterials.filter((m) => m.product_template_id === tid);
-      for (const m of matsForTpl) {
+      for (const m of tplMaterials.filter((x) => x.product_template_id === tid)) {
         if (!m.raw_materials) continue;
         const key = m.raw_materials.id;
         const total = Number(m.feet_per_unit) * totalQty;
@@ -219,8 +206,7 @@ export default function NewJobPage() {
         if (existing) existing.quantity += total;
         else matMap.set(key, { quantity: total, description: describeMaterial(m.raw_materials) });
       }
-      const partsForTpl = tplParts.filter((p) => p.product_template_id === tid);
-      for (const p of partsForTpl) {
+      for (const p of tplParts.filter((x) => x.product_template_id === tid)) {
         if (!p.purchased_parts) continue;
         const key = p.purchased_parts.id;
         const total = Number(p.quantity_per_unit) * totalQty;
@@ -230,7 +216,6 @@ export default function NewJobPage() {
       }
     }
 
-    // Insert pick list rows
     const pickListRows = [
       ...Array.from(matMap.entries()).map(([rawMaterialId, info]) => ({
         company_id: companyId,
@@ -260,7 +245,6 @@ export default function NewJobPage() {
       await supabase.from("job_pick_list_items").insert(pickListRows);
     }
 
-    // Build per-line-item template expansion for tasks
     function expandForLine(templateId: string, multiplier: number, accumulator: Map<string, number>) {
       accumulator.set(templateId, (accumulator.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
@@ -284,22 +268,16 @@ export default function NewJobPage() {
     for (const item of items) {
       const perLineMap = new Map<string, number>();
       expandForLine(item.templateId, item.quantity, perLineMap);
-
       const orderedEntries = Array.from(perLineMap.entries()).sort((a, b) => {
         if (a[0] === item.templateId) return -1;
         if (b[0] === item.templateId) return 1;
         return 0;
       });
-
       let runningSortOrder = 0;
       for (const [tid, totalQty] of orderedEntries) {
-        const tasksForTpl = tplTasks
-          .filter((t) => t.product_template_id === tid)
-          .sort((a, b) => a.sort_order - b.sort_order);
-
+        const tasksForTpl = tplTasks.filter((t) => t.product_template_id === tid).sort((a, b) => a.sort_order - b.sort_order);
         const isSubAssembly = tid !== item.templateId;
         const tplName = templateNames.get(tid) || "Sub-assembly";
-
         for (const t of tasksForTpl) {
           const labeledName = isSubAssembly ? t.name + " (" + tplName + ")" : t.name;
           taskRows.push({
@@ -340,7 +318,7 @@ export default function NewJobPage() {
     }
     const validLines = lineItems.filter((li) => li.product_template_id && parseInt(li.quantity) > 0);
     if (validLines.length === 0) {
-      setError("Please add at least one product line item with a quantity greater than 0.");
+      setError("Please select a product and quantity.");
       return;
     }
 
@@ -407,14 +385,16 @@ export default function NewJobPage() {
 
   if (loading) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="max-w-3xl mx-auto px-4 py-8">
         <p className="text-gray-600">Loading...</p>
       </div>
     );
   }
 
+  const multipleLines = lineItems.length > 1;
+
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="max-w-3xl mx-auto px-4 py-8">
       <Link href="/admin/jobs" className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">
         &larr; Back to jobs
       </Link>
@@ -423,19 +403,61 @@ export default function NewJobPage() {
 
       {customers.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
-          <p className="text-sm text-amber-800">You need to add at least one customer before creating a job. <Link href="/admin/customers" className="underline font-medium">Add a customer</Link></p>
+          <p className="text-sm text-amber-800">You need at least one customer first. <Link href="/admin/customers" className="underline font-medium">Add a customer</Link></p>
         </div>
       )}
 
       {templates.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
-          <p className="text-sm text-amber-800">You need to add at least one product template (not a sub-assembly) before creating a job. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
+          <p className="text-sm text-amber-800">You need at least one product template first. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
         </div>
       )}
 
       <form onSubmit={handleSave} className="space-y-6">
         <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
           <h2 className="text-base font-semibold text-gray-900">Job details</h2>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product <span className="text-red-600">*</span>
+            </label>
+            <select
+              value={lineItems[0]?.product_template_id || ""}
+              onChange={(e) => updateLineItem(lineItems[0].id, "product_template_id", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">-- Select product --</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity <span className="text-red-600">*</span></label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={lineItems[0]?.quantity || "1"}
+                onChange={(e) => updateLineItem(lineItems[0].id, "quantity", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Job number <span className="text-red-600">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={jobNumber}
+                onChange={(e) => { setJobNumber(e.target.value); setJobNumberEdited(true); }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -454,20 +476,6 @@ export default function NewJobPage() {
                 ))}
               </select>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Job number <span className="text-red-600">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={jobNumber}
-                onChange={(e) => setJobNumber(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Customer PO</label>
               <input
@@ -478,7 +486,9 @@ export default function NewJobPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+          </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Due date</label>
               <input
@@ -501,50 +511,26 @@ export default function NewJobPage() {
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-gray-900">Line items</h2>
-            <button
-              type="button"
-              onClick={addLineItem}
-              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-            >
-              + Add line item
-            </button>
-          </div>
-
-          <p className="text-sm text-gray-600">
-            Each line item is a product template you&apos;re building, and how many. Sub-assemblies are automatically pulled in. The system will auto-generate the pick list and task list when you save.
-          </p>
-
-          <div className="space-y-3">
-            {lineItems.map((li, idx) => (
+        {multipleLines && (
+          <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+            <h2 className="text-base font-semibold text-gray-900">Additional products</h2>
+            {lineItems.slice(1).map((li, idx) => (
               <div key={li.id} className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-700">Line {idx + 1}</span>
-                  {lineItems.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeLineItem(li.id)}
-                      className="text-xs text-red-600 hover:text-red-800 font-medium"
-                    >
-                      Remove
-                    </button>
-                  )}
+                  <span className="text-sm font-medium text-gray-700">Product {idx + 2}</span>
+                  <button type="button" onClick={() => removeLineItem(li.id)} className="text-xs text-red-600 hover:text-red-800 font-medium">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Product template</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
                     <select
                       value={li.product_template_id}
                       onChange={(e) => updateLineItem(li.id, "product_template_id", e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="">-- Select template --</option>
+                      <option value="">-- Select product --</option>
                       {templates.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
-                        </option>
+                        <option key={t.id} value={t.id}>{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</option>
                       ))}
                     </select>
                   </div>
@@ -560,29 +546,21 @@ export default function NewJobPage() {
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Notes for this line (optional)</label>
-                  <input
-                    type="text"
-                    value={li.notes}
-                    onChange={(e) => updateLineItem(li.id, "notes", e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
               </div>
             ))}
           </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <button type="button" onClick={addLineItem} className="text-sm text-blue-600 hover:text-blue-800 font-medium">
+            + Add another product (optional)
+          </button>
         </div>
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
         <div className="flex justify-end gap-2">
-          <Link
-            href="/admin/jobs"
-            className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors"
-          >
-            Cancel
-          </Link>
+          <Link href="/admin/jobs" className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors">Cancel</Link>
           <button
             type="submit"
             disabled={saving || customers.length === 0 || templates.length === 0}

@@ -17,6 +17,11 @@ type Form = {
   estimated_minutes_per_unit: string;
 };
 
+type HistoryStat = {
+  avgPerUnit: number;
+  jobCount: number;
+};
+
 const emptyForm: Form = {
   name: "",
   description: "",
@@ -26,6 +31,7 @@ const emptyForm: Form = {
 export default function TasksTab({ templateId }: { templateId: string }) {
   const supabase = createClient();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [history, setHistory] = useState<Record<string, HistoryStat>>({});
   const [loading, setLoading] = useState(true);
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -53,10 +59,36 @@ export default function TasksTab({ templateId }: { templateId: string }) {
     setLoading(false);
   }, [supabase, templateId]);
 
+  const loadHistory = useCallback(async () => {
+    // Pull all historical time records for this product template, grouped by source_task_id
+    const { data } = await supabase
+      .from("task_time_history")
+      .select("source_task_id, minutes_per_unit")
+      .eq("product_template_id", templateId);
+
+    type Row = { source_task_id: string | null; minutes_per_unit: number };
+    const rows = (data || []) as Row[];
+
+    const grouped: Record<string, { sum: number; count: number }> = {};
+    for (const r of rows) {
+      if (!r.source_task_id) continue;
+      if (!grouped[r.source_task_id]) grouped[r.source_task_id] = { sum: 0, count: 0 };
+      grouped[r.source_task_id].sum += Number(r.minutes_per_unit);
+      grouped[r.source_task_id].count += 1;
+    }
+
+    const stats: Record<string, HistoryStat> = {};
+    for (const [taskId, g] of Object.entries(grouped)) {
+      stats[taskId] = { avgPerUnit: g.count > 0 ? g.sum / g.count : 0, jobCount: g.count };
+    }
+    setHistory(stats);
+  }, [supabase, templateId]);
+
   useEffect(() => {
     loadCompanyId();
     loadTasks();
-  }, [loadCompanyId, loadTasks]);
+    loadHistory();
+  }, [loadCompanyId, loadTasks, loadHistory]);
 
   function openAdd() {
     setForm(emptyForm);
@@ -148,7 +180,6 @@ export default function TasksTab({ templateId }: { templateId: string }) {
     const a = tasks[index];
     const b = tasks[newIndex];
 
-    // Swap sort orders
     await Promise.all([
       supabase.from("product_template_tasks").update({ sort_order: b.sort_order }).eq("id", a.id),
       supabase.from("product_template_tasks").update({ sort_order: a.sort_order }).eq("id", b.id),
@@ -159,17 +190,29 @@ export default function TasksTab({ templateId }: { templateId: string }) {
   const totalMinutes = tasks.reduce((sum, t) => sum + Number(t.estimated_minutes_per_unit), 0);
   const totalHours = totalMinutes / 60;
 
+  // Total actual average per unit across tasks that have history
+  const totalActualAvg = tasks.reduce((sum, t) => {
+    const h = history[t.id];
+    return sum + (h ? h.avgPerUnit : 0);
+  }, 0);
+  const hasAnyHistory = Object.keys(history).length > 0;
+
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
   return (
     <div className="space-y-4">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Total estimated time per unit</div>
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Estimated time per unit</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">{totalMinutes.toFixed(2)} min</div>
           <div className="text-xs text-gray-500 mt-1">{totalHours.toFixed(2)} hours</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Actual avg per unit</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{hasAnyHistory ? totalActualAvg.toFixed(2) + " min" : "-"}</div>
+          <div className="text-xs text-gray-500 mt-1">{hasAnyHistory ? (totalActualAvg / 60).toFixed(2) + " hours, from completed jobs" : "No completed jobs yet"}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Number of tasks</div>
@@ -194,47 +237,69 @@ export default function TasksTab({ templateId }: { templateId: string }) {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-16">#</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-12">#</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Task</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Description</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Est. min / unit</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Est. min/unit</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actual avg/unit</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Order</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {tasks.map((t, i) => (
-                <tr key={t.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm text-gray-500 font-mono">{i + 1}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">{t.name}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{t.description || "-"}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(t.estimated_minutes_per_unit).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                    <button
-                      onClick={() => moveTask(i, "up")}
-                      disabled={i === 0}
-                      className="text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed mr-2"
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      onClick={() => moveTask(i, "down")}
-                      disabled={i === tasks.length - 1}
-                      className="text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                    <button onClick={() => openEdit(t)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
-                    <button onClick={() => handleDelete(t)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
-                  </td>
-                </tr>
-              ))}
+              {tasks.map((t, i) => {
+                const h = history[t.id];
+                const est = Number(t.estimated_minutes_per_unit);
+                const over = h && h.avgPerUnit > est;
+                return (
+                  <tr key={t.id} className="border-b border-gray-100 last:border-0">
+                    <td className="px-4 py-3 text-sm text-gray-500 font-mono">{i + 1}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">{t.name}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{t.description || "-"}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{est.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono">
+                      {h ? (
+                        <span className={over ? "text-red-600" : "text-green-700"}>
+                          {h.avgPerUnit.toFixed(2)}
+                          <span className="text-gray-400 text-xs ml-1">({h.jobCount})</span>
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      <button
+                        onClick={() => moveTask(i, "up")}
+                        disabled={i === 0}
+                        className="text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed mr-2"
+                        title="Move up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() => moveTask(i, "down")}
+                        disabled={i === tasks.length - 1}
+                        className="text-gray-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      <button onClick={() => openEdit(t)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                      <button onClick={() => handleDelete(t)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+        )}
+
+        {hasAnyHistory && (
+          <div className="px-4 py-2 bg-gray-50 border-t border-gray-200">
+            <p className="text-xs text-gray-500">Actual avg/unit is the average per-unit time from completed jobs of this product. The number in parentheses is how many jobs it&apos;s based on. Green means you&apos;re beating your estimate, red means tasks are running over.</p>
+          </div>
         )}
 
         {adding && (
@@ -276,7 +341,7 @@ export default function TasksTab({ templateId }: { templateId: string }) {
                 onChange={(e) => setForm({ ...form, estimated_minutes_per_unit: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-              <p className="text-xs text-gray-500 mt-1">How long this task typically takes for one unit. This is just an estimate - actual times will be tracked from job time entries.</p>
+              <p className="text-xs text-gray-500 mt-1">How long this task typically takes for one unit. Actual times are tracked from job time entries and shown alongside.</p>
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={closeForm} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
