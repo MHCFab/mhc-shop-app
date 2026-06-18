@@ -52,8 +52,11 @@ export async function POST(req: NextRequest) {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Determine the redirect URL for the invite link
-    const origin = req.headers.get("origin") || process.env.NEXT_PUBLIC_SITE_URL || "";
+    // Determine the redirect URL for the invite link.
+    // Prefer the request origin, then an explicit site URL env var, then the Vercel-provided URL.
+    const headerOrigin = req.headers.get("origin");
+    const vercelUrl = process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "");
+    const origin = headerOrigin || vercelUrl || "";
     const redirectTo = origin + "/accept-invite";
 
     const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
