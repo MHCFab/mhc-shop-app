@@ -9,16 +9,20 @@ type Template = {
   name: string;
   product_number: string | null;
   description: string | null;
-  sops: string | null;
   is_active: boolean;
   is_sub_assembly: boolean;
+  customer_id: string | null;
+  retail_price_per_unit: number;
 };
+
+type Customer = { id: string; name: string };
 
 export default function SettingsTab({ templateId }: { templateId: string }) {
   const supabase = createClient();
   const router = useRouter();
 
   const [template, setTemplate] = useState<Template | null>(null);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -30,19 +34,20 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     description: "",
     is_active: true,
     is_sub_assembly: false,
+    customer_id: "",
     retail_price_per_unit: "",
   });
 
   const loadTemplate = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("product_templates")
-      .select("*")
-      .eq("id", templateId)
-      .single();
-    if (error) {
-      setError(error.message);
-    } else if (data) {
+    const [tplRes, custRes] = await Promise.all([
+      supabase.from("product_templates").select("*").eq("id", templateId).single(),
+      supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+    ]);
+    if (tplRes.error) {
+      setError(tplRes.error.message);
+    } else if (tplRes.data) {
+      const data = tplRes.data as Template;
       setTemplate(data);
       setForm({
         name: data.name,
@@ -50,9 +55,11 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: data.description || "",
         is_active: data.is_active,
         is_sub_assembly: data.is_sub_assembly,
+        customer_id: data.customer_id || "",
         retail_price_per_unit: String(data.retail_price_per_unit ?? ""),
       });
     }
+    setCustomers((custRes.data || []) as Customer[]);
     setLoading(false);
   }, [supabase, templateId]);
 
@@ -69,6 +76,10 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
       setError("Name is required.");
       return;
     }
+    if (!form.is_sub_assembly && !form.customer_id) {
+      setError("Please select a customer for this product. (Sub-assemblies don't need one.)");
+      return;
+    }
 
     setSaving(true);
     const { error } = await supabase
@@ -79,6 +90,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: form.description.trim() || null,
         is_active: form.is_active,
         is_sub_assembly: form.is_sub_assembly,
+        customer_id: form.is_sub_assembly ? null : form.customer_id,
         retail_price_per_unit: parseFloat(form.retail_price_per_unit) || 0,
       })
       .eq("id", templateId);
@@ -134,6 +146,35 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           />
         </div>
 
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={form.is_sub_assembly}
+            onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
+            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
+        </label>
+
+        {!form.is_sub_assembly && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Customer <span className="text-red-600">*</span>
+            </label>
+            <select
+              value={form.customer_id}
+              onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">-- Select customer --</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">This product will only be orderable for this customer.</p>
+          </div>
+        )}
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Product number</label>
           <input
@@ -175,15 +216,6 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           <span className="text-sm text-gray-700">Active (uncheck to hide from new jobs)</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={form.is_sub_assembly}
-            onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
         </label>
 
         <div className="flex justify-end gap-2 pt-2">

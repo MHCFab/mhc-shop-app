@@ -6,14 +6,7 @@ import Link from "next/link";
 import { createClient } from "../../../lib/supabase";
 
 type Customer = { id: string; name: string };
-type Template = { id: string; name: string; product_number: string | null };
-
-type LineItem = {
-  id: string;
-  product_template_id: string;
-  quantity: string;
-  notes: string;
-};
+type Template = { id: string; name: string; product_number: string | null; customer_id: string | null };
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -23,10 +16,6 @@ const SHAPES_MAP: Record<string, string> = {
   i_beam: "I-Beam",
   angle: "Angle",
 };
-
-function makeId() {
-  return Math.random().toString(36).slice(2);
-}
 
 export default function NewJobPage() {
   const supabase = createClient();
@@ -41,13 +30,14 @@ export default function NewJobPage() {
   const [jobNumberEdited, setJobNumberEdited] = useState(false);
 
   const [customerId, setCustomerId] = useState("");
+  const [productId, setProductId] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [showProductList, setShowProductList] = useState(false);
+  const [quantity, setQuantity] = useState("1");
   const [jobNumber, setJobNumber] = useState("");
   const [customerPo, setCustomerPo] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
-  const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: makeId(), product_template_id: "", quantity: "1", notes: "" },
-  ]);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -62,7 +52,7 @@ export default function NewJobPage() {
       supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
       supabase
         .from("product_templates")
-        .select("id, name, product_number")
+        .select("id, name, product_number, customer_id")
         .eq("is_active", true)
         .eq("is_sub_assembly", false)
         .order("name"),
@@ -77,25 +67,33 @@ export default function NewJobPage() {
     loadData();
   }, [loadCompanyId, loadData]);
 
-  function updateLineItem(id: string, field: keyof LineItem, value: string) {
-    setLineItems((prev) => {
-      const next = prev.map((li) => (li.id === id ? { ...li, [field]: value } : li));
-      // If this is the first line item's product and the job number hasn't been manually edited,
-      // pre-fill the job number with the product template name.
-      if (field === "product_template_id" && prev[0]?.id === id && !jobNumberEdited) {
-        const tpl = templates.find((t) => t.id === value);
-        if (tpl) setJobNumber(tpl.name);
-      }
-      return next;
-    });
+  // Products available for the chosen customer
+  const customerProducts = templates.filter((t) => t.customer_id === customerId);
+
+  // Filtered by the type-ahead search
+  const filteredProducts = customerProducts.filter((t) => {
+    if (!productSearch) return true;
+    const s = productSearch.toLowerCase();
+    return (t.name + " " + (t.product_number || "")).toLowerCase().includes(s);
+  });
+
+  const selectedProduct = templates.find((t) => t.id === productId);
+
+  function pickProduct(t: Template) {
+    setProductId(t.id);
+    setProductSearch(t.name);
+    setShowProductList(false);
+    if (!jobNumberEdited) {
+      setJobNumber(t.name);
+    }
   }
 
-  function addLineItem() {
-    setLineItems([...lineItems, { id: makeId(), product_template_id: "", quantity: "1", notes: "" }]);
-  }
-
-  function removeLineItem(id: string) {
-    setLineItems(lineItems.filter((li) => li.id !== id));
+  function onCustomerChange(newCustomerId: string) {
+    setCustomerId(newCustomerId);
+    // Reset product selection when customer changes
+    setProductId("");
+    setProductSearch("");
+    setShowProductList(false);
   }
 
   function describeMaterial(m: {
@@ -312,13 +310,16 @@ export default function NewJobPage() {
       setError("Please select a customer.");
       return;
     }
-    if (!jobNumber.trim()) {
-      setError("Job number is required.");
+    if (!productId) {
+      setError("Please select a product.");
       return;
     }
-    const validLines = lineItems.filter((li) => li.product_template_id && parseInt(li.quantity) > 0);
-    if (validLines.length === 0) {
-      setError("Please select a product and quantity.");
+    if (parseInt(quantity) <= 0 || isNaN(parseInt(quantity))) {
+      setError("Quantity must be at least 1.");
+      return;
+    }
+    if (!jobNumber.trim()) {
+      setError("Job number is required.");
       return;
     }
 
@@ -344,31 +345,29 @@ export default function NewJobPage() {
       return;
     }
 
-    const lineItemRows = validLines.map((li, i) => ({
-      company_id: companyId,
-      job_id: job.id,
-      product_template_id: li.product_template_id,
-      quantity: parseInt(li.quantity),
-      notes: li.notes.trim() || null,
-      sort_order: i,
-    }));
-
     const { data: insertedLineItems, error: lineError } = await supabase
       .from("job_line_items")
-      .insert(lineItemRows)
+      .insert({
+        company_id: companyId,
+        job_id: job.id,
+        product_template_id: productId,
+        quantity: parseInt(quantity),
+        notes: null,
+        sort_order: 0,
+      })
       .select();
 
-    if (lineError || !insertedLineItems) {
-      setError(lineError?.message || "Failed to create line items.");
+    if (lineError || !insertedLineItems || insertedLineItems.length === 0) {
+      setError(lineError?.message || "Failed to create line item.");
       setSaving(false);
       return;
     }
 
-    const itemsForGeneration = insertedLineItems.map((li, i) => ({
-      lineItemId: li.id,
-      templateId: validLines[i].product_template_id,
-      quantity: parseInt(validLines[i].quantity),
-    }));
+    const itemsForGeneration = [{
+      lineItemId: insertedLineItems[0].id,
+      templateId: productId,
+      quantity: parseInt(quantity),
+    }];
 
     try {
       await generatePickListAndTasks(job.id, itemsForGeneration);
@@ -391,8 +390,6 @@ export default function NewJobPage() {
     );
   }
 
-  const multipleLines = lineItems.length > 1;
-
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <Link href="/admin/jobs" className="text-sm text-blue-600 hover:text-blue-800 mb-4 inline-block">
@@ -407,30 +404,70 @@ export default function NewJobPage() {
         </div>
       )}
 
-      {templates.length === 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4">
-          <p className="text-sm text-amber-800">You need at least one product template first. <Link href="/admin/product-templates" className="underline font-medium">Add a template</Link></p>
-        </div>
-      )}
-
       <form onSubmit={handleSave} className="space-y-6">
         <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
           <h2 className="text-base font-semibold text-gray-900">Job details</h2>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Product <span className="text-red-600">*</span>
+              Customer <span className="text-red-600">*</span>
             </label>
             <select
-              value={lineItems[0]?.product_template_id || ""}
-              onChange={(e) => updateLineItem(lineItems[0].id, "product_template_id", e.target.value)}
+              value={customerId}
+              onChange={(e) => onCustomerChange(e.target.value)}
+              required
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">-- Select product --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</option>
+              <option value="">-- Select customer --</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product <span className="text-red-600">*</span>
+            </label>
+            {!customerId ? (
+              <p className="text-sm text-gray-500 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md">Select a customer first to see their products.</p>
+            ) : customerProducts.length === 0 ? (
+              <p className="text-sm text-amber-700 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md">
+                This customer has no products yet. <Link href="/admin/product-templates" className="underline font-medium">Add one in Product Templates</Link> and assign it to this customer.
+              </p>
+            ) : (
+              <div className="relative">
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); setProductId(""); }}
+                  onFocus={() => setShowProductList(true)}
+                  placeholder="Start typing to find a product..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {showProductList && (
+                  <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                    {filteredProducts.length === 0 ? (
+                      <p className="px-3 py-2 text-sm text-gray-500">No matching products.</p>
+                    ) : (
+                      filteredProducts.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => pickProduct(t)}
+                          className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
+                        >
+                          {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+                {selectedProduct && (
+                  <p className="text-xs text-green-700 mt-1">Selected: {selectedProduct.name}</p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -440,8 +477,8 @@ export default function NewJobPage() {
                 type="number"
                 min="1"
                 step="1"
-                value={lineItems[0]?.quantity || "1"}
-                onChange={(e) => updateLineItem(lineItems[0].id, "quantity", e.target.value)}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -461,22 +498,6 @@ export default function NewJobPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Customer <span className="text-red-600">*</span>
-              </label>
-              <select
-                value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select customer --</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Customer PO</label>
               <input
                 type="text"
@@ -486,9 +507,6 @@ export default function NewJobPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Due date</label>
               <input
@@ -511,59 +529,13 @@ export default function NewJobPage() {
           </div>
         </div>
 
-        {multipleLines && (
-          <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-            <h2 className="text-base font-semibold text-gray-900">Additional products</h2>
-            {lineItems.slice(1).map((li, idx) => (
-              <div key={li.id} className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-700">Product {idx + 2}</span>
-                  <button type="button" onClick={() => removeLineItem(li.id)} className="text-xs text-red-600 hover:text-red-800 font-medium">Remove</button>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
-                    <select
-                      value={li.product_template_id}
-                      onChange={(e) => updateLineItem(li.id, "product_template_id", e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">-- Select product --</option>
-                      {templates.map((t) => (
-                        <option key={t.id} value={t.id}>{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={li.quantity}
-                      onChange={(e) => updateLineItem(li.id, "quantity", e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between">
-          <button type="button" onClick={addLineItem} className="text-sm text-blue-600 hover:text-blue-800 font-medium">
-            + Add another product (optional)
-          </button>
-        </div>
-
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <Link href="/admin/jobs" className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors">Cancel</Link>
           <button
             type="submit"
-            disabled={saving || customers.length === 0 || templates.length === 0}
+            disabled={saving || customers.length === 0}
             className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {saving ? "Creating job..." : "Create job"}
