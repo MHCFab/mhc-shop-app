@@ -12,21 +12,71 @@ export default function AcceptInvitePage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [ready, setReady] = useState(false);
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    async function check() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setReady(true);
-      } else {
-        setTimeout(async () => {
-          const { data: { session: s2 } } = await supabase.auth.getSession();
-          setReady(!!s2);
-          if (!s2) setError("This invite link is invalid or has expired. Ask your admin to resend it.");
-        }, 1500);
+    let cancelled = false;
+
+    async function establishSession() {
+      // 1. If a session already exists, we're good.
+      const { data: { session: existing } } = await supabase.auth.getSession();
+      if (existing) {
+        if (!cancelled) { setReady(true); setChecking(false); }
+        return;
       }
+
+      // 2. Handle the PKCE/code flow: ?code=...
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (!cancelled) {
+          if (error) {
+            setError("This invite link could not be verified. Ask your admin to resend it.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
+      // 3. Handle the hash-token flow: #access_token=...&refresh_token=...&type=invite
+      const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      const hashParams = new URLSearchParams(hash);
+      const access_token = hashParams.get("access_token");
+      const refresh_token = hashParams.get("refresh_token");
+      if (access_token && refresh_token) {
+        const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+        if (!cancelled) {
+          if (error) {
+            setError("This invite link could not be verified. Ask your admin to resend it.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
+      // 4. Nothing usable in the URL. Give Supabase's detectSessionInUrl a brief moment, then re-check.
+      setTimeout(async () => {
+        const { data: { session: s2 } } = await supabase.auth.getSession();
+        if (!cancelled) {
+          if (s2) {
+            setReady(true);
+          } else {
+            setError("This invite link is invalid or has expired. Ask your admin to resend it.");
+          }
+          setChecking(false);
+        }
+      }, 1500);
     }
-    check();
+
+    establishSession();
+    return () => { cancelled = true; };
   }, [supabase]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -69,7 +119,7 @@ export default function AcceptInvitePage() {
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Set your password</h1>
         <p className="text-gray-600 mb-6">Welcome! Create a password to finish setting up your account.</p>
 
-        {!ready && !error && <p className="text-gray-600">Verifying your invite...</p>}
+        {checking && <p className="text-gray-600">Verifying your invite...</p>}
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-4">{error}</div>}
 

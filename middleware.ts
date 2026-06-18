@@ -28,7 +28,7 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
   // Public paths that don't require auth
-  const publicPaths = ["/login", "/accept-invite", "/auth"];
+  const publicPaths = ["/login", "/accept-invite", "/reset-password", "/auth"];
   const isPublic = publicPaths.some((p) => path.startsWith(p));
 
   // Not logged in and trying to access a protected page -> login

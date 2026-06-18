@@ -12,21 +12,67 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [ready, setReady] = useState(false);
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    async function check() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setReady(true);
-      } else {
-        setTimeout(async () => {
-          const { data: { session: s2 } } = await supabase.auth.getSession();
-          setReady(!!s2);
-          if (!s2) setError("This reset link is invalid or has expired. Ask your admin to send a new one.");
-        }, 1500);
+    let cancelled = false;
+
+    async function establishSession() {
+      const { data: { session: existing } } = await supabase.auth.getSession();
+      if (existing) {
+        if (!cancelled) { setReady(true); setChecking(false); }
+        return;
       }
+
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (!cancelled) {
+          if (error) {
+            setError("This reset link could not be verified. Ask your admin to send a new one.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
+      const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      const hashParams = new URLSearchParams(hash);
+      const access_token = hashParams.get("access_token");
+      const refresh_token = hashParams.get("refresh_token");
+      if (access_token && refresh_token) {
+        const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+        if (!cancelled) {
+          if (error) {
+            setError("This reset link could not be verified. Ask your admin to send a new one.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
+      setTimeout(async () => {
+        const { data: { session: s2 } } = await supabase.auth.getSession();
+        if (!cancelled) {
+          if (s2) {
+            setReady(true);
+          } else {
+            setError("This reset link is invalid or has expired. Ask your admin to send a new one.");
+          }
+          setChecking(false);
+        }
+      }, 1500);
     }
-    check();
+
+    establishSession();
+    return () => { cancelled = true; };
   }, [supabase]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -60,7 +106,7 @@ export default function ResetPasswordPage() {
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Set a new password</h1>
         <p className="text-gray-600 mb-6">Choose a new password for your account.</p>
 
-        {!ready && !error && <p className="text-gray-600">Verifying your link...</p>}
+        {checking && <p className="text-gray-600">Verifying your link...</p>}
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-4">{error}</div>}
 
