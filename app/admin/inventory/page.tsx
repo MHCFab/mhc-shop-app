@@ -17,6 +17,7 @@ const SHAPES = [
   { value: "channel", label: "Channel" },
   { value: "i_beam", label: "I-Beam" },
   { value: "angle", label: "Angle" },
+  { value: "flat_bar", label: "Flat Bar" },
 ] as const;
 
 const CATEGORIES = [

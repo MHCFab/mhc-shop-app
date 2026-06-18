@@ -15,6 +15,7 @@ const SHAPES_MAP: Record<string, string> = {
   channel: "Channel",
   i_beam: "I-Beam",
   angle: "Angle",
+  flat_bar: "Flat Bar",
 };
 
 export default function NewJobPage() {
