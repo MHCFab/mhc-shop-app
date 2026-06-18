@@ -42,8 +42,8 @@ export default function EmployeesPage() {
       supabase.from("employee_invitations").select("id, email, full_name, status, created_at").eq("status", "pending").order("created_at", { ascending: false }),
     ]);
     if (empRes.error) setError(empRes.error.message);
-    else setEmployees((empRes.data || []) as Employee[]);
-    setInvitations((invRes.data || []) as Invitation[]);
+    else setEmployees((empRes.data || []) as unknown as Employee[]);
+    setInvitations((invRes.data || []) as unknown as Invitation[]);
     setLoading(false);
   }, [supabase]);
 

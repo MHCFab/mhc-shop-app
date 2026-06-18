@@ -126,8 +126,8 @@ export default function MaterialDetailPage() {
       return;
     }
     setMaterial(matRes.data as RawMaterial);
-    setBatches((batchRes.data || []) as Batch[]);
-    setAllocations((allocRes.data || []) as Allocation[]);
+    setBatches((batchRes.data || []) as unknown as Batch[]);
+    setAllocations((allocRes.data || []) as unknown as Allocation[]);
     setLoading(false);
   }, [supabase, id]);
 

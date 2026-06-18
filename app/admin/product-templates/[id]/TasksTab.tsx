@@ -55,7 +55,7 @@ export default function TasksTab({ templateId }: { templateId: string }) {
       .eq("product_template_id", templateId)
       .order("sort_order");
     if (error) setError(error.message);
-    else setTasks((data || []) as Task[]);
+    else setTasks((data || []) as unknown as Task[]);
     setLoading(false);
   }, [supabase, templateId]);
 

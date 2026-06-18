@@ -102,9 +102,9 @@ export default function CuttingNestTab({
 
     
 
-    const pickItems = (pickRes.data || []) as PickItem[];
+    const pickItems = (pickRes.data || []) as unknown as PickItem[];
     setItems(pickItems);
-    setEntries((entriesRes.data || []) as NestEntry[]);
+    setEntries((entriesRes.data || []) as unknown as NestEntry[]);
     setJobNumber(jobRes.data?.job_number || "");
     setFinalizedAt(jobRes.data?.cutting_nest_finalized_at || null);
 

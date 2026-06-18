@@ -136,7 +136,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         .order("name"),
     ]);
 
-    const subRows = (subsRes.data || []) as SubRow[];
+    const subRows = (subsRes.data || []) as unknown as SubRow[];
 
     // For each sub-assembly, calculate its per-unit cost by summing its own materials and parts
     const subTemplateIds = Array.from(new Set(subRows.map((s) => s.child_template_id)));
@@ -165,8 +165,8 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         purchased_parts: { current_cost_each: number } | null;
       };
 
-      const subMats = (subMatsRes.data || []) as SubMatRow[];
-      const subParts = (subPartsRes.data || []) as SubPartRow[];
+      const subMats = (subMatsRes.data || []) as unknown as SubMatRow[];
+      const subParts = (subPartsRes.data || []) as unknown as SubPartRow[];
 
       for (const id of subTemplateIds) {
         const matCost = subMats
@@ -179,13 +179,13 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
       }
     }
 
-    setMaterials((matsRes.data || []) as MaterialRow[]);
-    setParts((partsRes.data || []) as PartRow[]);
+    setMaterials((matsRes.data || []) as unknown as MaterialRow[]);
+    setParts((partsRes.data || []) as unknown as PartRow[]);
     setSubs(subRows);
     setSubAssemblyCosts(subCosts);
-    setAllMaterials((allMatsRes.data || []) as RawMaterial[]);
-    setAllParts((allPartsRes.data || []) as PurchasedPart[]);
-    setAllTemplates((allTplRes.data || []) as Template[]);
+    setAllMaterials((allMatsRes.data || []) as unknown as RawMaterial[]);
+    setAllParts((allPartsRes.data || []) as unknown as PurchasedPart[]);
+    setAllTemplates((allTplRes.data || []) as unknown as Template[]);
     setLoading(false);
   }, [supabase, templateId]);
 

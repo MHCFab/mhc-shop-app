@@ -60,7 +60,7 @@ export default function JobsPage() {
       .order("board_order", { ascending: true })
       .order("created_at", { ascending: false });
     if (error) setError(error.message);
-    else setJobs((data || []) as Job[]);
+    else setJobs((data || []) as unknown as Job[]);
     setLoading(false);
   }
 

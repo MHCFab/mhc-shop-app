@@ -68,7 +68,7 @@ export default function ProductTemplatesPage() {
     ]);
     if (tplRes.error) setError(tplRes.error.message);
     else setTemplates(tplRes.data || []);
-    setCustomers((custRes.data || []) as Customer[]);
+    setCustomers((custRes.data || []) as unknown as Customer[]);
     setLoading(false);
   }
 

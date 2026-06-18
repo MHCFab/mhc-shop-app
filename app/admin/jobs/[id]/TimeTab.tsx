@@ -60,10 +60,10 @@ export default function TimeTab({ jobId }: { jobId: string }) {
       supabase.from("profiles").select("id, full_name, email"),
     ]);
 
-    setTasks((taskRes.data || []) as Task[]);
-    setEntries((entryRes.data || []) as TimeEntry[]);
+    setTasks((taskRes.data || []) as unknown as Task[]);
+    setEntries((entryRes.data || []) as unknown as TimeEntry[]);
     const profMap: Record<string, Profile> = {};
-    for (const p of (profRes.data || []) as Profile[]) profMap[p.id] = p;
+    for (const p of (profRes.data || []) as unknown as Profile[]) profMap[p.id] = p;
     setProfiles(profMap);
     setLoading(false);
   }, [supabase, jobId]);

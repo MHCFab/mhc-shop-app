@@ -172,10 +172,10 @@ export default function NewJobPage() {
       sort_order: number;
     };
 
-    const tplMaterials = (matsRes.data || []) as TplMatRow[];
-    const tplParts = (partsRes.data || []) as TplPartRow[];
-    const tplSubs = (subLinksRes.data || []) as TplSubRow[];
-    const tplTasks = (tasksRes.data || []) as TplTaskRow[];
+    const tplMaterials = (matsRes.data || []) as unknown as TplMatRow[];
+    const tplParts = (partsRes.data || []) as unknown as TplPartRow[];
+    const tplSubs = (subLinksRes.data || []) as unknown as TplSubRow[];
+    const tplTasks = (tasksRes.data || []) as unknown as TplTaskRow[];
     const templateNames = new Map<string, string>(
       (templatesData.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
     );

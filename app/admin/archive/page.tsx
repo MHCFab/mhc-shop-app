@@ -39,7 +39,7 @@ export default function ArchivePage() {
       .from("completed_jobs_archive")
       .select("*")
       .order("invoiced_on", { ascending: false });
-    setRows((data || []) as ArchiveRow[]);
+    setRows((data || []) as unknown as ArchiveRow[]);
     setLoading(false);
   }, [supabase]);
 

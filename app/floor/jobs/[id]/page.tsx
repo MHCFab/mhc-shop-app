@@ -60,8 +60,8 @@ export default function FloorJobDetail() {
       setLoading(false);
       return;
     }
-    setJob(jobRes.data as Job);
-    setLineItems((liRes.data || []) as LineItem[]);
+    setJob(jobRes.data as unknown as Job);
+    setLineItems((liRes.data || []) as unknown as LineItem[]);
     setLoading(false);
   }, [supabase, id]);
 
@@ -192,8 +192,8 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
         .eq("job_id", jobId),
     ]);
 
-    const allEntries = (allEntriesRes.data || []) as TimeEntryFull[];
-    setTasks((taskRes.data || []) as JobTask[]);
+    const allEntries = (allEntriesRes.data || []) as unknown as TimeEntryFull[];
+    setTasks((taskRes.data || []) as unknown as JobTask[]);
     setAllEntries(allEntries);
     // Open entries belonging to the current user (for the clock in/out button state)
     setOpenEntries(allEntries.filter((e) => e.ended_at === null && e.employee_id === user?.id) as TimeEntry[]);
@@ -506,8 +506,8 @@ type PickItem = {
           .eq("job_id", jobId)
           .eq("entry_type", "pull"),
       ]);
-      setItems((itemsRes.data || []) as PickItem[]);
-      setPulls((pullsRes.data || []) as NestPull[]);
+      setItems((itemsRes.data || []) as unknown as PickItem[]);
+      setPulls((pullsRes.data || []) as unknown as NestPull[]);
       setLoading(false);
     }, [supabase, jobId]);
   
@@ -671,7 +671,7 @@ function ScrapModal({
         purchased_parts: { name: string; part_number: string | null } | null;
       };
 
-      const mapped = ((data || []) as Row[]).map((r) => {
+      const mapped = ((data || []) as unknown as Row[]).map((r) => {
         let label = "Item";
         let costPerFoot = 0;
         if (r.item_type === "raw_material" && r.raw_materials) {

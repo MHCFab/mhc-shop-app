@@ -34,7 +34,7 @@ export default function OverviewTab({ jobId }: { jobId: string }) {
         .order("sort_order"),
       supabase.from("jobs").select("notes").eq("id", jobId).single(),
     ]);
-    setLineItems((liRes.data || []) as LineItem[]);
+    setLineItems((liRes.data || []) as unknown as LineItem[]);
     setNotes(jobRes.data?.notes || "");
     setLoading(false);
   }, [supabase, jobId]);

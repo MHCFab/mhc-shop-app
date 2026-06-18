@@ -79,7 +79,7 @@ export default function FloorProductDetail() {
       })
     );
     setPhotos(photosWithUrls);
-    setNotes((noteRes.data || []) as Note[]);
+    setNotes((noteRes.data || []) as unknown as Note[]);
     setLoading(false);
   }, [supabase, id]);
 

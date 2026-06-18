@@ -89,8 +89,8 @@ export default function PartDetailPage() {
       return;
     }
     setPart(partRes.data as PurchasedPart);
-    setBatches((batchRes.data || []) as Batch[]);
-    setAllocations((allocRes.data || []) as Allocation[]);
+    setBatches((batchRes.data || []) as unknown as Batch[]);
+    setAllocations((allocRes.data || []) as unknown as Allocation[]);
     setLoading(false);
   }, [supabase, id]);
 

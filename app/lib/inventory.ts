@@ -424,11 +424,11 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   };
   type TaskRow = { estimated_minutes_total: number };
 
-  const lineItems = (liRes.data || []) as LiRow[];
-  const pick = (pickRes.data || []) as PickRow[];
-  const times = (timeRes.data || []) as TimeRow[];
-  const variances = (varRes.data || []) as VarRow[];
-  const tasks = (tasksRes.data || []) as TaskRow[];
+  const lineItems = (liRes.data || []) as unknown as LiRow[];
+  const pick = (pickRes.data || []) as unknown as PickRow[];
+  const times = (timeRes.data || []) as unknown as TimeRow[];
+  const variances = (varRes.data || []) as unknown as VarRow[];
+  const tasks = (tasksRes.data || []) as unknown as TaskRow[];
 
   const units = lineItems.reduce((s, li) => s + Number(li.quantity), 0);
 

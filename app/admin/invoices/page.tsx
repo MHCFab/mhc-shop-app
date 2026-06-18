@@ -32,7 +32,7 @@ export default function InvoicesPage() {
       .eq("status", "complete")
       .order("completed_at", { ascending: true });
 
-    const jobs = (data || []) as Job[];
+      const jobs = (data || []) as unknown as Job[];
 
     // Compute a quick cost/retail/profit per job for the list
     const withCost: Row[] = await Promise.all(

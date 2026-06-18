@@ -52,7 +52,7 @@ export default function EmployeeDetailPage() {
       .select("id, job_id, job_task_id, started_at, ended_at")
       .eq("employee_id", employeeId)
       .order("started_at", { ascending: false });
-    const entryList = (entryData || []) as Entry[];
+    const entryList = (entryData || []) as unknown as Entry[];
     setEntries(entryList);
 
     // Load job and task info for the entries
@@ -65,7 +65,7 @@ export default function EmployeeDetailPage() {
         .select("id, job_number, customers(name)")
         .in("id", jobIds);
       const jobMap: Record<string, JobInfo> = {};
-      for (const j of (jobData || []) as JobInfo[]) jobMap[j.id] = j;
+      for (const j of ((jobData || []) as unknown as JobInfo[])) jobMap[j.id] = j;
       setJobs(jobMap);
     }
 
@@ -75,7 +75,7 @@ export default function EmployeeDetailPage() {
         .select("id, name")
         .in("id", taskIds);
       const taskMap: Record<string, string> = {};
-      for (const t of (taskData || []) as TaskInfo[]) taskMap[t.id] = t.name;
+      for (const t of (taskData || []) as unknown as TaskInfo[]) taskMap[t.id] = t.name;
       setTaskNames(taskMap);
     }
 

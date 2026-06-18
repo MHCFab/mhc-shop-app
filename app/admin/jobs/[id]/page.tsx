@@ -192,8 +192,8 @@ export default function JobDetailPage() {
         .eq("job_id", job.id);
 
       type JT = { id: string; name: string; source_task_id: string | null; batch_quantity: number; job_line_items: { product_template_id: string } | null };
-      const tasksArr = (jobTasks || []) as JT[];
-      const times = (timeRows || []) as { job_task_id: string; started_at: string; ended_at: string | null }[];
+      const tasksArr = (jobTasks || []) as unknown as JT[];
+      const times = (timeRows || []) as unknown as { job_task_id: string; started_at: string; ended_at: string | null }[];
 
       const historyRows = tasksArr.map((t) => {
         const taskTimes = times.filter((x) => x.job_task_id === t.id);

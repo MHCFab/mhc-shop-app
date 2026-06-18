@@ -40,7 +40,7 @@ export default function NotesTab({ templateId }: { templateId: string }) {
       .order("created_at", { ascending: false });
 
     if (error) setError(error.message);
-    else setNotes((data || []) as Note[]);
+    else setNotes((data || []) as unknown as Note[]);
     setLoading(false);
   }, [supabase, templateId]);
 

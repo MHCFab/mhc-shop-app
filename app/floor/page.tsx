@@ -41,7 +41,7 @@ export default function FloorBoard() {
       .order("board_order", { ascending: true })
       .order("created_at", { ascending: true });
 
-    setJobs((data || []) as Job[]);
+    setJobs((data || []) as unknown as Job[]);
     setLoading(false);
   }, [supabase]);
 

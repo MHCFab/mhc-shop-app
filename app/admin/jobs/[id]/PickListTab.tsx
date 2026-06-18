@@ -79,7 +79,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       .order("item_type")
       .order("created_at");
     if (error) setError(error.message);
-    else setItems((data || []) as PickListItem[]);
+    else setItems((data || []) as unknown as PickListItem[]);
     setLoading(false);
   }, [supabase, jobId]);
 
@@ -224,9 +224,9 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       quantity_per_unit: number;
     };
 
-    const tplMaterials = (matsRes.data || []) as MatRow[];
-    const tplParts = (partsRes.data || []) as PartRow[];
-    const tplSubs = (subLinksRes.data || []) as SubLinkRow[];
+    const tplMaterials = (matsRes.data || []) as unknown as MatRow[];
+    const tplParts = (partsRes.data || []) as unknown as PartRow[];
+    const tplSubs = (subLinksRes.data || []) as unknown as SubLinkRow[];
 
     // Calculate total quantity needed of each template
     const templateQtyTotals = new Map<string, number>();

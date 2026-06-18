@@ -59,7 +59,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         retail_price_per_unit: String(data.retail_price_per_unit ?? ""),
       });
     }
-    setCustomers((custRes.data || []) as Customer[]);
+    setCustomers((custRes.data || []) as unknown as Customer[]);
     setLoading(false);
   }, [supabase, templateId]);
 

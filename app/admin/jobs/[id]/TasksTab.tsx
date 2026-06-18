@@ -58,7 +58,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       .order("job_line_item_id")
       .order("sort_order");
     if (error) setError(error.message);
-    else setTasks((data || []) as JobTask[]);
+    else setTasks((data || []) as unknown as JobTask[]);
     setLoading(false);
   }, [supabase, jobId]);
 
@@ -153,8 +153,8 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       quantity_per_unit: number;
     };
 
-    const tplTasks = (tasksRes.data || []) as TplTaskRow[];
-    const tplSubs = (subLinksRes.data || []) as SubLinkRow[];
+    const tplTasks = (tasksRes.data || []) as unknown as TplTaskRow[];
+    const tplSubs = (subLinksRes.data || []) as unknown as SubLinkRow[];
     const templateNames = new Map<string, string>(
       (templatesRes.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
     );
