@@ -53,11 +53,12 @@ export async function POST(req: NextRequest) {
     );
 
     // Determine the redirect URL for the invite link.
-    // Prefer the request origin, then an explicit site URL env var, then the Vercel-provided URL.
     const headerOrigin = req.headers.get("origin");
-    const vercelUrl = process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "");
-    const origin = headerOrigin || vercelUrl || "";
-    const redirectTo = origin + "/accept-invite";
+    const envUrl = process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "");
+    let base = (headerOrigin || envUrl || "").trim();
+    // Strip any trailing slash so we don't end up with a double slash
+    base = base.replace(/\/+$/, "");
+    const redirectTo = base + "/accept-invite";
 
     const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
       data: {
