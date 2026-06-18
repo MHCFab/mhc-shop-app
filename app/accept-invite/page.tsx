@@ -18,15 +18,36 @@ export default function AcceptInvitePage() {
     let cancelled = false;
 
     async function establishSession() {
-      // 1. If a session already exists, we're good.
+      // 1. Existing session already?
       const { data: { session: existing } } = await supabase.auth.getSession();
       if (existing) {
         if (!cancelled) { setReady(true); setChecking(false); }
         return;
       }
 
-      // 2. Handle the PKCE/code flow: ?code=...
       const url = new URL(window.location.href);
+
+      // 2. token_hash flow (our custom invite template)
+      const token_hash = url.searchParams.get("token_hash");
+      const type = url.searchParams.get("type");
+      if (token_hash && type) {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash,
+          type: type as "invite" | "recovery" | "email" | "signup",
+        });
+        if (!cancelled) {
+          if (error) {
+            setError("This invite link is invalid or has expired. Ask your admin to resend it.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
+      // 3. code flow (PKCE)
       const code = url.searchParams.get("code");
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(code);
@@ -42,7 +63,7 @@ export default function AcceptInvitePage() {
         return;
       }
 
-      // 3. Handle the hash-token flow: #access_token=...&refresh_token=...&type=invite
+      // 4. hash-token flow
       const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
       const hashParams = new URLSearchParams(hash);
       const access_token = hashParams.get("access_token");
@@ -61,18 +82,11 @@ export default function AcceptInvitePage() {
         return;
       }
 
-      // 4. Nothing usable in the URL. Give Supabase's detectSessionInUrl a brief moment, then re-check.
-      setTimeout(async () => {
-        const { data: { session: s2 } } = await supabase.auth.getSession();
-        if (!cancelled) {
-          if (s2) {
-            setReady(true);
-          } else {
-            setError("This invite link is invalid or has expired. Ask your admin to resend it.");
-          }
-          setChecking(false);
-        }
-      }, 1500);
+      // 5. Nothing usable
+      if (!cancelled) {
+        setError("This invite link is invalid or has expired. Ask your admin to resend it.");
+        setChecking(false);
+      }
     }
 
     establishSession();

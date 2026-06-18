@@ -25,6 +25,26 @@ export default function ResetPasswordPage() {
       }
 
       const url = new URL(window.location.href);
+
+      const token_hash = url.searchParams.get("token_hash");
+      const type = url.searchParams.get("type");
+      if (token_hash && type) {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash,
+          type: type as "invite" | "recovery" | "email" | "signup",
+        });
+        if (!cancelled) {
+          if (error) {
+            setError("This reset link is invalid or has expired. Ask your admin to send a new one.");
+            setChecking(false);
+          } else {
+            setReady(true);
+            setChecking(false);
+          }
+        }
+        return;
+      }
+
       const code = url.searchParams.get("code");
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(code);
@@ -58,17 +78,10 @@ export default function ResetPasswordPage() {
         return;
       }
 
-      setTimeout(async () => {
-        const { data: { session: s2 } } = await supabase.auth.getSession();
-        if (!cancelled) {
-          if (s2) {
-            setReady(true);
-          } else {
-            setError("This reset link is invalid or has expired. Ask your admin to send a new one.");
-          }
-          setChecking(false);
-        }
-      }, 1500);
+      if (!cancelled) {
+        setError("This reset link is invalid or has expired. Ask your admin to send a new one.");
+        setChecking(false);
+      }
     }
 
     establishSession();
