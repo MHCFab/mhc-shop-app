@@ -326,6 +326,20 @@ export default function NewJobPage() {
 
     setSaving(true);
 
+    // Put the new job at the bottom of this customer's board:
+    // find the highest board_order among the customer's open jobs and add 1.
+    const { data: existingJobs } = await supabase
+      .from("jobs")
+      .select("board_order")
+      .eq("company_id", companyId)
+      .eq("customer_id", customerId)
+      .in("status", ["ordered", "ready", "in_progress"]);
+    const maxBoardOrder = (existingJobs || []).reduce(
+      (max, j) => Math.max(max, Number((j as { board_order: number | null }).board_order ?? 0)),
+      -1
+    );
+    const newBoardOrder = maxBoardOrder + 1;
+
     const { data: job, error: jobError } = await supabase
       .from("jobs")
       .insert({
@@ -336,6 +350,7 @@ export default function NewJobPage() {
         status: "ordered",
         due_date: dueDate || null,
         notes: notes.trim() || null,
+        board_order: newBoardOrder,
       })
       .select()
       .single();

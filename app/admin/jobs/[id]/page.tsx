@@ -56,6 +56,14 @@ export default function JobDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [invoicing, setInvoicing] = useState(false);
 
+  // Edit job (name + quantity)
+  const [lineItem, setLineItem] = useState<{ id: string; quantity: number } | null>(null);
+  const [multipleLineItems, setMultipleLineItems] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [qtyDraft, setQtyDraft] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const loadJob = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -65,6 +73,21 @@ export default function JobDetailPage() {
       .single();
     if (error) setError(error.message);
     else setJob(data as Job);
+
+    const { data: liData } = await supabase
+      .from("job_line_items")
+      .select("id, quantity")
+      .eq("job_id", id)
+      .order("sort_order");
+    const items = (liData || []) as unknown as { id: string; quantity: number }[];
+    if (items.length > 0) {
+      setLineItem({ id: items[0].id, quantity: Number(items[0].quantity) });
+      setMultipleLineItems(items.length > 1);
+    } else {
+      setLineItem(null);
+      setMultipleLineItems(false);
+    }
+
     setLoading(false);
   }, [id, supabase]);
 
@@ -134,6 +157,89 @@ export default function JobDetailPage() {
       return;
     }
     router.push("/admin/jobs");
+  }
+
+  function openEdit() {
+    if (!job) return;
+    setNameDraft(job.job_number);
+    setQtyDraft(lineItem ? String(lineItem.quantity) : "");
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    if (!job) return;
+    const newName = nameDraft.trim();
+    if (!newName) {
+      alert("Job name can't be empty.");
+      return;
+    }
+
+    let qtyChanged = false;
+    let newQty = lineItem?.quantity ?? 0;
+    if (lineItem && !multipleLineItems) {
+      newQty = parseInt(qtyDraft, 10);
+      if (isNaN(newQty) || newQty < 1) {
+        alert("Quantity must be at least 1.");
+        return;
+      }
+      qtyChanged = newQty !== lineItem.quantity;
+    }
+
+    if (qtyChanged && lineItem) {
+      const ok = confirm(
+        "Change quantity from " + lineItem.quantity + " to " + newQty + "?\n\n" +
+        "Your pick list targets and task time estimates will be updated for the new quantity. " +
+        "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved \u2014 nothing is deleted.\n\n" +
+        "If you increased the quantity you may need to cut or pull more material, and if this job is already \"Ready\" or further, set it back to \"Ordered\" and then \"Ready\" again to re-reserve inventory for the new amount.\n\n" +
+        "Continue?"
+      );
+      if (!ok) return;
+    }
+
+    setSavingEdit(true);
+    try {
+      // 1) Rename (if changed)
+      if (newName !== job.job_number) {
+        const { error: nameErr } = await supabase.from("jobs").update({ job_number: newName }).eq("id", job.id);
+        if (nameErr) throw new Error("Rename failed: " + nameErr.message);
+      }
+
+      // 2) Rescale pick list, tasks, and the line item quantity (if changed)
+      if (qtyChanged && lineItem) {
+        const ratio = newQty / lineItem.quantity;
+
+        const { data: pliData } = await supabase
+          .from("job_pick_list_items")
+          .select("id, planned_quantity")
+          .eq("job_id", job.id);
+        const pickItems = (pliData || []) as unknown as { id: string; planned_quantity: number }[];
+        for (const row of pickItems) {
+          const scaled = Math.round(Number(row.planned_quantity) * ratio * 10000) / 10000;
+          await supabase.from("job_pick_list_items").update({ planned_quantity: scaled }).eq("id", row.id);
+        }
+
+        const { data: taskData } = await supabase
+          .from("job_tasks")
+          .select("id, batch_quantity, estimated_minutes_total")
+          .eq("job_id", job.id);
+        const taskRows = (taskData || []) as unknown as { id: string; batch_quantity: number; estimated_minutes_total: number }[];
+        for (const row of taskRows) {
+          const newBatch = Math.round(Number(row.batch_quantity) * ratio);
+          const newMins = Math.round(Number(row.estimated_minutes_total) * ratio * 100) / 100;
+          await supabase.from("job_tasks").update({ batch_quantity: newBatch, estimated_minutes_total: newMins }).eq("id", row.id);
+        }
+
+        const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItem.id);
+        if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+      }
+
+      setEditing(false);
+      await loadJob();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to save changes.");
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   async function markInvoiced() {
@@ -280,11 +386,22 @@ export default function JobDetailPage() {
 
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">{job.job_number}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold text-gray-900">{job.job_number}</h1>
+            {!isComplete && (
+              <button
+                onClick={openEdit}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Edit
+              </button>
+            )}
+          </div>
           <p className="text-gray-700 mt-1">
             {job.customers?.name || "Unknown customer"}
             {job.customer_po && <span className="text-gray-500"> &middot; PO {job.customer_po}</span>}
           </p>
+          {lineItem && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>}
           {job.due_date && <p className="text-sm text-gray-500 mt-1">Due {job.due_date}</p>}
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -341,6 +458,73 @@ export default function JobDetailPage() {
       {tab === "tasks" && !isComplete && <TasksTab jobId={job.id} />}
       {tab === "time" && <TimeTab jobId={job.id} />}
       {tab === "cost" && <CostTab jobId={job.id} />}
+
+      {editing && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => !savingEdit && setEditing(false)}
+        >
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Edit job</h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Job name</label>
+                <input
+                  type="text"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                {multipleLineItems ? (
+                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                    This job has more than one product line, so quantity isn&apos;t editable here yet. You can still rename the job.
+                  </p>
+                ) : !lineItem ? (
+                  <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                    No product line found for this job.
+                  </p>
+                ) : (
+                  <>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={qtyDraft}
+                      onChange={(e) => setQtyDraft(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Changing quantity rescales the pick list and task time estimates. Picked amounts, logged time, scrap, and cutting nest entries are kept.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setEditing(false)}
+                disabled={savingEdit}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={savingEdit}
+                className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {savingEdit ? "Saving..." : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
