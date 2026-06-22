@@ -55,7 +55,19 @@ export default function PartDetailPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(null);
 
+  // Manual adjustment modal
+  const [showAdjust, setShowAdjust] = useState(false);
+  const [adjustForm, setAdjustForm] = useState({
+    quantity: "",
+    cost_each: "",
+    note: "",
+  });
+  const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [savingAdjust, setSavingAdjust] = useState(false);
+
+  // Edit part modal
   const [showEdit, setShowEdit] = useState(false);
   const [editForm, setEditForm] = useState({
     name: "",
@@ -67,6 +79,13 @@ export default function PartDetailPage() {
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  const loadCompanyId = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+    if (data) setCompanyId(data.company_id);
+  }, [supabase]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -95,12 +114,46 @@ export default function PartDetailPage() {
   }, [supabase, id]);
 
   useEffect(() => {
+    loadCompanyId();
     loadData();
-  }, [loadData]);
+  }, [loadCompanyId, loadData]);
 
   const totalInStock = batches.reduce((sum, b) => sum + Number(b.quantity), 0);
   const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
   const available = totalInStock - totalAllocated;
+
+  async function saveAdjustment(e: React.FormEvent) {
+    e.preventDefault();
+    setAdjustError(null);
+    if (!companyId) {
+      setAdjustError("Could not determine your company. Try refreshing.");
+      return;
+    }
+    const qty = parseInt(adjustForm.quantity);
+    const cost = parseFloat(adjustForm.cost_each);
+    if (isNaN(qty) || isNaN(cost) || cost < 0) {
+      setAdjustError("Enter a valid quantity and cost each. Quantity can be negative to remove stock.");
+      return;
+    }
+    setSavingAdjust(true);
+    const { error } = await supabase.from("purchased_parts_inventory").insert({
+      company_id: companyId,
+      purchased_part_id: id,
+      supplier_id: null,
+      quantity: qty,
+      cost_each: cost,
+      purchase_date: new Date().toISOString().slice(0, 10),
+      notes: adjustForm.note.trim() || "Manual adjustment",
+    });
+    setSavingAdjust(false);
+    if (error) {
+      setAdjustError(error.message);
+      return;
+    }
+    setShowAdjust(false);
+    setAdjustForm({ quantity: "", cost_each: "", note: "" });
+    loadData();
+  }
 
   function openEdit() {
     if (!part) return;
@@ -195,6 +248,9 @@ export default function PartDetailPage() {
           {part.description && <p className="text-gray-700 mt-2 max-w-2xl">{part.description}</p>}
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowAdjust(true)} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
+            Adjust inventory
+          </button>
           <button onClick={openEdit} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
             Edit
           </button>
@@ -279,6 +335,36 @@ export default function PartDetailPage() {
             </tbody>
           </table>
         </section>
+      )}
+
+      {showAdjust && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <form onSubmit={saveAdjustment} className="p-6 space-y-3">
+              <h2 className="text-xl font-bold text-gray-900">Adjust inventory</h2>
+              <p className="text-sm text-gray-600">Add or remove stock manually. Use a negative quantity to remove parts (for example after a miscount or using some outside a job).</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Qty (+/-)</label>
+                  <input type="number" step="1" value={adjustForm.quantity} onChange={(e) => setAdjustForm({ ...adjustForm, quantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost each</label>
+                  <input type="number" step="0.0001" min="0" value={adjustForm.cost_each} onChange={(e) => setAdjustForm({ ...adjustForm, cost_each: e.target.value })} placeholder={Number(part.current_cost_each).toFixed(4)} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason / note</label>
+                <input type="text" value={adjustForm.note} onChange={(e) => setAdjustForm({ ...adjustForm, note: e.target.value })} placeholder="e.g. Found extra box in storage" className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {adjustError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{adjustError}</div>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setShowAdjust(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
+                <button type="submit" disabled={savingAdjust} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingAdjust ? "Saving..." : "Save"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {showEdit && (
