@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
-import { allocateJobInventory, releaseJobInventory, getJobCostReport } from "../../../lib/inventory";
+import { allocateJobInventory, releaseJobInventory, getJobCostReport, getJobStockShortfall, type JobStockShortfallItem } from "../../../lib/inventory";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import CuttingNestTab from "./CuttingNestTab";
@@ -42,6 +42,14 @@ function statusBadge(status: Status) {
     : <span className="text-sm text-gray-500">{status}</span>;
 }
 
+function shortfallStrings(item: JobStockShortfallItem) {
+  const isFt = item.unit === "ft";
+  const short = isFt ? item.short.toFixed(2) + " ft" : Math.round(item.short) + " pcs";
+  const required = isFt ? item.required.toFixed(2) + " ft" : Math.round(item.required) + " pcs";
+  const have = isFt ? Math.max(0, item.available).toFixed(2) + " ft" : Math.round(Math.max(0, item.available)) + " pcs";
+  return { short, required, have };
+}
+
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -63,6 +71,9 @@ export default function JobDetailPage() {
   const [nameDraft, setNameDraft] = useState("");
   const [qtyDraft, setQtyDraft] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Stockout alert
+  const [shortfall, setShortfall] = useState<JobStockShortfallItem[]>([]);
 
   const loadJob = useCallback(async () => {
     setLoading(true);
@@ -86,6 +97,14 @@ export default function JobDetailPage() {
     } else {
       setLineItem(null);
       setMultipleLineItems(false);
+    }
+
+    try {
+      const sf = await getJobStockShortfall(id);
+      setShortfall(sf);
+    } catch (e) {
+      console.error("Stock shortfall check failed:", e);
+      setShortfall([]);
     }
 
     setLoading(false);
@@ -423,6 +442,32 @@ export default function JobDetailPage() {
           )}
         </div>
       </div>
+
+      {!isComplete && shortfall.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <h2 className="text-sm font-semibold text-amber-900">Not enough stock to complete this job</h2>
+          <p className="text-sm text-amber-800 mt-0.5">
+            These items are short on what&apos;s free in inventory. This updates as stock comes in and clears once everything is covered.
+          </p>
+          <ul className="mt-3 space-y-1.5">
+            {shortfall.map((item) => {
+              const s = shortfallStrings(item);
+              return (
+                <li
+                  key={item.itemType + ":" + item.id}
+                  className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-amber-100 last:border-0 pb-1.5 last:pb-0"
+                >
+                  <span className="text-sm font-medium text-amber-900">{item.label}</span>
+                  <span className="text-sm text-amber-800">
+                    short <span className="font-semibold font-mono">{s.short}</span>
+                    <span className="text-amber-600"> &middot; need {s.required} &middot; {s.have} available</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {isComplete && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">

@@ -1,5 +1,15 @@
 import { createClient } from "./supabase";
 
+const SHAPES_MAP: Record<string, string> = {
+  round_tube: "Round Tube",
+  square_tube: "Square Tube",
+  rectangle_tube: "Rectangle Tube",
+  channel: "Channel",
+  i_beam: "I-Beam",
+  angle: "Angle",
+  flat_bar: "Flat Bar",
+};
+
 export type AvailableRawMaterial = {
   id: string;
   shape: string;
@@ -133,6 +143,159 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
     };
   });
 }
+
+// ============================================
+// Job stock shortfall (stockout alert)
+// ============================================
+
+export type JobStockShortfallItem = {
+  itemType: "raw_material" | "purchased_part";
+  id: string;        // raw_material_id or purchased_part_id
+  label: string;     // human-readable description
+  unit: string;      // "ft" for materials, "ea" for parts
+  required: number;  // how much this job needs (from its pick list)
+  available: number; // stock on hand minus what OTHER jobs have claimed
+  short: number;     // how much you still need to acquire (required - available, min 0)
+};
+
+// Compare a job's pick list against what's actually free in inventory and return
+// only the items that are short. "Available" excludes this job's own allocations,
+// so the number stays correct whether the job is still 'ordered' or already 'ready'.
+export async function getJobStockShortfall(jobId: string): Promise<JobStockShortfallItem[]> {
+  const supabase = createClient();
+
+  const [pickRes, rmInvRes, ppInvRes, allocRes] = await Promise.all([
+    supabase
+      .from("job_pick_list_items")
+      .select("item_type, raw_material_id, purchased_part_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number)")
+      .eq("job_id", jobId),
+    supabase
+      .from("raw_material_inventory")
+      .select("raw_material_id, stick_length_feet, quantity_sticks"),
+    supabase
+      .from("purchased_parts_inventory")
+      .select("purchased_part_id, quantity"),
+    // All allocations EXCEPT this job's own, so we don't count the job against itself
+    supabase
+      .from("inventory_allocations")
+      .select("item_type, raw_material_id, purchased_part_id, allocated_quantity")
+      .neq("job_id", jobId),
+  ]);
+
+  type PickRow = {
+    item_type: string;
+    raw_material_id: string | null;
+    purchased_part_id: string | null;
+    planned_quantity: number;
+    unit: string;
+    raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
+    purchased_parts: { name: string; part_number: string | null } | null;
+  };
+  type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number };
+  type PpInvRow = { purchased_part_id: string; quantity: number };
+  type AllocRow = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; allocated_quantity: number };
+
+  const pick = (pickRes.data || []) as unknown as PickRow[];
+  const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
+  const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
+  const allocs = (allocRes.data || []) as unknown as AllocRow[];
+
+  // Total stock on hand per material / part
+  const rmStock = new Map<string, number>();
+  for (const b of rmInv) {
+    rmStock.set(
+      b.raw_material_id,
+      (rmStock.get(b.raw_material_id) || 0) + Number(b.stick_length_feet) * Number(b.quantity_sticks)
+    );
+  }
+  const ppStock = new Map<string, number>();
+  for (const b of ppInv) {
+    ppStock.set(b.purchased_part_id, (ppStock.get(b.purchased_part_id) || 0) + Number(b.quantity));
+  }
+
+  // What OTHER jobs have already claimed
+  const rmAlloc = new Map<string, number>();
+  const ppAlloc = new Map<string, number>();
+  for (const a of allocs) {
+    if (a.item_type === "raw_material" && a.raw_material_id) {
+      rmAlloc.set(a.raw_material_id, (rmAlloc.get(a.raw_material_id) || 0) + Number(a.allocated_quantity));
+    } else if (a.item_type === "purchased_part" && a.purchased_part_id) {
+      ppAlloc.set(a.purchased_part_id, (ppAlloc.get(a.purchased_part_id) || 0) + Number(a.allocated_quantity));
+    }
+  }
+
+  function describeMaterial(m: { shape: string; size: string; wall_thickness: string | null; grade: string }) {
+    const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
+    return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
+  }
+
+  // Aggregate this job's requirements by item (pick list is normally one row per item,
+  // but we sum defensively in case of duplicates)
+  const reqMap = new Map<string, JobStockShortfallItem>();
+  for (const row of pick) {
+    const planned = Number(row.planned_quantity);
+    if (!(planned > 0)) continue;
+
+    if (row.item_type === "raw_material" && row.raw_material_id) {
+      const key = "rm:" + row.raw_material_id;
+      const existing = reqMap.get(key);
+      if (existing) {
+        existing.required += planned;
+      } else {
+        reqMap.set(key, {
+          itemType: "raw_material",
+          id: row.raw_material_id,
+          label: row.raw_materials ? describeMaterial(row.raw_materials) : "Material",
+          unit: row.unit || "ft",
+          required: planned,
+          available: 0,
+          short: 0,
+        });
+      }
+    } else if (row.item_type === "purchased_part" && row.purchased_part_id) {
+      const key = "pp:" + row.purchased_part_id;
+      const existing = reqMap.get(key);
+      if (existing) {
+        existing.required += planned;
+      } else {
+        reqMap.set(key, {
+          itemType: "purchased_part",
+          id: row.purchased_part_id,
+          label: row.purchased_parts
+            ? row.purchased_parts.name + (row.purchased_parts.part_number ? " (" + row.purchased_parts.part_number + ")" : "")
+            : "Part",
+          unit: row.unit || "ea",
+          required: planned,
+          available: 0,
+          short: 0,
+        });
+      }
+    }
+  }
+
+  const result: JobStockShortfallItem[] = [];
+  for (const item of reqMap.values()) {
+    const stock = item.itemType === "raw_material" ? (rmStock.get(item.id) || 0) : (ppStock.get(item.id) || 0);
+    const claimedByOthers = item.itemType === "raw_material" ? (rmAlloc.get(item.id) || 0) : (ppAlloc.get(item.id) || 0);
+    const available = stock - claimedByOthers;
+    const short = item.required - available;
+
+    item.available = available;
+    item.short = short;
+
+    // Ignore floating-point dust (a thousandth of a foot is meaningless)
+    if (short > 0.001) result.push(item);
+  }
+
+  // Materials first, then parts, each alphabetical by label
+  result.sort((a, b) => {
+    if (a.itemType !== b.itemType) return a.itemType === "raw_material" ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  return result;
+}
+
 // ============================================
 // Allocation management
 // ============================================
