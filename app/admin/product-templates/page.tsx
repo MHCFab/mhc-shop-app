@@ -48,6 +48,8 @@ export default function ProductTemplatesPage() {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<"all" | "products" | "sub_assemblies">("all");
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function loadCompanyId() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -183,6 +185,141 @@ export default function ProductTemplatesPage() {
     loadTemplates();
   }
 
+  // Duplicate a template: copy the template row plus its full recipe
+  // (BOM materials, purchased parts, sub-assembly links, and tasks).
+  async function handleDuplicate(t: ProductTemplate) {
+    if (!companyId) {
+      alert("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    setNotice(null);
+    setDuplicatingId(t.id);
+    try {
+      // 1) Read the full source template row so every field carries over,
+      //    including ones not shown on this page (price, SOPs, etc.)
+      const { data: srcTpl, error: readErr } = await supabase
+        .from("product_templates")
+        .select("*")
+        .eq("id", t.id)
+        .single();
+      if (readErr || !srcTpl) throw new Error(readErr?.message || "Couldn't read the template to copy.");
+
+      // 2) Read all child rows (BOM materials, parts, sub-assembly links, tasks)
+      const [matsRes, partsRes, subsRes, tasksRes] = await Promise.all([
+        supabase
+          .from("product_template_materials")
+          .select("raw_material_id, feet_per_unit, notes, sort_order")
+          .eq("product_template_id", t.id),
+        supabase
+          .from("product_template_parts")
+          .select("purchased_part_id, quantity_per_unit, notes, sort_order")
+          .eq("product_template_id", t.id),
+        supabase
+          .from("product_template_sub_assemblies")
+          .select("child_template_id, quantity_per_unit, notes, sort_order")
+          .eq("parent_template_id", t.id),
+        supabase
+          .from("product_template_tasks")
+          .select("name, description, estimated_minutes_per_unit, sort_order")
+          .eq("product_template_id", t.id),
+      ]);
+
+      // 3) Insert the copy: same fields, renamed, with a cleared product number
+      const newTemplate = { ...(srcTpl as Record<string, unknown>) };
+      delete newTemplate.id;
+      delete newTemplate.created_at;
+      delete newTemplate.updated_at;
+      newTemplate.company_id = companyId;
+      newTemplate.name = t.name + " (Copy)";
+      newTemplate.product_number = null;
+
+      const { data: inserted, error: insErr } = await supabase
+        .from("product_templates")
+        .insert(newTemplate)
+        .select("id")
+        .single();
+      if (insErr || !inserted) throw new Error(insErr?.message || "Couldn't create the copy.");
+      const newId = (inserted as { id: string }).id;
+
+      // 4) Copy each child table, pointing the new rows at the copy
+      type MatSrc = { raw_material_id: string; feet_per_unit: number; notes: string | null; sort_order: number };
+      type PartSrc = { purchased_part_id: string; quantity_per_unit: number; notes: string | null; sort_order: number };
+      type SubSrc = { child_template_id: string; quantity_per_unit: number; notes: string | null; sort_order: number };
+      type TaskSrc = { name: string; description: string | null; estimated_minutes_per_unit: number; sort_order: number };
+
+      const matRows = ((matsRes.data || []) as unknown as MatSrc[]).map((r) => ({
+        company_id: companyId,
+        product_template_id: newId,
+        raw_material_id: r.raw_material_id,
+        feet_per_unit: r.feet_per_unit,
+        notes: r.notes,
+        sort_order: r.sort_order,
+      }));
+      const partRows = ((partsRes.data || []) as unknown as PartSrc[]).map((r) => ({
+        company_id: companyId,
+        product_template_id: newId,
+        purchased_part_id: r.purchased_part_id,
+        quantity_per_unit: r.quantity_per_unit,
+        notes: r.notes,
+        sort_order: r.sort_order,
+      }));
+      const subRows = ((subsRes.data || []) as unknown as SubSrc[]).map((r) => ({
+        company_id: companyId,
+        parent_template_id: newId,
+        child_template_id: r.child_template_id,
+        quantity_per_unit: r.quantity_per_unit,
+        notes: r.notes,
+        sort_order: r.sort_order,
+      }));
+      const taskRows = ((tasksRes.data || []) as unknown as TaskSrc[]).map((r) => ({
+        company_id: companyId,
+        product_template_id: newId,
+        name: r.name,
+        description: r.description,
+        estimated_minutes_per_unit: r.estimated_minutes_per_unit,
+        sort_order: r.sort_order,
+      }));
+
+      const childErrors: string[] = [];
+      if (matRows.length) {
+        const { error } = await supabase.from("product_template_materials").insert(matRows);
+        if (error) childErrors.push(error.message);
+      }
+      if (partRows.length) {
+        const { error } = await supabase.from("product_template_parts").insert(partRows);
+        if (error) childErrors.push(error.message);
+      }
+      if (subRows.length) {
+        const { error } = await supabase.from("product_template_sub_assemblies").insert(subRows);
+        if (error) childErrors.push(error.message);
+      }
+      if (taskRows.length) {
+        const { error } = await supabase.from("product_template_tasks").insert(taskRows);
+        if (error) childErrors.push(error.message);
+      }
+
+      // 5) If any child copy failed, roll the whole thing back so you're
+      //    never left with a half-built copy on the live system.
+      if (childErrors.length > 0) {
+        await supabase.from("product_template_materials").delete().eq("product_template_id", newId);
+        await supabase.from("product_template_parts").delete().eq("product_template_id", newId);
+        await supabase.from("product_template_sub_assemblies").delete().eq("parent_template_id", newId);
+        await supabase.from("product_template_tasks").delete().eq("product_template_id", newId);
+        await supabase.from("product_templates").delete().eq("id", newId);
+        throw new Error(
+          "Couldn't copy the full recipe (" + childErrors.join("; ") + "). The partial copy was removed, so nothing changed."
+        );
+      }
+
+      setNotice('Created "' + t.name + ' (Copy)" with its full recipe. Use Edit to rename it, or Open to adjust the copy.');
+      await loadTemplates();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to duplicate this template.");
+    } finally {
+      setDuplicatingId(null);
+    }
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
@@ -196,6 +333,13 @@ export default function ProductTemplatesPage() {
           Add product template
         </button>
       </div>
+
+      {notice && (
+        <div className="mb-4 text-sm text-green-800 bg-green-50 border border-green-200 rounded-md p-3 flex items-start justify-between gap-3">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-green-700 hover:text-green-900 font-medium shrink-0">Dismiss</button>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <select
@@ -259,6 +403,13 @@ export default function ProductTemplatesPage() {
                 <div className="flex gap-3">
                   <button onClick={() => openEdit(t)} className="text-gray-600 hover:text-gray-900 font-medium">
                     Edit
+                  </button>
+                  <button
+                    onClick={() => handleDuplicate(t)}
+                    disabled={duplicatingId === t.id}
+                    className="text-gray-600 hover:text-gray-900 font-medium disabled:opacity-50"
+                  >
+                    {duplicatingId === t.id ? "Copying..." : "Duplicate"}
                   </button>
                   <button onClick={() => handleDelete(t)} className="text-red-600 hover:text-red-800 font-medium">
                     Delete
