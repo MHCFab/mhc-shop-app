@@ -1,7 +1,20 @@
 "use client";
-
+// Phase 2: archive recipe view + reproduce
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../lib/supabase";
+import ReproduceModal from "./ReproduceModal";
+
+type RecipeHeader = {
+  id: string;
+  completed_job_archive_id: string | null;
+  job_number: string;
+  line_item_name: string | null;
+  customer_name: string | null;
+  customer_po: string | null;
+  quantity: number;
+  unit_price: number | null;
+  job_notes: string | null;
+};
 
 type ArchiveRow = {
   id: string;
@@ -32,14 +45,26 @@ export default function ArchivePage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // Saved custom-job recipes, keyed by the cost-summary row they belong to.
+  const [recipesByArchiveId, setRecipesByArchiveId] = useState<Record<string, RecipeHeader>>({});
+  const [reproducing, setReproducing] = useState<RecipeHeader | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("completed_jobs_archive")
-      .select("*")
-      .order("invoiced_on", { ascending: false });
-    setRows((data || []) as unknown as ArchiveRow[]);
+    const [archiveRes, recipeRes] = await Promise.all([
+      supabase.from("completed_jobs_archive").select("*").order("invoiced_on", { ascending: false }),
+      supabase
+        .from("archived_job_recipes")
+        .select("id, completed_job_archive_id, job_number, line_item_name, customer_name, customer_po, quantity, unit_price, job_notes"),
+    ]);
+    setRows((archiveRes.data || []) as unknown as ArchiveRow[]);
+
+    const recipes = (recipeRes.data || []) as unknown as RecipeHeader[];
+    const map: Record<string, RecipeHeader> = {};
+    for (const r of recipes) {
+      if (r.completed_job_archive_id) map[r.completed_job_archive_id] = r;
+    }
+    setRecipesByArchiveId(map);
     setLoading(false);
   }, [supabase]);
 
@@ -92,7 +117,14 @@ export default function ArchivePage() {
               {filtered.map((r) => (
                 <>
                   <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{r.job_number}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      {r.job_number}
+                      {recipesByArchiveId[r.id] && (
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 align-middle">
+                          Recipe saved
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-900">{r.customer_name || "-"}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{new Date(r.invoiced_on).toLocaleDateString()}</td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{money(r.total_actual)}</td>
@@ -128,6 +160,19 @@ export default function ArchivePage() {
                             <div className="font-mono text-gray-900 mt-1">{money(r.scrap_cost)}</div>
                           </div>
                         </div>
+                        {recipesByArchiveId[r.id] && (
+                          <div className="mt-4 pt-3 border-t border-gray-200 flex items-center justify-between flex-wrap gap-2">
+                            <p className="text-sm text-gray-600">
+                              This custom job&apos;s recipe (materials, parts, and tasks) was saved. You can rebuild it as a new job.
+                            </p>
+                            <button
+                              onClick={() => setReproducing(recipesByArchiveId[r.id])}
+                              className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors whitespace-nowrap"
+                            >
+                              Reproduce as new job
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -136,6 +181,10 @@ export default function ArchivePage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {reproducing && (
+        <ReproduceModal recipe={reproducing} onClose={() => setReproducing(null)} />
       )}
     </div>
   );
