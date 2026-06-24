@@ -36,6 +36,20 @@ type PickListItem = {
   } | null;
 };
 
+type RawMaterialOption = {
+  id: string;
+  shape: string;
+  size: string;
+  wall_thickness: string | null;
+  grade: string;
+};
+
+type PartOption = {
+  id: string;
+  name: string;
+  part_number: string | null;
+};
+
 function describePickItem(item: PickListItem) {
   if (item.item_type === "raw_material" && item.raw_materials) {
     const m = item.raw_materials;
@@ -47,6 +61,11 @@ function describePickItem(item: PickListItem) {
     return p.name + (p.part_number ? " (" + p.part_number + ")" : "");
   }
   return "Unknown item";
+}
+
+function describeMaterialOption(m: RawMaterialOption) {
+  const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
+  return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
 }
 
 function itemCostPerUnit(item: PickListItem) {
@@ -63,6 +82,16 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
+
+  // Is this a custom (no-template) job? If so, hide Regenerate and allow manual add.
+  const [isCustomJob, setIsCustomJob] = useState(false);
+
+  // Add-item form
+  const [adding, setAdding] = useState(false);
+  const [allMaterials, setAllMaterials] = useState<RawMaterialOption[]>([]);
+  const [allParts, setAllParts] = useState<PartOption[]>([]);
+  const [addForm, setAddForm] = useState({ item_type: "raw_material" as "raw_material" | "purchased_part", item_id: "", planned_quantity: "", notes: "" });
+  const [savingAdd, setSavingAdd] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -84,10 +113,32 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
     setLoading(false);
   }, [supabase, jobId]);
 
+  // Determine whether any line item on this job has no template (= custom job)
+  const loadIsCustom = useCallback(async () => {
+    const { data } = await supabase
+      .from("job_line_items")
+      .select("product_template_id")
+      .eq("job_id", jobId);
+    const rows = (data || []) as unknown as { product_template_id: string | null }[];
+    setIsCustomJob(rows.length > 0 && rows.some((r) => r.product_template_id === null));
+  }, [supabase, jobId]);
+
+  // Load inventory options for the add-item dropdowns
+  const loadOptions = useCallback(async () => {
+    const [matsRes, partsRes] = await Promise.all([
+      supabase.from("raw_materials").select("id, shape, size, wall_thickness, grade").eq("is_active", true).order("shape").order("size"),
+      supabase.from("purchased_parts").select("id, name, part_number").eq("is_active", true).order("name"),
+    ]);
+    setAllMaterials((matsRes.data || []) as unknown as RawMaterialOption[]);
+    setAllParts((partsRes.data || []) as unknown as PartOption[]);
+  }, [supabase]);
+
   useEffect(() => {
     loadCompanyId();
     loadItems();
-  }, [loadCompanyId, loadItems]);
+    loadIsCustom();
+    loadOptions();
+  }, [loadCompanyId, loadItems, loadIsCustom, loadOptions]);
 
   function openEdit(item: PickListItem) {
     setEditingId(item.id);
@@ -135,6 +186,49 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
     loadItems();
   }
 
+  function openAdd() {
+    setAddForm({ item_type: "raw_material", item_id: "", planned_quantity: "", notes: "" });
+    setAdding(true);
+  }
+
+  async function saveAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!companyId) {
+      alert("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    if (!addForm.item_id) {
+      alert(addForm.item_type === "raw_material" ? "Pick a material to add." : "Pick a part to add.");
+      return;
+    }
+    const qty = parseFloat(addForm.planned_quantity);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Enter a planned quantity greater than 0.");
+      return;
+    }
+
+    setSavingAdd(true);
+    const isRaw = addForm.item_type === "raw_material";
+    const { error } = await supabase.from("job_pick_list_items").insert({
+      company_id: companyId,
+      job_id: jobId,
+      item_type: addForm.item_type,
+      raw_material_id: isRaw ? addForm.item_id : null,
+      purchased_part_id: isRaw ? null : addForm.item_id,
+      planned_quantity: qty,
+      actual_quantity: 0,
+      unit: isRaw ? "ft" : "ea",
+      notes: addForm.notes.trim() || null,
+    });
+    setSavingAdd(false);
+    if (error) {
+      alert("Failed to add item: " + error.message);
+      return;
+    }
+    setAdding(false);
+    loadItems();
+  }
+
   async function regeneratePickList() {
     if (!companyId) {
       alert("Could not determine your company. Try refreshing the page.");
@@ -173,7 +267,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
 
     // Recursively expand all template ids (top-level + sub-assemblies)
     const allTemplateIds = new Set<string>();
-    const queue = [...new Set(lineItems.map((li) => li.product_template_id))];
+    const queue = [...new Set(lineItems.map((li) => li.product_template_id).filter((id): id is string => id !== null))];
     while (queue.length > 0) {
       const tid = queue.shift()!;
       if (allTemplateIds.has(tid)) continue;
@@ -239,7 +333,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       }
     }
     for (const li of lineItems) {
-      expandTemplate(li.product_template_id, Number(li.quantity));
+      if (li.product_template_id) expandTemplate(li.product_template_id, Number(li.quantity));
     }
 
     // Aggregate materials and parts
@@ -307,9 +401,11 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   return (
     <div className="space-y-6">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
-      
+
       <p className="text-sm text-gray-600">
-        Planned comes from the product templates. For raw materials, Actual reflects net consumed from the cutting nest (sticks pulled minus drops saved).
+        {isCustomJob
+          ? "Add the materials and parts this custom job needs. For raw materials, Actual reflects net consumed from the cutting nest (sticks pulled minus drops saved)."
+          : "Planned comes from the product templates. For raw materials, Actual reflects net consumed from the cutting nest (sticks pulled minus drops saved)."}
       </p>
 
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -324,16 +420,90 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
           </div>
         </div>
         {!readOnly && (
-          <button
-            onClick={regeneratePickList}
-            disabled={regenerating}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            title="Rebuild the pick list from the current product templates (includes sub-assemblies)"
-          >
-            {regenerating ? "Regenerating..." : "Regenerate pick list"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={openAdd}
+              className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            >
+              + Add item
+            </button>
+            {!isCustomJob && (
+              <button
+                onClick={regeneratePickList}
+                disabled={regenerating}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                title="Rebuild the pick list from the current product templates (includes sub-assemblies)"
+              >
+                {regenerating ? "Regenerating..." : "Regenerate pick list"}
+              </button>
+            )}
+          </div>
         )}
       </div>
+
+      {adding && !readOnly && (
+        <form onSubmit={saveAdd} className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+          <h4 className="text-sm font-semibold text-gray-900">Add an item to the pick list</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <select
+                value={addForm.item_type}
+                onChange={(e) => setAddForm({ ...addForm, item_type: e.target.value as "raw_material" | "purchased_part", item_id: "" })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="raw_material">Raw material</option>
+                <option value="purchased_part">Purchased part</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {addForm.item_type === "raw_material" ? "Material" : "Part"}
+              </label>
+              <select
+                value={addForm.item_id}
+                onChange={(e) => setAddForm({ ...addForm, item_id: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Select --</option>
+                {addForm.item_type === "raw_material"
+                  ? allMaterials.map((m) => <option key={m.id} value={m.id}>{describeMaterialOption(m)}</option>)
+                  : allParts.map((p) => <option key={p.id} value={p.id}>{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Planned quantity {addForm.item_type === "raw_material" ? "(ft)" : "(ea)"}
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={addForm.planned_quantity}
+                onChange={(e) => setAddForm({ ...addForm, planned_quantity: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+              <input
+                type="text"
+                value={addForm.notes}
+                onChange={(e) => setAddForm({ ...addForm, notes: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setAdding(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={savingAdd} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+              {savingAdd ? "Adding..." : "Add to pick list"}
+            </button>
+          </div>
+        </form>
+      )}
 
       <PickListSection title="Raw Materials" items={rawMaterialItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
       <PickListSection title="Purchased Parts" items={partItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />

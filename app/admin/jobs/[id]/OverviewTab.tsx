@@ -9,6 +9,8 @@ type LineItem = {
   quantity: number;
   notes: string | null;
   sort_order: number;
+  name: string | null;
+  unit_price: number | null;
   product_templates: {
     id: string;
     name: string;
@@ -89,6 +91,7 @@ export default function OverviewTab({ jobId }: { jobId: string }) {
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-16">#</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Product</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Quantity</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Price / unit</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
               </tr>
             </thead>
@@ -107,11 +110,19 @@ export default function OverviewTab({ jobId }: { jobId: string }) {
                           <span className="text-gray-500 font-normal"> ({li.product_templates.product_number})</span>
                         )}
                       </Link>
+                    ) : li.name ? (
+                      <span className="text-gray-900 font-medium">
+                        {li.name}
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">Custom</span>
+                      </span>
                     ) : (
-                      <span className="text-gray-500">Template unavailable</span>
+                      <span className="text-gray-500">Custom item</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{li.quantity}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">
+                    {li.unit_price != null ? "$" + Number(li.unit_price).toFixed(2) : "-"}
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-700">{li.notes || "-"}</td>
                 </tr>
               ))}

@@ -21,11 +21,14 @@ type JobTask = {
   status: TaskStatus;
   sort_order: number;
   completed_at: string | null;
+  job_line_item_id: string | null;
   job_line_items: {
     id: string;
     product_templates: { name: string; product_number: string | null } | null;
   } | null;
 };
+
+type CustomLineItem = { id: string; quantity: number; name: string | null };
 
 function statusBadge(status: TaskStatus) {
   const s = STATUSES.find((x) => x.value === status);
@@ -41,6 +44,16 @@ export default function TasksTab({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
+
+  // Custom job support
+  const [isCustomJob, setIsCustomJob] = useState(false);
+  const [customLineItem, setCustomLineItem] = useState<CustomLineItem | null>(null);
+
+  // Manual task form (custom jobs only)
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", description: "", minutes_per_unit: "" });
+  const [savingTask, setSavingTask] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -62,10 +75,116 @@ export default function TasksTab({ jobId }: { jobId: string }) {
     setLoading(false);
   }, [supabase, jobId]);
 
+  // Detect a custom job and grab its single line item (for attaching manual tasks + qty)
+  const loadLineItems = useCallback(async () => {
+    const { data } = await supabase
+      .from("job_line_items")
+      .select("id, quantity, name, product_template_id")
+      .eq("job_id", jobId)
+      .order("sort_order");
+    const rows = (data || []) as unknown as (CustomLineItem & { product_template_id: string | null })[];
+    const custom = rows.length > 0 && rows.some((r) => r.product_template_id === null);
+    setIsCustomJob(custom);
+    // For a custom job, tasks attach to the first templateless line item
+    const target = rows.find((r) => r.product_template_id === null) || null;
+    setCustomLineItem(target ? { id: target.id, quantity: Number(target.quantity), name: target.name } : null);
+  }, [supabase, jobId]);
+
   useEffect(() => {
     loadCompanyId();
     loadTasks();
-  }, [loadCompanyId, loadTasks]);
+    loadLineItems();
+  }, [loadCompanyId, loadTasks, loadLineItems]);
+
+  function openAdd() {
+    setForm({ name: "", description: "", minutes_per_unit: "" });
+    setEditingId(null);
+    setShowForm(true);
+  }
+
+  function openEdit(t: JobTask) {
+    const qty = customLineItem?.quantity || 1;
+    const perUnit = qty > 0 ? Number(t.estimated_minutes_total) / qty : Number(t.estimated_minutes_total);
+    setForm({
+      name: t.name,
+      description: t.description || "",
+      minutes_per_unit: String(Math.round(perUnit * 1000) / 1000),
+    });
+    setEditingId(t.id);
+    setShowForm(true);
+  }
+
+  async function saveTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!companyId) {
+      alert("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    if (!customLineItem) {
+      alert("This job has no custom line item to attach the task to.");
+      return;
+    }
+    if (!form.name.trim()) {
+      alert("Task name is required.");
+      return;
+    }
+    const perUnit = parseFloat(form.minutes_per_unit);
+    if (isNaN(perUnit) || perUnit < 0) {
+      alert("Estimated minutes per unit must be 0 or more.");
+      return;
+    }
+
+    const qty = customLineItem.quantity || 1;
+    const batchTotal = perUnit * qty;
+
+    setSavingTask(true);
+    if (editingId) {
+      const { error } = await supabase
+        .from("job_tasks")
+        .update({
+          name: form.name.trim(),
+          description: form.description.trim() || null,
+          estimated_minutes_total: batchTotal,
+        })
+        .eq("id", editingId);
+      setSavingTask(false);
+      if (error) {
+        alert("Failed to save task: " + error.message);
+        return;
+      }
+    } else {
+      const nextSort = tasks.length;
+      const { error } = await supabase.from("job_tasks").insert({
+        company_id: companyId,
+        job_id: jobId,
+        job_line_item_id: customLineItem.id,
+        source_task_id: null,
+        name: form.name.trim(),
+        description: form.description.trim() || null,
+        batch_quantity: qty,
+        estimated_minutes_total: batchTotal,
+        status: "not_started",
+        sort_order: nextSort,
+      });
+      setSavingTask(false);
+      if (error) {
+        alert("Failed to add task: " + error.message);
+        return;
+      }
+    }
+    setShowForm(false);
+    loadTasks();
+  }
+
+  async function deleteTask(t: JobTask) {
+    if (!confirm("Delete task " + t.name + "? Any time logged against it will also be removed.")) return;
+    const { error } = await supabase.from("job_tasks").delete().eq("id", t.id);
+    if (error) {
+      alert("Failed to delete task: " + error.message);
+      return;
+    }
+    loadTasks();
+  }
 
   async function regenerateTasks() {
     if (!companyId) {
@@ -102,7 +221,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
 
     // Recursively expand template ids (top-level + sub-assemblies)
     const allTemplateIds = new Set<string>();
-    const queue = [...new Set(lineItems.map((li) => li.product_template_id))];
+    const queue = [...new Set(lineItems.map((li) => li.product_template_id).filter((id): id is string => id !== null))];
     while (queue.length > 0) {
       const tid = queue.shift()!;
       if (allTemplateIds.has(tid)) continue;
@@ -180,6 +299,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
     }> = [];
 
     for (const li of lineItems) {
+      if (!li.product_template_id) continue;
       const perLineMap = new Map<string, number>();
       expandForLine(li.product_template_id, Number(li.quantity), perLineMap);
 
@@ -230,10 +350,10 @@ export default function TasksTab({ jobId }: { jobId: string }) {
 
   // Group tasks by line item
   const groupedTasks = tasks.reduce((groups, task) => {
-    const lineItemId = task.job_line_items?.id || "unknown";
+    const lineItemId = task.job_line_items?.id || task.job_line_item_id || "unknown";
     if (!groups[lineItemId]) {
       groups[lineItemId] = {
-        productName: task.job_line_items?.product_templates?.name || "Unknown product",
+        productName: task.job_line_items?.product_templates?.name || (isCustomJob ? (customLineItem?.name || "Custom job") : "Unknown product"),
         productNumber: task.job_line_items?.product_templates?.product_number || null,
         tasks: [],
       };
@@ -267,19 +387,78 @@ export default function TasksTab({ jobId }: { jobId: string }) {
             <div className="text-xs text-gray-500 mt-1">{(totalEstMinutes / 60).toFixed(2)} hours</div>
           </div>
         </div>
-        <button
-          onClick={regenerateTasks}
-          disabled={regenerating}
-          className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
-          title="Rebuild the task list from the current product templates (includes sub-assembly tasks)"
-        >
-          {regenerating ? "Regenerating..." : "Regenerate tasks"}
-        </button>
+        {isCustomJob ? (
+          <button
+            onClick={openAdd}
+            className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            + Add task
+          </button>
+        ) : (
+          <button
+            onClick={regenerateTasks}
+            disabled={regenerating}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            title="Rebuild the task list from the current product templates (includes sub-assembly tasks)"
+          >
+            {regenerating ? "Regenerating..." : "Regenerate tasks"}
+          </button>
+        )}
       </div>
+
+      {showForm && isCustomJob && (
+        <form onSubmit={saveTask} className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+          <h4 className="text-sm font-semibold text-gray-900">{editingId ? "Edit task" : "Add task"}</h4>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Task name <span className="text-red-600">*</span></label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Cut and fit handrail"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <textarea
+              rows={2}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Estimated minutes per unit <span className="text-red-600">*</span></label>
+            <input
+              type="number"
+              step="0.001"
+              min="0"
+              value={form.minutes_per_unit}
+              onChange={(e) => setForm({ ...form, minutes_per_unit: e.target.value })}
+              placeholder="e.g. 30"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Multiplied by the job quantity ({customLineItem?.quantity || 1}) for the batch total. Actual time is tracked when your crew clocks in on the floor.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setShowForm(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
+            <button type="submit" disabled={savingTask} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+              {savingTask ? "Saving..." : "Save task"}
+            </button>
+          </div>
+        </form>
+      )}
 
       {tasks.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
-          <p className="text-gray-600">No tasks on this job yet. Tasks are auto-generated from each line item&apos;s product template.</p>
+          <p className="text-gray-600">
+            {isCustomJob
+              ? "No tasks yet. Click \u201c+ Add task\u201d to build this custom job\u2019s task list so your crew can clock in and track labor."
+              : "No tasks on this job yet. Tasks are auto-generated from each line item\u2019s product template."}
+          </p>
         </div>
       ) : (
         Object.entries(groupedTasks).map(([lineItemId, group]) => (
@@ -298,6 +477,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
                   <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Batch qty</th>
                   <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Est. min total</th>
                   <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
+                  {isCustomJob && <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -311,6 +491,12 @@ export default function TasksTab({ jobId }: { jobId: string }) {
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{t.batch_quantity}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(t.estimated_minutes_total).toFixed(2)}</td>
                     <td className="px-4 py-3 text-sm">{statusBadge(t.status)}</td>
+                    {isCustomJob && (
+                      <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                        <button onClick={() => openEdit(t)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                        <button onClick={() => deleteTask(t)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

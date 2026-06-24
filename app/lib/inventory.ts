@@ -557,7 +557,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   }
 
   const [liRes, pickRes, timeRes, varRes, tasksRes] = await Promise.all([
-    supabase.from("job_line_items").select("quantity, product_template_id, product_templates(retail_price_per_unit)").eq("job_id", jobId),
+    supabase.from("job_line_items").select("quantity, product_template_id, unit_price, product_templates(retail_price_per_unit)").eq("job_id", jobId),
     supabase
       .from("job_pick_list_items")
       .select("item_type, planned_quantity, actual_quantity, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
@@ -570,7 +570,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     supabase.from("job_tasks").select("estimated_minutes_total").eq("job_id", jobId),
   ]);
 
-  type LiRow = { quantity: number; product_template_id: string; product_templates: { retail_price_per_unit: number } | null };
+  type LiRow = { quantity: number; product_template_id: string | null; unit_price: number | null; product_templates: { retail_price_per_unit: number } | null };
   type PickRow = {
     item_type: string;
     planned_quantity: number;
@@ -648,7 +648,13 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   const suggestedRetailPerUnit = units > 0 ? suggestedRetailTotal / units : 0;
 
   // Your retail (from product template, summed across line items)
-  const retailTotal = lineItems.reduce((s, li) => s + Number(li.product_templates?.retail_price_per_unit || 0) * Number(li.quantity), 0);
+  // Retail per unit: template price if the line has a template, otherwise the custom job's unit_price
+  const retailTotal = lineItems.reduce((s, li) => {
+    const perUnit = li.product_templates?.retail_price_per_unit != null
+      ? Number(li.product_templates.retail_price_per_unit)
+      : Number(li.unit_price || 0);
+    return s + perUnit * Number(li.quantity);
+  }, 0);
   const retailPerUnit = units > 0 ? retailTotal / units : 0;
 
   // Net profit based on YOUR retail

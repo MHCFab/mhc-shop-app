@@ -40,6 +40,11 @@ export default function NewJobPage() {
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
 
+  // Custom one-off job
+  const [isCustom, setIsCustom] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [unitPrice, setUnitPrice] = useState("");
+
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -95,6 +100,18 @@ export default function NewJobPage() {
     setProductId("");
     setProductSearch("");
     setShowProductList(false);
+  }
+
+  function toggleCustom(checked: boolean) {
+    setIsCustom(checked);
+    // Clear the side that no longer applies
+    setProductId("");
+    setProductSearch("");
+    setShowProductList(false);
+    if (!checked) {
+      setCustomName("");
+      setUnitPrice("");
+    }
   }
 
   function describeMaterial(m: {
@@ -311,9 +328,16 @@ export default function NewJobPage() {
       setError("Please select a customer.");
       return;
     }
-    if (!productId) {
-      setError("Please select a product.");
-      return;
+    if (isCustom) {
+      if (!customName.trim()) {
+        setError("Please describe what you're building.");
+        return;
+      }
+    } else {
+      if (!productId) {
+        setError("Please select a product.");
+        return;
+      }
     }
     if (parseInt(quantity) <= 0 || isNaN(parseInt(quantity))) {
       setError("Quantity must be at least 1.");
@@ -322,6 +346,17 @@ export default function NewJobPage() {
     if (!jobNumber.trim()) {
       setError("Job number is required.");
       return;
+    }
+
+    // Validate the optional per-unit price on a custom job
+    let unitPriceValue: number | null = null;
+    if (isCustom && unitPrice.trim()) {
+      const up = parseFloat(unitPrice);
+      if (isNaN(up) || up < 0) {
+        setError("Price per unit must be 0 or more.");
+        return;
+      }
+      unitPriceValue = up;
     }
 
     setSaving(true);
@@ -366,10 +401,12 @@ export default function NewJobPage() {
       .insert({
         company_id: companyId,
         job_id: job.id,
-        product_template_id: productId,
+        product_template_id: isCustom ? null : productId,
         quantity: parseInt(quantity),
         notes: null,
         sort_order: 0,
+        name: isCustom ? customName.trim() : null,
+        unit_price: isCustom ? unitPriceValue : null,
       })
       .select();
 
@@ -379,19 +416,23 @@ export default function NewJobPage() {
       return;
     }
 
-    const itemsForGeneration = [{
-      lineItemId: insertedLineItems[0].id,
-      templateId: productId,
-      quantity: parseInt(quantity),
-    }];
+    // Templated jobs auto-generate their pick list and tasks.
+    // Custom jobs come in blank — you build the pick list and tasks by hand.
+    if (!isCustom) {
+      const itemsForGeneration = [{
+        lineItemId: insertedLineItems[0].id,
+        templateId: productId,
+        quantity: parseInt(quantity),
+      }];
 
-    try {
-      await generatePickListAndTasks(job.id, itemsForGeneration);
-    } catch (e) {
-      console.error("Pick list/task generation failed:", e);
-      setError("Job created, but failed to generate pick list or tasks. You can regenerate them from the job page.");
-      router.push("/admin/jobs/" + job.id);
-      return;
+      try {
+        await generatePickListAndTasks(job.id, itemsForGeneration);
+      } catch (e) {
+        console.error("Pick list/task generation failed:", e);
+        setError("Job created, but failed to generate pick list or tasks. You can regenerate them from the job page.");
+        router.push("/admin/jobs/" + job.id);
+        return;
+      }
     }
 
     setSaving(false);
@@ -441,50 +482,94 @@ export default function NewJobPage() {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Product <span className="text-red-600">*</span>
-            </label>
-            {!customerId ? (
-              <p className="text-sm text-gray-500 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md">Select a customer first to see their products.</p>
-            ) : customerProducts.length === 0 ? (
-              <p className="text-sm text-amber-700 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md">
-                This customer has no products yet. <Link href="/admin/product-templates" className="underline font-medium">Add one in Product Templates</Link> and assign it to this customer.
-              </p>
-            ) : (
-              <div className="relative">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={isCustom}
+              onChange={(e) => toggleCustom(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">Custom one-off job (no product template)</span>
+          </label>
+
+          {!isCustom ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Product <span className="text-red-600">*</span>
+              </label>
+              {!customerId ? (
+                <p className="text-sm text-gray-500 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md">Select a customer first to see their products.</p>
+              ) : customerProducts.length === 0 ? (
+                <p className="text-sm text-amber-700 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md">
+                  This customer has no products yet. <Link href="/admin/product-templates" className="underline font-medium">Add one in Product Templates</Link>, or tick &quot;Custom one-off job&quot; above to build something without a template.
+                </p>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); setProductId(""); }}
+                    onFocus={() => setShowProductList(true)}
+                    placeholder="Start typing to find a product..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {showProductList && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                      {filteredProducts.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">No matching products.</p>
+                      ) : (
+                        filteredProducts.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => pickProduct(t)}
+                            className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
+                          >
+                            {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  {selectedProduct && (
+                    <p className="text-xs text-green-700 mt-1">Selected: {selectedProduct.name}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  What are you building? <span className="text-red-600">*</span>
+                </label>
                 <input
                   type="text"
-                  value={productSearch}
-                  onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); setProductId(""); }}
-                  onFocus={() => setShowProductList(true)}
-                  placeholder="Start typing to find a product..."
+                  value={customName}
+                  onChange={(e) => {
+                    setCustomName(e.target.value);
+                    if (!jobNumberEdited) setJobNumber(e.target.value);
+                  }}
+                  placeholder="e.g. One-off handrail repair"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-                {showProductList && (
-                  <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                    {filteredProducts.length === 0 ? (
-                      <p className="px-3 py-2 text-sm text-gray-500">No matching products.</p>
-                    ) : (
-                      filteredProducts.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => pickProduct(t)}
-                          className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
-                        >
-                          {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-                {selectedProduct && (
-                  <p className="text-xs text-green-700 mt-1">Selected: {selectedProduct.name}</p>
-                )}
+                <p className="text-xs text-gray-500 mt-1">This one-off won&apos;t be added to your product catalog. You&apos;ll add its materials, parts, and tasks on the job itself.</p>
               </div>
-            )}
-          </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Price per unit</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={unitPrice}
+                  onChange={(e) => setUnitPrice(e.target.value)}
+                  placeholder="Optional — you can set this later"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Your quoted price for one unit. The cost report figures margin and cost-per-unit using the job quantity, so a batch of 2 splits correctly.</p>
+              </div>
+            </>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
