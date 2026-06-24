@@ -223,6 +223,41 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
     }
   }
 
+  // After a task is completed, check whether EVERY task on the job is now complete.
+  // Reads fresh from the DB (not in-memory state) so it fires only on the genuinely
+  // final task. A job with zero tasks never triggers. On confirm, the job goes to
+  // 'complete' (which surfaces it on the Invoices page); invoicing stays manual.
+  async function maybeAutoCompleteJob() {
+    const { data: jobRow } = await supabase.from("jobs").select("status").eq("id", jobId).single();
+    // Don't re-prompt if it's already complete or archived past active work
+    if (!jobRow || jobRow.status === "complete") return;
+
+    const { data: taskRows } = await supabase
+      .from("job_tasks")
+      .select("status")
+      .eq("job_id", jobId);
+    const rows = (taskRows || []) as unknown as { status: string }[];
+
+    // Zero tasks never auto-completes
+    if (rows.length === 0) return;
+    const allComplete = rows.every((t) => t.status === "complete");
+    if (!allComplete) return;
+
+    const ok = confirm(
+      "All tasks on this job are done. Mark the whole job complete?\n\n" +
+      "It'll move to the invoices list for review. You can still reopen a task if you need to keep working."
+    );
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("jobs")
+      .update({ status: "complete", completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    if (error) {
+      alert("Couldn't mark the job complete: " + error.message);
+    }
+  }
+
   async function clockIn(task: JobTask) {
     if (!companyId || !userId) return;
     setBusyTask(task.id);
@@ -266,6 +301,8 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
     }
     await supabase.from("job_tasks").update({ status: "complete", completed_at: new Date().toISOString() }).eq("id", task.id);
     await ensureJobInProgress();
+    // Check whether that was the last task and offer to complete the whole job
+    await maybeAutoCompleteJob();
     setBusyTask(null);
     await load();
     onChanged();
