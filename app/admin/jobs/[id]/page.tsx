@@ -79,12 +79,14 @@ export default function JobDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [invoicing, setInvoicing] = useState(false);
 
-  // Edit job (name + quantity)
-  const [lineItem, setLineItem] = useState<{ id: string; quantity: number } | null>(null);
+  // Edit job (name + quantity + due date + custom price)
+  const [lineItem, setLineItem] = useState<{ id: string; quantity: number; unit_price: number | null; isCustom: boolean } | null>(null);
   const [multipleLineItems, setMultipleLineItems] = useState(false);
   const [editing, setEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [qtyDraft, setQtyDraft] = useState("");
+  const [dueDateDraft, setDueDateDraft] = useState("");
+  const [priceDraft, setPriceDraft] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Stockout alert
@@ -102,12 +104,17 @@ export default function JobDetailPage() {
 
     const { data: liData } = await supabase
       .from("job_line_items")
-      .select("id, quantity")
+      .select("id, quantity, unit_price, product_template_id")
       .eq("job_id", id)
       .order("sort_order");
-    const items = (liData || []) as unknown as { id: string; quantity: number }[];
+    const items = (liData || []) as unknown as { id: string; quantity: number; unit_price: number | null; product_template_id: string | null }[];
     if (items.length > 0) {
-      setLineItem({ id: items[0].id, quantity: Number(items[0].quantity) });
+      setLineItem({
+        id: items[0].id,
+        quantity: Number(items[0].quantity),
+        unit_price: items[0].unit_price != null ? Number(items[0].unit_price) : null,
+        isCustom: items[0].product_template_id === null,
+      });
       setMultipleLineItems(items.length > 1);
     } else {
       setLineItem(null);
@@ -197,6 +204,8 @@ export default function JobDetailPage() {
     if (!job) return;
     setNameDraft(job.job_number);
     setQtyDraft(lineItem ? String(lineItem.quantity) : "");
+    setDueDateDraft(job.due_date || "");
+    setPriceDraft(lineItem?.unit_price != null ? String(lineItem.unit_price) : "");
     setEditing(true);
   }
 
@@ -219,6 +228,18 @@ export default function JobDetailPage() {
       qtyChanged = newQty !== lineItem.quantity;
     }
 
+    // Validate the per-unit price on a custom job (blank = clear it)
+    let newUnitPrice: number | null = null;
+    const isCustom = !!lineItem?.isCustom;
+    if (isCustom && priceDraft.trim()) {
+      const up = parseFloat(priceDraft);
+      if (isNaN(up) || up < 0) {
+        alert("Price per unit must be 0 or more (or leave it blank to clear it).");
+        return;
+      }
+      newUnitPrice = up;
+    }
+
     if (qtyChanged && lineItem) {
       const ok = confirm(
         "Change quantity from " + lineItem.quantity + " to " + newQty + "?\n\n" +
@@ -232,10 +253,14 @@ export default function JobDetailPage() {
 
     setSavingEdit(true);
     try {
-      // 1) Rename (if changed)
-      if (newName !== job.job_number) {
-        const { error: nameErr } = await supabase.from("jobs").update({ job_number: newName }).eq("id", job.id);
-        if (nameErr) throw new Error("Rename failed: " + nameErr.message);
+      // 1) Rename + due date on the job (if changed)
+      const jobUpdates: Record<string, string | null> = {};
+      if (newName !== job.job_number) jobUpdates.job_number = newName;
+      const newDueDate = dueDateDraft || null;
+      if (newDueDate !== job.due_date) jobUpdates.due_date = newDueDate;
+      if (Object.keys(jobUpdates).length > 0) {
+        const { error: jobErr } = await supabase.from("jobs").update(jobUpdates).eq("id", job.id);
+        if (jobErr) throw new Error("Job update failed: " + jobErr.message);
       }
 
       // 2) Rescale pick list, tasks, and the line item quantity (if changed)
@@ -265,6 +290,15 @@ export default function JobDetailPage() {
 
         const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItem.id);
         if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+      }
+
+      // 3) Update the per-unit price on a custom job's line item
+      if (isCustom && lineItem) {
+        const { error: priceErr } = await supabase
+          .from("job_line_items")
+          .update({ unit_price: newUnitPrice })
+          .eq("id", lineItem.id);
+        if (priceErr) throw new Error("Price update failed: " + priceErr.message);
       }
 
       setEditing(false);
@@ -555,6 +589,9 @@ export default function JobDetailPage() {
             {job.customer_po && <span className="text-gray-500"> &middot; PO {job.customer_po}</span>}
           </p>
           {lineItem && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>}
+          {lineItem?.isCustom && lineItem.unit_price != null && (
+            <p className="text-sm text-gray-500 mt-1">Price/unit: ${Number(lineItem.unit_price).toFixed(2)}</p>
+          )}
           {job.due_date && <p className="text-sm text-gray-500 mt-1">Due {job.due_date}</p>}
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -643,7 +680,7 @@ export default function JobDetailPage() {
           className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
           onClick={() => !savingEdit && setEditing(false)}
         >
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Edit job</h2>
 
             <div className="space-y-4">
@@ -682,6 +719,35 @@ export default function JobDetailPage() {
                     </p>
                   </>
                 )}
+              </div>
+
+              {lineItem?.isCustom && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Price per unit</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={priceDraft}
+                    onChange={(e) => setPriceDraft(e.target.value)}
+                    placeholder="Leave blank for no price"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Your quoted price for one unit. The Cost tab uses this for margin. Clear it to leave the job without a price.
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Due date</label>
+                <input
+                  type="date"
+                  value={dueDateDraft}
+                  onChange={(e) => setDueDateDraft(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Leave blank to clear the due date.</p>
               </div>
             </div>
 
