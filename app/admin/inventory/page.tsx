@@ -87,6 +87,9 @@ export default function InventoryPage() {
     grade: "",
     current_cost_per_foot: "",
     notes: "",
+    open_length: "",
+    open_qty: "",
+    open_cost: "",
   });
 
   // New purchased part form
@@ -98,6 +101,8 @@ export default function InventoryPage() {
     current_cost_each: "",
     customer_id: "",
     notes: "",
+    open_qty: "",
+    open_cost: "",
   });
 
   // Raw material purchase form
@@ -266,6 +271,9 @@ export default function InventoryPage() {
       grade: "",
       current_cost_per_foot: "",
       notes: "",
+      open_length: "",
+      open_qty: "",
+      open_cost: "",
     });
     setNewPartForm({
       name: "",
@@ -275,6 +283,8 @@ export default function InventoryPage() {
       current_cost_each: "",
       customer_id: "",
       notes: "",
+      open_qty: "",
+      open_cost: "",
     });
     setShowNewItem(true);
   }
@@ -295,8 +305,30 @@ export default function InventoryPage() {
       setNewItemError("Please enter a valid cost per foot.");
       return;
     }
+
+    // Optional starting stock added along with the new material.
+    const hasOpening = newMatForm.open_qty.trim() !== "" || newMatForm.open_length.trim() !== "";
+    let openLength = 0;
+    let openQty = 0;
+    let openCost = cost;
+    if (hasOpening) {
+      openLength = parseFloat(newMatForm.open_length);
+      openQty = parseInt(newMatForm.open_qty);
+      if (isNaN(openLength) || openLength <= 0 || isNaN(openQty) || openQty <= 0) {
+        setNewItemError("To add starting stock, enter a stick length and quantity greater than 0 (or leave both blank).");
+        return;
+      }
+      if (newMatForm.open_cost.trim() !== "") {
+        openCost = parseFloat(newMatForm.open_cost);
+        if (isNaN(openCost) || openCost < 0) {
+          setNewItemError("Starting stock cost per foot is invalid.");
+          return;
+        }
+      }
+    }
+
     setSavingNewItem(true);
-    const { error } = await supabase.from("raw_materials").insert({
+    const { data: newMat, error } = await supabase.from("raw_materials").insert({
       company_id: companyId,
       shape: newMatForm.shape,
       size: newMatForm.size.trim(),
@@ -305,12 +337,33 @@ export default function InventoryPage() {
       current_cost_per_foot: cost,
       notes: newMatForm.notes.trim() || null,
       is_active: true,
-    });
-    setSavingNewItem(false);
-    if (error) {
-      setNewItemError(error.message);
+    }).select("id").single();
+    if (error || !newMat) {
+      setSavingNewItem(false);
+      setNewItemError(error?.message || "Could not create the material.");
       return;
     }
+
+    if (hasOpening) {
+      const { error: invErr } = await supabase.from("raw_material_inventory").insert({
+        company_id: companyId,
+        raw_material_id: newMat.id,
+        supplier_id: null,
+        stick_length_feet: openLength,
+        quantity_sticks: openQty,
+        cost_per_foot: openCost,
+        purchase_date: new Date().toISOString().slice(0, 10),
+        source_note: "Opening stock",
+        notes: "Added when material was created",
+      });
+      if (invErr) {
+        setSavingNewItem(false);
+        setNewItemError("Material was created, but saving the starting stock failed: " + invErr.message);
+        return;
+      }
+    }
+
+    setSavingNewItem(false);
     setShowNewItem(false);
     loadData();
   }
@@ -331,8 +384,28 @@ export default function InventoryPage() {
       setNewItemError("Please enter a valid cost each.");
       return;
     }
+
+    // Optional quantity on hand added along with the new part.
+    const hasOpening = newPartForm.open_qty.trim() !== "";
+    let openQty = 0;
+    let openCost = cost;
+    if (hasOpening) {
+      openQty = parseInt(newPartForm.open_qty);
+      if (isNaN(openQty) || openQty <= 0) {
+        setNewItemError("Quantity on hand must be a whole number greater than 0 (or leave it blank).");
+        return;
+      }
+      if (newPartForm.open_cost.trim() !== "") {
+        openCost = parseFloat(newPartForm.open_cost);
+        if (isNaN(openCost) || openCost < 0) {
+          setNewItemError("Quantity-on-hand cost each is invalid.");
+          return;
+        }
+      }
+    }
+
     setSavingNewItem(true);
-    const { error } = await supabase.from("purchased_parts").insert({
+    const { data: newPart, error } = await supabase.from("purchased_parts").insert({
       company_id: companyId,
       name: newPartForm.name.trim(),
       part_number: newPartForm.part_number.trim() || null,
@@ -342,12 +415,31 @@ export default function InventoryPage() {
       customer_id: newPartForm.customer_id || null,
       notes: newPartForm.notes.trim() || null,
       is_active: true,
-    });
-    setSavingNewItem(false);
-    if (error) {
-      setNewItemError(error.message);
+    }).select("id").single();
+    if (error || !newPart) {
+      setSavingNewItem(false);
+      setNewItemError(error?.message || "Could not create the part.");
       return;
     }
+
+    if (hasOpening) {
+      const { error: invErr } = await supabase.from("purchased_parts_inventory").insert({
+        company_id: companyId,
+        purchased_part_id: newPart.id,
+        supplier_id: null,
+        quantity: openQty,
+        cost_each: openCost,
+        purchase_date: new Date().toISOString().slice(0, 10),
+        notes: "Opening stock (added when part was created)",
+      });
+      if (invErr) {
+        setSavingNewItem(false);
+        setNewItemError("Part was created, but saving the quantity on hand failed: " + invErr.message);
+        return;
+      }
+    }
+
+    setSavingNewItem(false);
     setShowNewItem(false);
     loadData();
   }
@@ -808,6 +900,24 @@ export default function InventoryPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                     <input type="text" value={newMatForm.notes} onChange={(e) => setNewMatForm({ ...newMatForm, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
+                  <div className="border-t border-gray-200 pt-3">
+                    <p className="text-sm font-medium text-gray-700">Starting stock <span className="text-gray-400 font-normal">(optional)</span></p>
+                    <p className="text-xs text-gray-500 mb-2">Already have this on hand &mdash; e.g. just received an order? Add it here. Leave blank to add stock later.</p>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Stick length (ft)</label>
+                        <input type="number" step="0.01" min="0" value={newMatForm.open_length} onChange={(e) => setNewMatForm({ ...newMatForm, open_length: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Qty sticks</label>
+                        <input type="number" step="1" min="0" value={newMatForm.open_qty} onChange={(e) => setNewMatForm({ ...newMatForm, open_qty: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Cost / ft</label>
+                        <input type="number" step="0.0001" min="0" value={newMatForm.open_cost} onChange={(e) => setNewMatForm({ ...newMatForm, open_cost: e.target.value })} placeholder={newMatForm.current_cost_per_foot || "catalog"} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                    </div>
+                  </div>
                   {newItemError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{newItemError}</div>}
                   <div className="flex justify-end gap-2 pt-2">
                     <button type="button" onClick={() => setShowNewItem(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
@@ -859,6 +969,20 @@ export default function InventoryPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                     <input type="text" value={newPartForm.notes} onChange={(e) => setNewPartForm({ ...newPartForm, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div className="border-t border-gray-200 pt-3">
+                    <p className="text-sm font-medium text-gray-700">Quantity on hand <span className="text-gray-400 font-normal">(optional)</span></p>
+                    <p className="text-xs text-gray-500 mb-2">Already have some of these? Add the count now instead of adjusting later.</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Quantity</label>
+                        <input type="number" step="1" min="0" value={newPartForm.open_qty} onChange={(e) => setNewPartForm({ ...newPartForm, open_qty: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Cost each</label>
+                        <input type="number" step="0.0001" min="0" value={newPartForm.open_cost} onChange={(e) => setNewPartForm({ ...newPartForm, open_cost: e.target.value })} placeholder={newPartForm.current_cost_each || "catalog"} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                    </div>
                   </div>
                   {newItemError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{newItemError}</div>}
                   <div className="flex justify-end gap-2 pt-2">
