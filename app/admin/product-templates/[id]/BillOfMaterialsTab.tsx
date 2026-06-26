@@ -86,9 +86,19 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
   const [addingPart, setAddingPart] = useState(false);
   const [addingSub, setAddingSub] = useState(false);
 
-  const [matForm, setMatForm] = useState({ raw_material_id: "", feet_per_unit: "", notes: "" });
-  const [partForm, setPartForm] = useState({ purchased_part_id: "", quantity_per_unit: "", notes: "" });
-  const [subForm, setSubForm] = useState({ child_template_id: "", quantity_per_unit: "", notes: "" });
+  // Multi-select state for each add form
+  const [matChecked, setMatChecked] = useState<Set<string>>(new Set());
+  const [partChecked, setPartChecked] = useState<Set<string>>(new Set());
+  const [subChecked, setSubChecked] = useState<Set<string>>(new Set());
+  const [matSearch, setMatSearch] = useState("");
+  const [partSearch, setPartSearch] = useState("");
+  const [subSearch, setSubSearch] = useState("");
+  const [savingAdd, setSavingAdd] = useState(false);
+
+  // Inline edit state (one row at a time, across all three sections)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editQty, setEditQty] = useState("");
+  const [editNotes, setEditNotes] = useState("");
 
   const [error, setError] = useState<string | null>(null);
 
@@ -194,81 +204,180 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     loadAll();
   }, [loadCompanyId, loadAll]);
 
-  async function addMaterial(e: React.FormEvent) {
-    e.preventDefault();
+  // ---- Multi-add handlers ----
+
+  function openAddMat() {
+    setMatChecked(new Set());
+    setMatSearch("");
+    setError(null);
+    setAddingMat(true);
+  }
+  function openAddPart() {
+    setPartChecked(new Set());
+    setPartSearch("");
+    setError(null);
+    setAddingPart(true);
+  }
+  function openAddSub() {
+    setSubChecked(new Set());
+    setSubSearch("");
+    setError(null);
+    setAddingSub(true);
+  }
+
+  function toggle(set: Set<string>, id: string, setter: (s: Set<string>) => void) {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setter(next);
+  }
+
+  async function addMaterials() {
     setError(null);
     if (!companyId) return;
-    const feet = parseFloat(matForm.feet_per_unit);
-    if (!matForm.raw_material_id || isNaN(feet) || feet <= 0) {
-      setError("Please select a material and enter feet per unit greater than 0.");
+    if (matChecked.size === 0) {
+      setError("Pick at least one material to add.");
       return;
     }
-    const { error } = await supabase.from("product_template_materials").insert({
+    setSavingAdd(true);
+    const ids = Array.from(matChecked);
+    const rows = ids.map((rmId, i) => ({
       company_id: companyId,
       product_template_id: templateId,
-      raw_material_id: matForm.raw_material_id,
-      feet_per_unit: feet,
-      notes: matForm.notes.trim() || null,
-      sort_order: materials.length,
-    });
+      raw_material_id: rmId,
+      feet_per_unit: 1,
+      notes: null,
+      sort_order: materials.length + i,
+    }));
+    const { error } = await supabase.from("product_template_materials").insert(rows);
+    setSavingAdd(false);
     if (error) {
       setError(error.message);
       return;
     }
-    setMatForm({ raw_material_id: "", feet_per_unit: "", notes: "" });
     setAddingMat(false);
     loadAll();
   }
 
-  async function addPart(e: React.FormEvent) {
-    e.preventDefault();
+  async function addPartsBatch() {
     setError(null);
     if (!companyId) return;
-    const qty = parseFloat(partForm.quantity_per_unit);
-    if (!partForm.purchased_part_id || isNaN(qty) || qty <= 0) {
-      setError("Please select a part and enter quantity per unit greater than 0.");
+    if (partChecked.size === 0) {
+      setError("Pick at least one part to add.");
       return;
     }
-    const { error } = await supabase.from("product_template_parts").insert({
+    setSavingAdd(true);
+    const ids = Array.from(partChecked);
+    const rows = ids.map((ppId, i) => ({
       company_id: companyId,
       product_template_id: templateId,
-      purchased_part_id: partForm.purchased_part_id,
-      quantity_per_unit: qty,
-      notes: partForm.notes.trim() || null,
-      sort_order: parts.length,
-    });
+      purchased_part_id: ppId,
+      quantity_per_unit: 1,
+      notes: null,
+      sort_order: parts.length + i,
+    }));
+    const { error } = await supabase.from("product_template_parts").insert(rows);
+    setSavingAdd(false);
     if (error) {
       setError(error.message);
       return;
     }
-    setPartForm({ purchased_part_id: "", quantity_per_unit: "", notes: "" });
     setAddingPart(false);
     loadAll();
   }
 
-  async function addSub(e: React.FormEvent) {
-    e.preventDefault();
+  async function addSubsBatch() {
     setError(null);
     if (!companyId) return;
-    const qty = parseFloat(subForm.quantity_per_unit);
-    if (!subForm.child_template_id || isNaN(qty) || qty <= 0) {
-      setError("Please select a sub-assembly and enter quantity per unit greater than 0.");
+    if (subChecked.size === 0) {
+      setError("Pick at least one sub-assembly to add.");
       return;
     }
-    const { error } = await supabase.from("product_template_sub_assemblies").insert({
+    setSavingAdd(true);
+    const ids = Array.from(subChecked);
+    const rows = ids.map((childId, i) => ({
       company_id: companyId,
       parent_template_id: templateId,
-      child_template_id: subForm.child_template_id,
-      quantity_per_unit: qty,
-      notes: subForm.notes.trim() || null,
-      sort_order: subs.length,
-    });
+      child_template_id: childId,
+      quantity_per_unit: 1,
+      notes: null,
+      sort_order: subs.length + i,
+    }));
+    const { error } = await supabase.from("product_template_sub_assemblies").insert(rows);
+    setSavingAdd(false);
     if (error) {
       setError(error.message);
       return;
     }
-    setSubForm({ child_template_id: "", quantity_per_unit: "", notes: "" });
     setAddingSub(false);
+    loadAll();
+  }
+
+  // ---- Inline edit (qty + notes) ----
+
+  function startEdit(rowId: string, qty: number, notes: string | null) {
+    setEditingId(rowId);
+    setEditQty(String(qty));
+    setEditNotes(notes || "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditQty("");
+    setEditNotes("");
+  }
+
+  async function saveEditMaterial(rowId: string) {
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Feet per unit must be greater than 0.");
+      return;
+    }
+    const { error } = await supabase
+      .from("product_template_materials")
+      .update({ feet_per_unit: qty, notes: editNotes.trim() || null })
+      .eq("id", rowId);
+    if (error) {
+      alert("Failed to save: " + error.message);
+      return;
+    }
+    cancelEdit();
+    loadAll();
+  }
+
+  async function saveEditPart(rowId: string) {
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Quantity per unit must be greater than 0.");
+      return;
+    }
+    const { error } = await supabase
+      .from("product_template_parts")
+      .update({ quantity_per_unit: qty, notes: editNotes.trim() || null })
+      .eq("id", rowId);
+    if (error) {
+      alert("Failed to save: " + error.message);
+      return;
+    }
+    cancelEdit();
+    loadAll();
+  }
+
+  async function saveEditSub(rowId: string) {
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Quantity per unit must be greater than 0.");
+      return;
+    }
+    const { error } = await supabase
+      .from("product_template_sub_assemblies")
+      .update({ quantity_per_unit: qty, notes: editNotes.trim() || null })
+      .eq("id", rowId);
+    if (error) {
+      alert("Failed to save: " + error.message);
+      return;
+    }
+    cancelEdit();
     loadAll();
   }
 
@@ -303,6 +412,21 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     0
   );
 
+  // Items not already in the BOM (so you can't double-add)
+  const usedMaterialIds = new Set(materials.map((m) => m.raw_material_id));
+  const usedPartIds = new Set(parts.map((p) => p.purchased_part_id));
+  const usedSubIds = new Set(subs.map((s) => s.child_template_id));
+
+  const availableMaterials = allMaterials
+    .filter((m) => !usedMaterialIds.has(m.id))
+    .filter((m) => !matSearch || describeMaterial(m).toLowerCase().includes(matSearch.toLowerCase()));
+  const availableParts = allParts
+    .filter((p) => !usedPartIds.has(p.id))
+    .filter((p) => !partSearch || (p.name + " " + (p.part_number || "")).toLowerCase().includes(partSearch.toLowerCase()));
+  const availableTemplates = allTemplates
+    .filter((t) => !usedSubIds.has(t.id))
+    .filter((t) => !subSearch || (t.name + " " + (t.product_number || "")).toLowerCase().includes(subSearch.toLowerCase()));
+
   if (loading) {
     return <p className="text-gray-600">Loading...</p>;
   }
@@ -331,14 +455,16 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         </div>
       </div>
 
-      <BomSection
-        title="Raw Materials"
-        emptyText="No raw materials added yet."
-        adding={addingMat}
-        onOpenAdd={() => setAddingMat(true)}
-        onCloseAdd={() => setAddingMat(false)}
-      >
-        {materials.length > 0 && (
+      {/* ---------------- Raw Materials ---------------- */}
+      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-base font-semibold text-gray-900">Raw Materials</h3>
+          {!addingMat && (
+            <button onClick={openAddMat} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
+          )}
+        </div>
+
+        {materials.length > 0 ? (
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -354,77 +480,98 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               {materials.map((m) => {
                 const cf = Number(m.raw_materials?.current_cost_per_foot || 0);
                 const unitCost = Number(m.feet_per_unit) * cf;
+                const isEditing = editingId === m.id;
                 return (
                   <tr key={m.id} className="border-b border-gray-100 last:border-0">
                     <td className="px-4 py-3 text-sm text-gray-900">{describeMaterial(m.raw_materials)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(m.feet_per_unit).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">
+                      {isEditing ? (
+                        <input type="number" step="0.01" min="0" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                      ) : (
+                        Number(m.feet_per_unit).toFixed(2)
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${cf.toFixed(4)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{m.notes || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-right">
-                      <button onClick={() => deleteMaterial(m.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                    <td className="px-4 py-3 text-sm text-gray-700">
+                      {isEditing ? (
+                        <input type="text" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-gray-900" />
+                      ) : (
+                        m.notes || "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {isEditing ? (
+                        <>
+                          <button onClick={() => saveEditMaterial(m.id)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Save</button>
+                          <button onClick={cancelEdit} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(m.id, Number(m.feet_per_unit), m.notes)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                          <button onClick={() => deleteMaterial(m.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        ) : (
+          !addingMat && <p className="px-4 py-6 text-sm text-gray-600">No raw materials added yet.</p>
         )}
 
         {addingMat && (
-          <form onSubmit={addMaterial} className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Material</label>
-              <select
-                value={matForm.raw_material_id}
-                onChange={(e) => setMatForm({ ...matForm, raw_material_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select material --</option>
-                {allMaterials.map((m) => (
-                  <option key={m.id} value={m.id}>{describeMaterial(m)}</option>
-                ))}
-              </select>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold text-gray-900">Select materials to add (each starts at 1 ft/unit — edit after)</h4>
+              <span className="text-xs text-gray-500">{matChecked.size} selected</span>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Feet per unit</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="e.g. 8"
-                  value={matForm.feet_per_unit}
-                  onChange={(e) => setMatForm({ ...matForm, feet_per_unit: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <input
-                  type="text"
-                  value={matForm.notes}
-                  onChange={(e) => setMatForm({ ...matForm, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            <input
+              type="text"
+              placeholder="Search materials..."
+              value={matSearch}
+              onChange={(e) => setMatSearch(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md bg-white divide-y divide-gray-100">
+              {availableMaterials.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-gray-500">No matching materials available.</p>
+              ) : (
+                availableMaterials.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 px-3 py-2 hover:bg-blue-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={matChecked.has(m.id)}
+                      onChange={() => toggle(matChecked, m.id, setMatChecked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-900">{describeMaterial(m)}</span>
+                  </label>
+                ))
+              )}
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setAddingMat(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
-              <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium">Add</button>
+              <button type="button" onClick={addMaterials} disabled={savingAdd || matChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+                {savingAdd ? "Adding..." : "Add selected (" + matChecked.size + ")"}
+              </button>
             </div>
-          </form>
+          </div>
         )}
-      </BomSection>
+      </section>
 
-      <BomSection
-        title="Purchased Parts"
-        emptyText="No purchased parts added yet."
-        adding={addingPart}
-        onOpenAdd={() => setAddingPart(true)}
-        onCloseAdd={() => setAddingPart(false)}
-      >
-        {parts.length > 0 && (
+      {/* ---------------- Purchased Parts ---------------- */}
+      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-base font-semibold text-gray-900">Purchased Parts</h3>
+          {!addingPart && (
+            <button onClick={openAddPart} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
+          )}
+        </div>
+
+        {parts.length > 0 ? (
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -440,77 +587,98 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               {parts.map((p) => {
                 const ce = Number(p.purchased_parts?.current_cost_each || 0);
                 const unitCost = Number(p.quantity_per_unit) * ce;
+                const isEditing = editingId === p.id;
                 return (
                   <tr key={p.id} className="border-b border-gray-100 last:border-0">
                     <td className="px-4 py-3 text-sm text-gray-900">{p.purchased_parts?.name || "Unknown"}{p.purchased_parts?.part_number ? " (" + p.purchased_parts.part_number + ")" : ""}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(p.quantity_per_unit).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">
+                      {isEditing ? (
+                        <input type="number" step="0.01" min="0" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                      ) : (
+                        Number(p.quantity_per_unit).toFixed(2)
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${ce.toFixed(4)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{p.notes || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-right">
-                      <button onClick={() => deletePart(p.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                    <td className="px-4 py-3 text-sm text-gray-700">
+                      {isEditing ? (
+                        <input type="text" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-gray-900" />
+                      ) : (
+                        p.notes || "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {isEditing ? (
+                        <>
+                          <button onClick={() => saveEditPart(p.id)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Save</button>
+                          <button onClick={cancelEdit} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(p.id, Number(p.quantity_per_unit), p.notes)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                          <button onClick={() => deletePart(p.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        ) : (
+          !addingPart && <p className="px-4 py-6 text-sm text-gray-600">No purchased parts added yet.</p>
         )}
 
         {addingPart && (
-          <form onSubmit={addPart} className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Part</label>
-              <select
-                value={partForm.purchased_part_id}
-                onChange={(e) => setPartForm({ ...partForm, purchased_part_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select part --</option>
-                {allParts.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</option>
-                ))}
-              </select>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold text-gray-900">Select parts to add (each starts at 1/unit — edit after)</h4>
+              <span className="text-xs text-gray-500">{partChecked.size} selected</span>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity per unit</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="e.g. 4"
-                  value={partForm.quantity_per_unit}
-                  onChange={(e) => setPartForm({ ...partForm, quantity_per_unit: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <input
-                  type="text"
-                  value={partForm.notes}
-                  onChange={(e) => setPartForm({ ...partForm, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            <input
+              type="text"
+              placeholder="Search parts..."
+              value={partSearch}
+              onChange={(e) => setPartSearch(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md bg-white divide-y divide-gray-100">
+              {availableParts.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-gray-500">No matching parts available.</p>
+              ) : (
+                availableParts.map((p) => (
+                  <label key={p.id} className="flex items-center gap-3 px-3 py-2 hover:bg-blue-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={partChecked.has(p.id)}
+                      onChange={() => toggle(partChecked, p.id, setPartChecked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-900">{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</span>
+                  </label>
+                ))
+              )}
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setAddingPart(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
-              <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium">Add</button>
+              <button type="button" onClick={addPartsBatch} disabled={savingAdd || partChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+                {savingAdd ? "Adding..." : "Add selected (" + partChecked.size + ")"}
+              </button>
             </div>
-          </form>
+          </div>
         )}
-      </BomSection>
+      </section>
 
-      <BomSection
-        title="Sub-Assemblies"
-        emptyText="No sub-assemblies added yet."
-        adding={addingSub}
-        onOpenAdd={() => setAddingSub(true)}
-        onCloseAdd={() => setAddingSub(false)}
-      >
-        {subs.length > 0 && (
+      {/* ---------------- Sub-Assemblies ---------------- */}
+      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-base font-semibold text-gray-900">Sub-Assemblies</h3>
+          {!addingSub && (
+            <button onClick={openAddSub} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
+          )}
+        </div>
+
+        {subs.length > 0 ? (
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -526,103 +694,87 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               {subs.map((s) => {
                 const costPerSub = subAssemblyCosts[s.child_template_id] || 0;
                 const unitCost = Number(s.quantity_per_unit) * costPerSub;
+                const isEditing = editingId === s.id;
                 return (
                   <tr key={s.id} className="border-b border-gray-100 last:border-0">
                     <td className="px-4 py-3 text-sm text-gray-900">{s.product_templates?.name || "Unknown"}{s.product_templates?.product_number ? " (" + s.product_templates.product_number + ")" : ""}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(s.quantity_per_unit).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">
+                      {isEditing ? (
+                        <input type="number" step="0.01" min="0" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                      ) : (
+                        Number(s.quantity_per_unit).toFixed(2)
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${costPerSub.toFixed(2)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{s.notes || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-right">
-                      <button onClick={() => deleteSub(s.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                    <td className="px-4 py-3 text-sm text-gray-700">
+                      {isEditing ? (
+                        <input type="text" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-gray-900" />
+                      ) : (
+                        s.notes || "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {isEditing ? (
+                        <>
+                          <button onClick={() => saveEditSub(s.id)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Save</button>
+                          <button onClick={cancelEdit} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(s.id, Number(s.quantity_per_unit), s.notes)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                          <button onClick={() => deleteSub(s.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        ) : (
+          !addingSub && <p className="px-4 py-6 text-sm text-gray-600">No sub-assemblies added yet.</p>
         )}
 
         {addingSub && (
-          <form onSubmit={addSub} className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Sub-assembly template</label>
-              <select
-                value={subForm.child_template_id}
-                onChange={(e) => setSubForm({ ...subForm, child_template_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select another template --</option>
-                {allTemplates.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</option>
-                ))}
-              </select>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold text-gray-900">Select sub-assemblies to add (each starts at 1/unit — edit after)</h4>
+              <span className="text-xs text-gray-500">{subChecked.size} selected</span>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity per unit</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="e.g. 1"
-                  value={subForm.quantity_per_unit}
-                  onChange={(e) => setSubForm({ ...subForm, quantity_per_unit: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <input
-                  type="text"
-                  value={subForm.notes}
-                  onChange={(e) => setSubForm({ ...subForm, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            <input
+              type="text"
+              placeholder="Search templates..."
+              value={subSearch}
+              onChange={(e) => setSubSearch(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md bg-white divide-y divide-gray-100">
+              {availableTemplates.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-gray-500">No matching templates available.</p>
+              ) : (
+                availableTemplates.map((t) => (
+                  <label key={t.id} className="flex items-center gap-3 px-3 py-2 hover:bg-blue-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={subChecked.has(t.id)}
+                      onChange={() => toggle(subChecked, t.id, setSubChecked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-900">{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</span>
+                  </label>
+                ))
+              )}
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setAddingSub(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
-              <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium">Add</button>
+              <button type="button" onClick={addSubsBatch} disabled={savingAdd || subChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+                {savingAdd ? "Adding..." : "Add selected (" + subChecked.size + ")"}
+              </button>
             </div>
-          </form>
+          </div>
         )}
-      </BomSection>
+      </section>
     </div>
-  );
-}
-
-function BomSection({
-  title,
-  emptyText,
-  adding,
-  onOpenAdd,
-  onCloseAdd,
-  children,
-}: {
-  title: string;
-  emptyText: string;
-  adding: boolean;
-  onOpenAdd: () => void;
-  onCloseAdd: () => void;
-  children: React.ReactNode;
-}) {
-  const hasContent = Array.isArray(children) ? children.some(Boolean) : Boolean(children);
-
-  return (
-    <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
-        <h3 className="text-base font-semibold text-gray-900">{title}</h3>
-        {!adding && (
-          <button onClick={onOpenAdd} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
-        )}
-      </div>
-      {hasContent ? children : <p className="px-4 py-6 text-sm text-gray-600">{emptyText}</p>}
-      {!hasContent && !adding && (
-        <div className="px-4 pb-4">
-          <button onClick={onOpenAdd} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add the first one</button>
-        </div>
-      )}
-    </section>
   );
 }
