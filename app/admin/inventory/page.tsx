@@ -54,6 +54,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [shapeFilter, setShapeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [showInactive, setShowInactive] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
 
   // Purchase modal state
@@ -135,6 +136,7 @@ export default function InventoryPage() {
 
   const filteredMaterials = useMemo(() => {
     return materials.filter((m) => {
+      if (!showInactive && !m.is_active) return false;
       if (shapeFilter !== "all" && m.shape !== shapeFilter) return false;
       if (search) {
         const s = search.toLowerCase();
@@ -142,10 +144,11 @@ export default function InventoryPage() {
       }
       return true;
     });
-  }, [materials, shapeFilter, search]);
+  }, [materials, shapeFilter, search, showInactive]);
 
   const filteredParts = useMemo(() => {
     return parts.filter((p) => {
+      if (!showInactive && !p.is_active) return false;
       if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
       if (search) {
         const s = search.toLowerCase();
@@ -154,7 +157,7 @@ export default function InventoryPage() {
       }
       return true;
     });
-  }, [parts, categoryFilter, search]);
+  }, [parts, categoryFilter, search, showInactive]);
 
   function openPurchase() {
     setPurchaseError(null);
@@ -406,6 +409,15 @@ export default function InventoryPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+        <label className="flex items-center gap-2 px-1 text-sm text-gray-700 whitespace-nowrap cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          Show inactive
+        </label>
       </div>
 
       {loading ? (
@@ -430,7 +442,10 @@ export default function InventoryPage() {
               <tbody>
                 {filteredMaterials.map((m) => (
                   <tr key={m.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">{describeMaterial(m)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                      {describeMaterial(m)}
+                      {!m.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+                    </td>
                     <td className="px-4 py-3 text-sm text-right font-mono">
                       <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>
                         {m.available.toFixed(2)}
@@ -467,7 +482,10 @@ export default function InventoryPage() {
             <tbody>
               {filteredParts.map((p) => (
                 <tr key={p.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</td>
+                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                    {p.name}{p.part_number ? " (" + p.part_number + ")" : ""}
+                    {!p.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-700">{categoryLabel(p.category)}</td>
                   <td className="px-4 py-3 text-sm text-right font-mono">
                     <span className={p.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>
@@ -517,7 +535,7 @@ export default function InventoryPage() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">-- Select material --</option>
-                      {materials.map((m) => (
+                      {materials.filter((m) => m.is_active).map((m) => (
                         <option key={m.id} value={m.id}>{describeMaterial(m)}</option>
                       ))}
                     </select>
@@ -575,7 +593,7 @@ export default function InventoryPage() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">-- Select part --</option>
-                      {parts.map((p) => (
+                      {parts.filter((p) => p.is_active).map((p) => (
                         <option key={p.id} value={p.id}>{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</option>
                       ))}
                     </select>

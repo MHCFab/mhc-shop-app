@@ -26,6 +26,7 @@ type PurchasedPart = {
   category: string;
   description: string | null;
   current_cost_each: number;
+  is_active: boolean;
 };
 
 type Batch = {
@@ -79,6 +80,7 @@ export default function PartDetailPage() {
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -90,7 +92,7 @@ export default function PartDetailPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [partRes, batchRes, allocRes] = await Promise.all([
-      supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each").eq("id", id).single(),
+      supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each, is_active").eq("id", id).single(),
       supabase
         .from("purchased_parts_inventory")
         .select("id, quantity, cost_each, purchase_date, notes, suppliers(name)")
@@ -200,6 +202,22 @@ export default function PartDetailPage() {
     loadData();
   }
 
+  async function toggleActive() {
+    if (!part) return;
+    const next = !part.is_active;
+    setTogglingActive(true);
+    const { error } = await supabase
+      .from("purchased_parts")
+      .update({ is_active: next })
+      .eq("id", id);
+    setTogglingActive(false);
+    if (error) {
+      alert("Could not update this part.\n\nDetails: " + error.message);
+      return;
+    }
+    loadData();
+  }
+
   async function handleDelete() {
     const ok = confirm(
       "Delete this part from your catalog? This also removes its inventory batches. If it's used by any product template or job, the delete will be blocked."
@@ -240,7 +258,12 @@ export default function PartDetailPage() {
 
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">{part.name}</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-3xl font-bold text-gray-900">{part.name}</h1>
+            {!part.is_active && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>
+            )}
+          </div>
           <p className="text-gray-500 mt-1">
             {part.part_number && <span>{part.part_number} &middot; </span>}
             {categoryLabel(part.category)} &middot; ${Number(part.current_cost_each).toFixed(4)} each
@@ -253,6 +276,9 @@ export default function PartDetailPage() {
           </button>
           <button onClick={openEdit} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
             Edit
+          </button>
+          <button onClick={toggleActive} disabled={togglingActive} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            {togglingActive ? "Saving..." : part.is_active ? "Mark inactive" : "Reactivate"}
           </button>
           <button onClick={handleDelete} disabled={deleting} className="bg-white border border-red-300 text-red-600 px-4 py-2 rounded-md font-medium hover:bg-red-50 disabled:opacity-50 transition-colors">
             {deleting ? "Deleting..." : "Delete"}

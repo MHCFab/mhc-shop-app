@@ -31,6 +31,7 @@ type RawMaterial = {
   wall_thickness: string | null;
   grade: string;
   current_cost_per_foot: number;
+  is_active: boolean;
 };
 
 type Batch = {
@@ -98,6 +99,7 @@ export default function MaterialDetailPage() {
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [togglingActive, setTogglingActive] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -109,7 +111,7 @@ export default function MaterialDetailPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [matRes, batchRes, allocRes] = await Promise.all([
-      supabase.from("raw_materials").select("id, shape, size, wall_thickness, grade, current_cost_per_foot").eq("id", id).single(),
+      supabase.from("raw_materials").select("id, shape, size, wall_thickness, grade, current_cost_per_foot, is_active").eq("id", id).single(),
       supabase
         .from("raw_material_inventory")
         .select("id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, source_note, notes, suppliers(name)")
@@ -236,6 +238,22 @@ export default function MaterialDetailPage() {
     loadData();
   }
 
+  async function toggleActive() {
+    if (!material) return;
+    const next = !material.is_active;
+    setTogglingActive(true);
+    const { error } = await supabase
+      .from("raw_materials")
+      .update({ is_active: next })
+      .eq("id", id);
+    setTogglingActive(false);
+    if (error) {
+      alert("Could not update this material.\n\nDetails: " + error.message);
+      return;
+    }
+    loadData();
+  }
+
   async function handleDelete() {
     const ok = confirm(
       "Delete this material from your catalog? This also removes its inventory batches. If it's used by any product template or job, the delete will be blocked."
@@ -276,7 +294,12 @@ export default function MaterialDetailPage() {
 
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">{describeMaterial(material)}</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-3xl font-bold text-gray-900">{describeMaterial(material)}</h1>
+            {!material.is_active && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>
+            )}
+          </div>
           <p className="text-gray-500 mt-1">Current catalog cost: ${Number(material.current_cost_per_foot).toFixed(4)} / ft</p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -285,6 +308,9 @@ export default function MaterialDetailPage() {
           </button>
           <button onClick={openEdit} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
             Edit
+          </button>
+          <button onClick={toggleActive} disabled={togglingActive} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            {togglingActive ? "Saving..." : material.is_active ? "Mark inactive" : "Reactivate"}
           </button>
           <button onClick={handleDelete} disabled={deleting} className="bg-white border border-red-300 text-red-600 px-4 py-2 rounded-md font-medium hover:bg-red-50 disabled:opacity-50 transition-colors">
             {deleting ? "Deleting..." : "Delete"}
