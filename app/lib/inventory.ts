@@ -161,12 +161,13 @@ export type FabricatedStockItem = {
   product_number: string | null;
   is_active: boolean;
   onHand: number;                // running sum of the ledger (signed)
-  latestBuildCost: number | null; // cost-per-unit of the most recent build receipt
-  lastBuildAt: string | null;
+  latestUnitCost: number | null; // cost-per-unit of the most recent stock-in (build or opening)
+  lastStockInAt: string | null;
 };
 
 // Each stockable template, with its on-hand quantity (sum of the fabricated_inventory
-// ledger) and the cost-per-unit captured on its most recent build receipt.
+// ledger) and the cost-per-unit captured on its most recent stock-in (a build receipt
+// or an opening-stock entry).
 export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
   const supabase = createClient();
 
@@ -190,8 +191,9 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
   return tpls.map((t) => {
     const rows = ledger.filter((l) => l.product_template_id === t.id);
     const onHand = rows.reduce((s, r) => s + Number(r.quantity), 0);
-    const builds = rows
-      .filter((r) => r.source === "build" && Number(r.quantity) > 0)
+    // Most recent positive stock-in of any kind drives the displayed unit cost.
+    const stockIns = rows
+      .filter((r) => Number(r.quantity) > 0)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return {
       id: t.id,
@@ -199,8 +201,8 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
       product_number: t.product_number,
       is_active: t.is_active,
       onHand,
-      latestBuildCost: builds.length > 0 ? Number(builds[0].cost_per_unit) : null,
-      lastBuildAt: builds.length > 0 ? builds[0].created_at : null,
+      latestUnitCost: stockIns.length > 0 ? Number(stockIns[0].cost_per_unit) : null,
+      lastStockInAt: stockIns.length > 0 ? stockIns[0].created_at : null,
     };
   });
 }

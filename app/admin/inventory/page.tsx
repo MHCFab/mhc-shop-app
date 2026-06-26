@@ -736,7 +736,7 @@ export default function InventoryPage() {
               <tr>
                 <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
                 <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">On hand</th>
-                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Latest build $/unit</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Latest cost/unit</th>
                 <th className="px-4 py-2"></th>
               </tr>
             </thead>
@@ -750,7 +750,7 @@ export default function InventoryPage() {
                   <td className="px-4 py-3 text-sm text-right font-mono">
                     <span className={f.onHand <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{f.onHand.toFixed(0)}</span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.latestBuildCost != null ? "$" + f.latestBuildCost.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.latestUnitCost != null ? "$" + f.latestUnitCost.toFixed(2) : "—"}</td>
                   <td className="px-4 py-3 text-sm text-right">
                     <Link href={"/admin/product-templates/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
                   </td>

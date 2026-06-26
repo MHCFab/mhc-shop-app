@@ -11,6 +11,7 @@ type ProductTemplate = {
   description: string | null;
   is_active: boolean;
   is_sub_assembly: boolean;
+  is_stockable: boolean;
   customer_id: string | null;
   created_at: string;
 };
@@ -23,7 +24,10 @@ type Form = {
   description: string;
   is_active: boolean;
   is_sub_assembly: boolean;
+  is_stockable: boolean;
   customer_id: string;
+  open_qty: string;
+  open_cost: string;
 };
 
 const emptyForm: Form = {
@@ -32,7 +36,10 @@ const emptyForm: Form = {
   description: "",
   is_active: true,
   is_sub_assembly: false,
+  is_stockable: false,
   customer_id: "",
+  open_qty: "",
+  open_cost: "",
 };
 
 export default function ProductTemplatesPage() {
@@ -113,7 +120,10 @@ export default function ProductTemplatesPage() {
       description: t.description || "",
       is_active: t.is_active,
       is_sub_assembly: t.is_sub_assembly,
+      is_stockable: t.is_stockable ?? false,
       customer_id: t.customer_id || "",
+      open_qty: "",
+      open_cost: "",
     });
     setEditingId(t.id);
     setError(null);
@@ -148,23 +158,78 @@ export default function ProductTemplatesPage() {
       return;
     }
 
+    const isStockable = form.is_sub_assembly && form.is_stockable;
+
+    // Validate the optional starting stock up front (before creating anything).
+    let openQty = 0;
+    let openCost = 0;
+    const hasOpening = isStockable && form.open_qty.trim() !== "";
+    if (hasOpening) {
+      openQty = parseFloat(form.open_qty);
+      if (isNaN(openQty) || openQty <= 0) {
+        setError("Starting stock quantity must be greater than 0 (or leave it blank).");
+        setSaving(false);
+        return;
+      }
+      if (form.open_cost.trim() !== "") {
+        openCost = parseFloat(form.open_cost);
+        if (isNaN(openCost) || openCost < 0) {
+          setError("Starting stock cost per unit is invalid.");
+          setSaving(false);
+          return;
+        }
+      }
+    }
+
     const payload = {
       name: form.name.trim(),
       product_number: form.product_number.trim() || null,
       description: form.description.trim() || null,
       is_active: form.is_active,
       is_sub_assembly: form.is_sub_assembly,
+      // Only a sub-assembly can be a stockable fabricated item.
+      is_stockable: isStockable,
       customer_id: form.is_sub_assembly ? null : form.customer_id,
     };
 
-    const { error } = editingId
-      ? await supabase.from("product_templates").update(payload).eq("id", editingId)
-      : await supabase.from("product_templates").insert({ ...payload, company_id: companyId });
+    let targetId = editingId;
+    if (editingId) {
+      const { error } = await supabase.from("product_templates").update(payload).eq("id", editingId);
+      if (error) {
+        setError(error.message);
+        setSaving(false);
+        return;
+      }
+    } else {
+      const { data: created, error } = await supabase
+        .from("product_templates")
+        .insert({ ...payload, company_id: companyId })
+        .select("id")
+        .single();
+      if (error || !created) {
+        setError(error?.message || "Couldn't create the template.");
+        setSaving(false);
+        return;
+      }
+      targetId = (created as { id: string }).id;
+    }
 
-    if (error) {
-      setError(error.message);
-      setSaving(false);
-      return;
+    // Optional opening fabricated stock for a stockable sub-assembly.
+    if (hasOpening && targetId) {
+      const { error: invErr } = await supabase.from("fabricated_inventory").insert({
+        company_id: companyId,
+        product_template_id: targetId,
+        quantity: openQty,
+        cost_per_unit: openCost,
+        source: "adjustment",
+        source_job_id: null,
+        notes: "Opening stock (added from the template form)",
+      });
+      if (invErr) {
+        setError("Template saved, but adding starting stock failed: " + invErr.message);
+        setSaving(false);
+        return;
+      }
     }
 
     setSaving(false);
@@ -446,11 +511,63 @@ export default function ProductTemplatesPage() {
                   <input
                     type="checkbox"
                     checked={form.is_sub_assembly}
-                    onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        is_sub_assembly: e.target.checked,
+                        is_stockable: e.target.checked ? form.is_stockable : false,
+                      })
+                    }
                     className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="text-sm text-gray-700">Sub-assembly (used as a component, not built standalone)</span>
                 </label>
+
+                {form.is_sub_assembly && (
+                  <label className="flex items-start gap-2 ml-6">
+                    <input
+                      type="checkbox"
+                      checked={form.is_stockable}
+                      onChange={(e) => setForm({ ...form, is_stockable: e.target.checked })}
+                      className="w-4 h-4 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Stockable fabricated item (build to stock with a build order, then pull from on-hand stock)
+                    </span>
+                  </label>
+                )}
+
+                {form.is_sub_assembly && form.is_stockable && (
+                  <div className="ml-6 border-t border-gray-100 pt-3">
+                    <p className="text-sm font-medium text-gray-700">Starting stock <span className="text-gray-400 font-normal">(optional)</span></p>
+                    <p className="text-xs text-gray-500 mb-2">Already have some of these built? Add the count now instead of running a build order. This adds a stock entry &mdash; leave blank to skip.</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Quantity on hand</label>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={form.open_qty}
+                          onChange={(e) => setForm({ ...form, open_qty: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Cost per unit</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={form.open_cost}
+                          onChange={(e) => setForm({ ...form, open_cost: e.target.value })}
+                          placeholder="0.00"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {!form.is_sub_assembly && (
                   <div>
