@@ -181,6 +181,7 @@ export default function MaterialDetailPage() {
       purchase_date: new Date().toISOString().slice(0, 10),
       source_note: adjustForm.note.trim() || "Manual adjustment",
       notes: adjustForm.note.trim() || null,
+      entry_type: "adjustment",
     });
     setSavingAdjust(false);
     if (error) {

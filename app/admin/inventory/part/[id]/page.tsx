@@ -151,6 +151,7 @@ export default function PartDetailPage() {
       cost_each: cost,
       purchase_date: new Date().toISOString().slice(0, 10),
       notes: adjustForm.note.trim() || "Manual adjustment",
+      entry_type: "adjustment",
     });
     setSavingAdjust(false);
     if (error) {

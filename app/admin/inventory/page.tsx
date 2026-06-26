@@ -246,7 +246,7 @@ export default function InventoryPage() {
           <span className={p.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{p.available.toFixed(0)}</span>
         </td>
         <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{p.allocated.toFixed(0)}</td>
-        <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${p.lifoCostEach.toFixed(4)}</td>
+        <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${p.costEach.toFixed(4)}</td>
         <td className="px-4 py-3 text-sm text-right">
           <Link href={"/admin/inventory/part/" + p.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
         </td>
@@ -369,6 +369,7 @@ export default function InventoryPage() {
         purchase_date: new Date().toISOString().slice(0, 10),
         source_note: "Opening stock",
         notes: "Added when material was created",
+        entry_type: "opening",
       });
       if (invErr) {
         setSavingNewItem(false);
@@ -445,6 +446,7 @@ export default function InventoryPage() {
         cost_each: openCost,
         purchase_date: new Date().toISOString().slice(0, 10),
         notes: "Opening stock (added when part was created)",
+        entry_type: "opening",
       });
       if (invErr) {
         setSavingNewItem(false);
@@ -482,6 +484,7 @@ export default function InventoryPage() {
       cost_per_foot: cost,
       purchase_date: rmForm.purchase_date,
       notes: rmForm.notes.trim() || null,
+      entry_type: "purchase",
     });
     setSavingPurchase(false);
     if (error) {
@@ -514,6 +517,7 @@ export default function InventoryPage() {
       cost_each: cost,
       purchase_date: ppForm.purchase_date,
       notes: ppForm.notes.trim() || null,
+      entry_type: "purchase",
     });
     setSavingPurchase(false);
     if (error) {
@@ -639,7 +643,7 @@ export default function InventoryPage() {
                           <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Material</th>
                           <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Available (ft)</th>
                           <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Allocated (ft)</th>
-                          <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">LIFO $/ft</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost / ft</th>
                           <th className="px-4 py-2"></th>
                         </tr>
                       </thead>
@@ -654,7 +658,7 @@ export default function InventoryPage() {
                               <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{m.available.toFixed(2)}</span>
                             </td>
                             <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{m.allocated.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.lifoCostPerFoot.toFixed(4)}</td>
+                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.costPerFoot.toFixed(4)}</td>
                             <td className="px-4 py-3 text-sm text-right">
                               <Link href={"/admin/inventory/material/" + m.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
                             </td>
@@ -693,7 +697,7 @@ export default function InventoryPage() {
                         <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Part</th>
                         <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Available</th>
                         <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Allocated</th>
-                        <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">LIFO $ each</th>
+                        <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost each</th>
                         <th className="px-4 py-2"></th>
                       </tr>
                     </thead>
@@ -736,7 +740,7 @@ export default function InventoryPage() {
               <tr>
                 <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
                 <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">On hand</th>
-                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Latest cost/unit</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost / unit</th>
                 <th className="px-4 py-2"></th>
               </tr>
             </thead>
@@ -750,7 +754,7 @@ export default function InventoryPage() {
                   <td className="px-4 py-3 text-sm text-right font-mono">
                     <span className={f.onHand <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{f.onHand.toFixed(0)}</span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.latestUnitCost != null ? "$" + f.latestUnitCost.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.costPerUnit != null ? "$" + f.costPerUnit.toFixed(2) : "—"}</td>
                   <td className="px-4 py-3 text-sm text-right">
                     <Link href={"/admin/product-templates/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
                   </td>

@@ -221,7 +221,7 @@ export default function ProductTemplatesPage() {
         product_template_id: targetId,
         quantity: openQty,
         cost_per_unit: openCost,
-        source: "adjustment",
+        source: "opening",
         source_job_id: null,
         notes: "Opening stock (added from the template form)",
       });

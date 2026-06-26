@@ -10,6 +10,43 @@ const SHAPES_MAP: Record<string, string> = {
   flat_bar: "Flat Bar",
 };
 
+// ============================================
+// Cost layers — "highest cost still on hand"
+// ============================================
+// Cost is driven only by purchase/opening layers. Stock leaving (pulls and
+// negative adjustments) depletes layers oldest-first; among same-day layers the
+// cheaper is consumed first so the higher-cost stock stays longest. Drops and
+// positive adjustments add quantity but never set price. The reported cost is the
+// highest cost among layers that still have quantity on hand.
+export type CostLayer = { date: string; qty: number; cost: number };
+
+export function highestCostOnHand(layers: CostLayer[], totalOut: number, fallback: number): number {
+  if (layers.length === 0) return fallback;
+  const sorted = [...layers].sort((a, b) => {
+    const d = new Date(a.date).getTime() - new Date(b.date).getTime();
+    if (d !== 0) return d;
+    return a.cost - b.cost; // same day: consume the cheaper layer first
+  });
+  let out = totalOut;
+  let maxCost = 0;
+  let anyRemaining = false;
+  for (const layer of sorted) {
+    let remaining = layer.qty;
+    if (out > 0) {
+      const used = Math.min(out, remaining);
+      remaining -= used;
+      out -= used;
+    }
+    if (remaining > 0.0001) {
+      anyRemaining = true;
+      if (layer.cost > maxCost) maxCost = layer.cost;
+    }
+  }
+  // If every layer is depleted (e.g. saved drops were re-pulled), fall back to
+  // the most recent layer's cost so we never report $0.
+  return anyRemaining ? maxCost : sorted[sorted.length - 1].cost;
+}
+
 export type AvailableRawMaterial = {
   id: string;
   shape: string;
@@ -21,7 +58,7 @@ export type AvailableRawMaterial = {
   totalInStock: number;
   allocated: number;
   available: number;
-  lifoCostPerFoot: number;
+  costPerFoot: number; // highest cost still on hand (see highestCostOnHand)
 };
 
 export type AvailablePurchasedPart = {
@@ -36,7 +73,7 @@ export type AvailablePurchasedPart = {
   totalInStock: number;
   allocated: number;
   available: number;
-  lifoCostEach: number;
+  costEach: number; // highest cost still on hand (see highestCostOnHand)
 };
 
 // Pull all raw materials with computed in-stock, allocated, and available quantities.
@@ -51,7 +88,7 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
       .order("size"),
     supabase
       .from("raw_material_inventory")
-      .select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date"),
+      .select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type"),
     supabase
       .from("inventory_allocations")
       .select("raw_material_id, allocated_quantity")
@@ -72,13 +109,20 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
       .filter((a) => a.raw_material_id === m.id)
       .reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
 
-    // LIFO: cost from the most recent purchase batch
-    const sortedBatches = [...batches].sort(
-      (a, b) => new Date(b.purchase_date).getTime() - new Date(a.purchase_date).getTime()
-    );
-    const lifoCostPerFoot = sortedBatches.length > 0
-      ? Number(sortedBatches[0].cost_per_foot)
-      : Number(m.current_cost_per_foot);
+    // Cost layers: feet added by purchases/opening stock; feet removed by pulls
+    // and negative adjustments deplete them oldest-first.
+    const layers: CostLayer[] = batches
+      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity_sticks) > 0)
+      .map((b) => ({
+        date: b.purchase_date,
+        qty: Number(b.stick_length_feet) * Number(b.quantity_sticks),
+        cost: Number(b.cost_per_foot),
+      }));
+    const totalOut = batches.reduce((sum, b) => {
+      const feet = Number(b.stick_length_feet) * Number(b.quantity_sticks);
+      return feet < 0 ? sum + -feet : sum;
+    }, 0);
+    const costPerFoot = highestCostOnHand(layers, totalOut, Number(m.current_cost_per_foot));
 
     return {
       id: m.id,
@@ -91,7 +135,7 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
       totalInStock,
       allocated,
       available: totalInStock - allocated,
-      lifoCostPerFoot,
+      costPerFoot,
     };
   });
 }
@@ -106,7 +150,7 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
       .order("name"),
     supabase
       .from("purchased_parts_inventory")
-      .select("purchased_part_id, quantity, cost_each, purchase_date"),
+      .select("purchased_part_id, quantity, cost_each, purchase_date, entry_type"),
     supabase
       .from("inventory_allocations")
       .select("purchased_part_id, allocated_quantity")
@@ -127,12 +171,15 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
       .filter((a) => a.purchased_part_id === p.id)
       .reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
 
-    const sortedBatches = [...batches].sort(
-      (a, b) => new Date(b.purchase_date).getTime() - new Date(a.purchase_date).getTime()
-    );
-    const lifoCostEach = sortedBatches.length > 0
-      ? Number(sortedBatches[0].cost_each)
-      : Number(p.current_cost_each);
+    // Cost layers: purchases/opening add stock; pulls and negative adjustments deplete oldest-first.
+    const layers: CostLayer[] = batches
+      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity) > 0)
+      .map((b) => ({ date: b.purchase_date, qty: Number(b.quantity), cost: Number(b.cost_each) }));
+    const totalOut = batches.reduce((sum, b) => {
+      const q = Number(b.quantity);
+      return q < 0 ? sum + -q : sum;
+    }, 0);
+    const costEach = highestCostOnHand(layers, totalOut, Number(p.current_cost_each));
 
     return {
       id: p.id,
@@ -146,7 +193,7 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
       totalInStock,
       allocated,
       available: totalInStock - allocated,
-      lifoCostEach,
+      costEach,
     };
   });
 }
@@ -156,18 +203,17 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
 // ============================================
 
 export type FabricatedStockItem = {
-  id: string;                    // product_template_id
+  id: string;                 // product_template_id
   name: string;
   product_number: string | null;
   is_active: boolean;
-  onHand: number;                // running sum of the ledger (signed)
-  latestUnitCost: number | null; // cost-per-unit of the most recent stock-in (build or opening)
-  lastStockInAt: string | null;
+  onHand: number;             // running sum of the ledger (signed)
+  costPerUnit: number | null; // highest cost still on hand (builds + opening stock)
 };
 
 // Each stockable template, with its on-hand quantity (sum of the fabricated_inventory
-// ledger) and the cost-per-unit captured on its most recent stock-in (a build receipt
-// or an opening-stock entry).
+// ledger) and its unit cost under the "highest cost still on hand" rule: build and
+// opening-stock entries are price layers; consumption depletes them oldest-first.
 export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
   const supabase = createClient();
 
@@ -191,18 +237,20 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
   return tpls.map((t) => {
     const rows = ledger.filter((l) => l.product_template_id === t.id);
     const onHand = rows.reduce((s, r) => s + Number(r.quantity), 0);
-    // Most recent positive stock-in of any kind drives the displayed unit cost.
-    const stockIns = rows
-      .filter((r) => Number(r.quantity) > 0)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.source === "build" || r.source === "opening") && Number(r.quantity) > 0)
+      .map((r) => ({ date: r.created_at, qty: Number(r.quantity), cost: Number(r.cost_per_unit) }));
+    const totalOut = rows.reduce((s, r) => {
+      const q = Number(r.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
     return {
       id: t.id,
       name: t.name,
       product_number: t.product_number,
       is_active: t.is_active,
       onHand,
-      latestUnitCost: stockIns.length > 0 ? Number(stockIns[0].cost_per_unit) : null,
-      lastStockInAt: stockIns.length > 0 ? stockIns[0].created_at : null,
+      costPerUnit: layers.length > 0 ? highestCostOnHand(layers, totalOut, 0) : null,
     };
   });
 }
@@ -449,6 +497,7 @@ export async function pullSticks(params: {
     source_note: "Pulled for cutting nest",
     source_job_id: jobId,
     notes: "Sticks pulled for job cutting nest",
+    entry_type: "pull",
   });
 
   // Log the pull entry
@@ -490,6 +539,7 @@ export async function saveDrop(params: {
       source_note: "Drop from job " + jobNumber,
       source_job_id: jobId,
       notes: "Saved remnant from cutting nest",
+      entry_type: "drop",
     })
     .select("id")
     .single();
@@ -534,6 +584,7 @@ export async function reverseCuttingNestEntry(entry: {
       source_note: "Reversed pull",
       source_job_id: entry.job_id,
       notes: "Reversed a cutting nest stick pull",
+      entry_type: "reversal",
     });
   } else if (entry.entry_type === "drop") {
     // Reverse a saved drop by removing the inventory it created (if still present)
@@ -552,6 +603,7 @@ export async function reverseCuttingNestEntry(entry: {
         source_note: "Reversed drop",
         source_job_id: entry.job_id,
         notes: "Reversed a saved drop",
+        entry_type: "reversal",
       });
     }
   }
@@ -619,18 +671,20 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     }
   }
 
-  const [liRes, pickRes, timeRes, varRes, tasksRes] = await Promise.all([
+  const [liRes, pickRes, timeRes, varRes, tasksRes, rmInvRes, ppInvRes] = await Promise.all([
     supabase.from("job_line_items").select("quantity, product_template_id, unit_price, product_templates(retail_price_per_unit)").eq("job_id", jobId),
     supabase
       .from("job_pick_list_items")
-      .select("item_type, planned_quantity, actual_quantity, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .select("item_type, planned_quantity, actual_quantity, raw_material_id, purchased_part_id, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
       .eq("job_id", jobId),
     supabase.from("time_entries").select("started_at, ended_at").eq("job_id", jobId),
     supabase
       .from("job_material_variances")
-      .select("item_type, extra_quantity, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .select("item_type, extra_quantity, raw_material_id, purchased_part_id, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
       .eq("job_id", jobId),
     supabase.from("job_tasks").select("estimated_minutes_total").eq("job_id", jobId),
+    supabase.from("raw_material_inventory").select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type"),
+    supabase.from("purchased_parts_inventory").select("purchased_part_id, quantity, cost_each, purchase_date, entry_type"),
   ]);
 
   type LiRow = { quantity: number; product_template_id: string | null; unit_price: number | null; product_templates: { retail_price_per_unit: number } | null };
@@ -638,6 +692,8 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     item_type: string;
     planned_quantity: number;
     actual_quantity: number;
+    raw_material_id: string | null;
+    purchased_part_id: string | null;
     raw_materials: { current_cost_per_foot: number } | null;
     purchased_parts: { current_cost_each: number } | null;
   };
@@ -645,16 +701,50 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   type VarRow = {
     item_type: string;
     extra_quantity: number;
+    raw_material_id: string | null;
+    purchased_part_id: string | null;
     raw_materials: { current_cost_per_foot: number } | null;
     purchased_parts: { current_cost_each: number } | null;
   };
   type TaskRow = { estimated_minutes_total: number };
+  type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number; cost_per_foot: number; purchase_date: string; entry_type: string | null };
+  type PpInvRow = { purchased_part_id: string; quantity: number; cost_each: number; purchase_date: string; entry_type: string | null };
 
   const lineItems = (liRes.data || []) as unknown as LiRow[];
   const pick = (pickRes.data || []) as unknown as PickRow[];
   const times = (timeRes.data || []) as unknown as TimeRow[];
   const variances = (varRes.data || []) as unknown as VarRow[];
   const tasks = (tasksRes.data || []) as unknown as TaskRow[];
+  const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
+  const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
+
+  // Per-item unit cost under the "highest cost still on hand" rule.
+  function rawCost(rawMaterialId: string | null, fallback: number): number {
+    if (!rawMaterialId) return fallback;
+    const rows = rmInv.filter((r) => r.raw_material_id === rawMaterialId);
+    if (rows.length === 0) return fallback;
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.stick_length_feet) * Number(r.quantity_sticks) > 0)
+      .map((r) => ({ date: r.purchase_date, qty: Number(r.stick_length_feet) * Number(r.quantity_sticks), cost: Number(r.cost_per_foot) }));
+    const out = rows.reduce((s, r) => {
+      const f = Number(r.stick_length_feet) * Number(r.quantity_sticks);
+      return f < 0 ? s + -f : s;
+    }, 0);
+    return highestCostOnHand(layers, out, fallback);
+  }
+  function partCost(purchasedPartId: string | null, fallback: number): number {
+    if (!purchasedPartId) return fallback;
+    const rows = ppInv.filter((r) => r.purchased_part_id === purchasedPartId);
+    if (rows.length === 0) return fallback;
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.quantity) > 0)
+      .map((r) => ({ date: r.purchase_date, qty: Number(r.quantity), cost: Number(r.cost_each) }));
+    const out = rows.reduce((s, r) => {
+      const q = Number(r.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
+    return highestCostOnHand(layers, out, fallback);
+  }
 
   const units = lineItems.reduce((s, li) => s + Number(li.quantity), 0);
 
@@ -674,11 +764,11 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   let estimatePartsCost = 0;
   for (const p of pick) {
     if (p.item_type === "raw_material") {
-      const cost = Number(p.raw_materials?.current_cost_per_foot || 0);
+      const cost = rawCost(p.raw_material_id, Number(p.raw_materials?.current_cost_per_foot || 0));
       materialActualCost += Number(p.actual_quantity) * cost;
       estimateMaterialCost += Number(p.planned_quantity) * cost;
     } else {
-      const cost = Number(p.purchased_parts?.current_cost_each || 0);
+      const cost = partCost(p.purchased_part_id, Number(p.purchased_parts?.current_cost_each || 0));
       partsActualCost += Number(p.actual_quantity) * cost;
       estimatePartsCost += Number(p.planned_quantity) * cost;
     }
@@ -688,9 +778,9 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   let scrapCost = 0;
   for (const v of variances) {
     if (v.item_type === "raw_material") {
-      scrapCost += Number(v.extra_quantity) * Number(v.raw_materials?.current_cost_per_foot || 0);
+      scrapCost += Number(v.extra_quantity) * rawCost(v.raw_material_id, Number(v.raw_materials?.current_cost_per_foot || 0));
     } else {
-      scrapCost += Number(v.extra_quantity) * Number(v.purchased_parts?.current_cost_each || 0);
+      scrapCost += Number(v.extra_quantity) * partCost(v.purchased_part_id, Number(v.purchased_parts?.current_cost_each || 0));
     }
   }
 
