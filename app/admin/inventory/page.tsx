@@ -30,9 +30,6 @@ const CATEGORIES = [
     { value: "other", label: "Other" },
   ] as const;
 
-// Categories whose parts are further grouped by customer in the list.
-const CUSTOMER_GROUPED = new Set(["laser_part", "machined_part"]);
-
 function shapeLabel(s: string) {
   return SHAPES.find((x) => x.value === s)?.label || s;
 }
@@ -189,8 +186,8 @@ export default function InventoryPage() {
       .filter((g) => g.items.length > 0);
   }, [filteredMaterials]);
 
-  // Group parts by category (in CATEGORIES order). Laser & machined parts get a
-  // second level grouped by customer, with an "Unassigned" bucket last.
+  // Group parts by category (in CATEGORIES order). Every category gets a second
+  // level grouped by customer, with an "Unassigned" bucket last.
   const partGroups = useMemo(() => {
     return CATEGORIES
       .map((c) => {
@@ -198,7 +195,7 @@ export default function InventoryPage() {
         let customerGroups:
           | { key: string; label: string; items: AvailablePurchasedPart[] }[]
           | null = null;
-        if (CUSTOMER_GROUPED.has(c.value) && items.length > 0) {
+        if (items.length > 0) {
           const map = new Map<string, { key: string; label: string; items: AvailablePurchasedPart[] }>();
           for (const p of items) {
             const cid = p.customer_id || "__none__";
@@ -964,7 +961,7 @@ export default function InventoryPage() {
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
-                    <p className="text-xs text-gray-500 mt-1">Mainly for laser &amp; machined parts that belong to a specific customer.</p>
+                    <p className="text-xs text-gray-500 mt-1">Set this for any part that belongs to a specific customer.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>

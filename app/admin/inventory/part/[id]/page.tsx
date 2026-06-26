@@ -444,7 +444,7 @@ export default function PartDetailPage() {
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">Mainly for laser &amp; machined parts that belong to a specific customer.</p>
+                <p className="text-xs text-gray-500 mt-1">Set this for any part that belongs to a specific customer.</p>
               </div>
               {editError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{editError}</div>}
               <div className="flex justify-end gap-2 pt-2">
