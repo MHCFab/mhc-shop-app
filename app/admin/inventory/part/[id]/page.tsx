@@ -27,6 +27,7 @@ type PurchasedPart = {
   description: string | null;
   current_cost_each: number;
   is_active: boolean;
+  customer_id: string | null;
 };
 
 type Batch = {
@@ -57,6 +58,7 @@ export default function PartDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
 
   // Manual adjustment modal
   const [showAdjust, setShowAdjust] = useState(false);
@@ -76,6 +78,7 @@ export default function PartDetailPage() {
     category: "other",
     description: "",
     current_cost_each: "",
+    customer_id: "",
   });
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -91,8 +94,8 @@ export default function PartDetailPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [partRes, batchRes, allocRes] = await Promise.all([
-      supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each, is_active").eq("id", id).single(),
+    const [partRes, batchRes, allocRes, custRes] = await Promise.all([
+      supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each, is_active, customer_id").eq("id", id).single(),
       supabase
         .from("purchased_parts_inventory")
         .select("id, quantity, cost_each, purchase_date, notes, suppliers(name)")
@@ -102,6 +105,7 @@ export default function PartDetailPage() {
         .from("inventory_allocations")
         .select("id, allocated_quantity, basis, jobs(id, job_number, status)")
         .eq("purchased_part_id", id),
+      supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
     ]);
 
     if (partRes.error) {
@@ -112,6 +116,7 @@ export default function PartDetailPage() {
     setPart(partRes.data as PurchasedPart);
     setBatches((batchRes.data || []) as unknown as Batch[]);
     setAllocations((allocRes.data || []) as unknown as Allocation[]);
+    setCustomers((custRes.data || []) as unknown as { id: string; name: string }[]);
     setLoading(false);
   }, [supabase, id]);
 
@@ -166,6 +171,7 @@ export default function PartDetailPage() {
       category: part.category,
       description: part.description || "",
       current_cost_each: String(part.current_cost_each),
+      customer_id: part.customer_id || "",
     });
     setShowEdit(true);
   }
@@ -191,6 +197,7 @@ export default function PartDetailPage() {
         category: editForm.category,
         description: editForm.description.trim() || null,
         current_cost_each: cost,
+        customer_id: editForm.customer_id || null,
       })
       .eq("id", id);
     setSavingEdit(false);
@@ -267,6 +274,7 @@ export default function PartDetailPage() {
           <p className="text-gray-500 mt-1">
             {part.part_number && <span>{part.part_number} &middot; </span>}
             {categoryLabel(part.category)} &middot; ${Number(part.current_cost_each).toFixed(4)} each
+            {part.customer_id && <span> &middot; {customers.find((c) => c.id === part.customer_id)?.name || "Unknown customer"}</span>}
           </p>
           {part.description && <p className="text-gray-700 mt-2 max-w-2xl">{part.description}</p>}
         </div>
@@ -427,6 +435,16 @@ export default function PartDetailPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <input type="text" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer <span className="text-gray-400 font-normal">(optional)</span></label>
+                <select value={editForm.customer_id} onChange={(e) => setEditForm({ ...editForm, customer_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">&mdash; None &mdash;</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Mainly for laser &amp; machined parts that belong to a specific customer.</p>
               </div>
               {editError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{editError}</div>}
               <div className="flex justify-end gap-2 pt-2">

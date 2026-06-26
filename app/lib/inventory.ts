@@ -31,6 +31,8 @@ export type AvailablePurchasedPart = {
   category: string;
   current_cost_each: number;
   is_active: boolean;
+  customer_id: string | null;
+  customerName: string | null;
   totalInStock: number;
   allocated: number;
   available: number;
@@ -97,10 +99,10 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
 export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPart[]> {
   const supabase = createClient();
 
-  const [partsRes, invRes, allocRes] = await Promise.all([
+  const [partsRes, invRes, allocRes, custRes] = await Promise.all([
     supabase
       .from("purchased_parts")
-      .select("id, name, part_number, category, current_cost_each, is_active")
+      .select("id, name, part_number, category, current_cost_each, is_active, customer_id")
       .order("name"),
     supabase
       .from("purchased_parts_inventory")
@@ -109,11 +111,14 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
       .from("inventory_allocations")
       .select("purchased_part_id, allocated_quantity")
       .eq("item_type", "purchased_part"),
+    supabase.from("customers").select("id, name"),
   ]);
 
   const parts = partsRes.data || [];
   const inv = invRes.data || [];
   const allocs = allocRes.data || [];
+  const custMap = new Map<string, string>();
+  for (const c of custRes.data || []) custMap.set(c.id, c.name);
 
   return parts.map((p) => {
     const batches = inv.filter((b) => b.purchased_part_id === p.id);
@@ -136,6 +141,8 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
       category: p.category,
       current_cost_each: Number(p.current_cost_each),
       is_active: p.is_active,
+      customer_id: p.customer_id,
+      customerName: p.customer_id ? (custMap.get(p.customer_id) || null) : null,
       totalInStock,
       allocated,
       available: totalInStock - allocated,

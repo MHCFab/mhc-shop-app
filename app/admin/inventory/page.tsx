@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "../../lib/supabase";
 import {
@@ -30,12 +30,11 @@ const CATEGORIES = [
     { value: "other", label: "Other" },
   ] as const;
 
+// Categories whose parts are further grouped by customer in the list.
+const CUSTOMER_GROUPED = new Set(["laser_part", "machined_part"]);
+
 function shapeLabel(s: string) {
   return SHAPES.find((x) => x.value === s)?.label || s;
-}
-
-function categoryLabel(c: string) {
-  return CATEGORIES.find((x) => x.value === c)?.label || c;
 }
 
 function describeMaterial(m: AvailableRawMaterial) {
@@ -62,6 +61,18 @@ export default function InventoryPage() {
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [savingPurchase, setSavingPurchase] = useState(false);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
+  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
+
+  // Collapsible group state (keys are open). Empty = all collapsed.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleGroup(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   // New item modal state
   const [showNewItem, setShowNewItem] = useState(false);
@@ -85,6 +96,7 @@ export default function InventoryPage() {
     category: "other",
     description: "",
     current_cost_each: "",
+    customer_id: "",
     notes: "",
   });
 
@@ -118,14 +130,16 @@ export default function InventoryPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [mats, pts, supsRes] = await Promise.all([
+    const [mats, pts, supsRes, custRes] = await Promise.all([
       getAvailableRawMaterials(),
       getAvailablePurchasedParts(),
       supabase.from("suppliers").select("id, name").order("name"),
+      supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
     ]);
     setMaterials(mats);
     setParts(pts);
     setSuppliers(supsRes.data || []);
+    setCustomers((custRes.data || []) as { id: string; name: string }[]);
     setLoading(false);
   }, [supabase]);
 
@@ -158,6 +172,68 @@ export default function InventoryPage() {
       return true;
     });
   }, [parts, categoryFilter, search, showInactive]);
+
+  // Group materials by shape (in SHAPES order) for collapsible sections.
+  const materialGroups = useMemo(() => {
+    return SHAPES
+      .map((s) => ({
+        key: s.value,
+        label: s.label,
+        items: filteredMaterials.filter((m) => m.shape === s.value),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [filteredMaterials]);
+
+  // Group parts by category (in CATEGORIES order). Laser & machined parts get a
+  // second level grouped by customer, with an "Unassigned" bucket last.
+  const partGroups = useMemo(() => {
+    return CATEGORIES
+      .map((c) => {
+        const items = filteredParts.filter((p) => p.category === c.value);
+        let customerGroups:
+          | { key: string; label: string; items: AvailablePurchasedPart[] }[]
+          | null = null;
+        if (CUSTOMER_GROUPED.has(c.value) && items.length > 0) {
+          const map = new Map<string, { key: string; label: string; items: AvailablePurchasedPart[] }>();
+          for (const p of items) {
+            const cid = p.customer_id || "__none__";
+            const label = p.customerName || "Unassigned";
+            if (!map.has(cid)) map.set(cid, { key: c.value + "::" + cid, label, items: [] });
+            map.get(cid)!.items.push(p);
+          }
+          customerGroups = Array.from(map.values()).sort((a, b) => {
+            if (a.label === "Unassigned") return 1;
+            if (b.label === "Unassigned") return -1;
+            return a.label.localeCompare(b.label);
+          });
+        }
+        return { key: c.value, label: c.label, items, customerGroups };
+      })
+      .filter((g) => g.items.length > 0);
+  }, [filteredParts]);
+
+  // When searching, auto-reveal every group so matches are always visible.
+  const searching = search.trim() !== "";
+  const isOpen = (key: string) => searching || expanded.has(key);
+
+  function renderPartRow(p: AvailablePurchasedPart, indent = false) {
+    return (
+      <tr key={p.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+        <td className={"px-4 py-3 text-sm text-gray-900 font-medium" + (indent ? " pl-12" : "")}>
+          {p.name}{p.part_number ? " (" + p.part_number + ")" : ""}
+          {!p.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+        </td>
+        <td className="px-4 py-3 text-sm text-right font-mono">
+          <span className={p.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{p.available.toFixed(0)}</span>
+        </td>
+        <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{p.allocated.toFixed(0)}</td>
+        <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${p.lifoCostEach.toFixed(4)}</td>
+        <td className="px-4 py-3 text-sm text-right">
+          <Link href={"/admin/inventory/part/" + p.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
+        </td>
+      </tr>
+    );
+  }
 
   function openPurchase() {
     setPurchaseError(null);
@@ -197,6 +273,7 @@ export default function InventoryPage() {
       category: "other",
       description: "",
       current_cost_each: "",
+      customer_id: "",
       notes: "",
     });
     setShowNewItem(true);
@@ -262,6 +339,7 @@ export default function InventoryPage() {
       category: newPartForm.category,
       description: newPartForm.description.trim() || null,
       current_cost_each: cost,
+      customer_id: newPartForm.customer_id || null,
       notes: newPartForm.notes.trim() || null,
       is_active: true,
     });
@@ -423,84 +501,113 @@ export default function InventoryPage() {
       {loading ? (
         <p className="text-gray-600">Loading...</p>
       ) : tab === "raw_materials" ? (
-        filteredMaterials.length === 0 ? (
+        materialGroups.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
             <p className="text-gray-600">No raw materials match your filters.</p>
           </div>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Material</th>
-                  <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Available (ft)</th>
-                  <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Allocated (ft)</th>
-                  <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">LIFO $/ft</th>
-                  <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredMaterials.map((m) => (
-                  <tr key={m.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                      {describeMaterial(m)}
-                      {!m.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-right font-mono">
-                      <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>
-                        {m.available.toFixed(2)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{m.allocated.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.lifoCostPerFoot.toFixed(4)}</td>
-                    <td className="px-4 py-3 text-sm text-right">
-                      <Link href={"/admin/inventory/material/" + m.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-2">
+            {materialGroups.map((g) => {
+              const open = isOpen(g.key);
+              return (
+                <div key={g.key} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                  <button onClick={() => toggleGroup(g.key)} className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left">
+                    <span className="flex items-center gap-2 font-semibold text-gray-900">
+                      <span className={"inline-block transition-transform " + (open ? "rotate-90" : "")}>&#9656;</span>
+                      {g.label}
+                    </span>
+                    <span className="text-sm text-gray-500">{g.items.length} item{g.items.length === 1 ? "" : "s"}</span>
+                  </button>
+                  {open && (
+                    <table className="w-full border-t border-gray-200">
+                      <thead className="bg-white border-b border-gray-200">
+                        <tr>
+                          <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Material</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Available (ft)</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Allocated (ft)</th>
+                          <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">LIFO $/ft</th>
+                          <th className="px-4 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.items.map((m) => (
+                          <tr key={m.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                              {describeMaterial(m)}
+                              {!m.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-right font-mono">
+                              <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{m.available.toFixed(2)}</span>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{m.allocated.toFixed(2)}</td>
+                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.lifoCostPerFoot.toFixed(4)}</td>
+                            <td className="px-4 py-3 text-sm text-right">
+                              <Link href={"/admin/inventory/material/" + m.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )
-      ) : filteredParts.length === 0 ? (
+      ) : partGroups.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
           <p className="text-gray-600">No purchased parts match your filters.</p>
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Part</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Category</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Available</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Allocated</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">LIFO $ each</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredParts.map((p) => (
-                <tr key={p.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                    {p.name}{p.part_number ? " (" + p.part_number + ")" : ""}
-                    {!p.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{categoryLabel(p.category)}</td>
-                  <td className="px-4 py-3 text-sm text-right font-mono">
-                    <span className={p.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>
-                      {p.available.toFixed(0)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{p.allocated.toFixed(0)}</td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${p.lifoCostEach.toFixed(4)}</td>
-                  <td className="px-4 py-3 text-sm text-right">
-                    <Link href={"/admin/inventory/part/" + p.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-2">
+          {partGroups.map((g) => {
+            const open = isOpen(g.key);
+            return (
+              <div key={g.key} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <button onClick={() => toggleGroup(g.key)} className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left">
+                  <span className="flex items-center gap-2 font-semibold text-gray-900">
+                    <span className={"inline-block transition-transform " + (open ? "rotate-90" : "")}>&#9656;</span>
+                    {g.label}
+                  </span>
+                  <span className="text-sm text-gray-500">{g.items.length} item{g.items.length === 1 ? "" : "s"}</span>
+                </button>
+                {open && (
+                  <table className="w-full border-t border-gray-200">
+                    <thead className="bg-white border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Part</th>
+                        <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Available</th>
+                        <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Allocated</th>
+                        <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">LIFO $ each</th>
+                        <th className="px-4 py-2"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.customerGroups
+                        ? g.customerGroups.map((cg) => {
+                            const copen = isOpen(cg.key);
+                            return (
+                              <Fragment key={cg.key}>
+                                <tr className="bg-gray-50/60 border-b border-gray-100">
+                                  <td colSpan={5} className="px-4 py-2 pl-8">
+                                    <button onClick={() => toggleGroup(cg.key)} className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full text-left">
+                                      <span className={"inline-block transition-transform " + (copen ? "rotate-90" : "")}>&#9656;</span>
+                                      {cg.label}
+                                      <span className="text-xs text-gray-400 font-normal">({cg.items.length})</span>
+                                    </button>
+                                  </td>
+                                </tr>
+                                {copen && cg.items.map((p) => renderPartRow(p, true))}
+                              </Fragment>
+                            );
+                          })
+                        : g.items.map((p) => renderPartRow(p))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -738,6 +845,16 @@ export default function InventoryPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                     <input type="text" value={newPartForm.description} onChange={(e) => setNewPartForm({ ...newPartForm, description: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Customer <span className="text-gray-400 font-normal">(optional)</span></label>
+                    <select value={newPartForm.customer_id} onChange={(e) => setNewPartForm({ ...newPartForm, customer_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="">&mdash; None &mdash;</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">Mainly for laser &amp; machined parts that belong to a specific customer.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
