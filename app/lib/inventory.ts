@@ -152,6 +152,60 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
 }
 
 // ============================================
+// Fabricated (stockable sub-assembly) stock
+// ============================================
+
+export type FabricatedStockItem = {
+  id: string;                    // product_template_id
+  name: string;
+  product_number: string | null;
+  is_active: boolean;
+  onHand: number;                // running sum of the ledger (signed)
+  latestBuildCost: number | null; // cost-per-unit of the most recent build receipt
+  lastBuildAt: string | null;
+};
+
+// Each stockable template, with its on-hand quantity (sum of the fabricated_inventory
+// ledger) and the cost-per-unit captured on its most recent build receipt.
+export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
+  const supabase = createClient();
+
+  const [tplRes, ledgerRes] = await Promise.all([
+    supabase
+      .from("product_templates")
+      .select("id, name, product_number, is_active")
+      .eq("is_stockable", true)
+      .order("name"),
+    supabase
+      .from("fabricated_inventory")
+      .select("product_template_id, quantity, cost_per_unit, source, created_at"),
+  ]);
+
+  type TplRow = { id: string; name: string; product_number: string | null; is_active: boolean };
+  type LedgerRow = { product_template_id: string; quantity: number; cost_per_unit: number; source: string; created_at: string };
+
+  const tpls = (tplRes.data || []) as unknown as TplRow[];
+  const ledger = (ledgerRes.data || []) as unknown as LedgerRow[];
+
+  return tpls.map((t) => {
+    const rows = ledger.filter((l) => l.product_template_id === t.id);
+    const onHand = rows.reduce((s, r) => s + Number(r.quantity), 0);
+    const builds = rows
+      .filter((r) => r.source === "build" && Number(r.quantity) > 0)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return {
+      id: t.id,
+      name: t.name,
+      product_number: t.product_number,
+      is_active: t.is_active,
+      onHand,
+      latestBuildCost: builds.length > 0 ? Number(builds[0].cost_per_unit) : null,
+      lastBuildAt: builds.length > 0 ? builds[0].created_at : null,
+    };
+  });
+}
+
+// ============================================
 // Job stock shortfall (stockout alert)
 // ============================================
 

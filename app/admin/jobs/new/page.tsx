@@ -24,6 +24,7 @@ export default function NewJobPage() {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [stockableTemplates, setStockableTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,9 @@ export default function NewJobPage() {
   const [customName, setCustomName] = useState("");
   const [unitPrice, setUnitPrice] = useState("");
 
+  // Build order (build a stockable item to stock)
+  const [isBuild, setIsBuild] = useState(false);
+
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -54,7 +58,7 @@ export default function NewJobPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [custsRes, tplsRes] = await Promise.all([
+    const [custsRes, tplsRes, stockRes] = await Promise.all([
       supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
       supabase
         .from("product_templates")
@@ -62,9 +66,16 @@ export default function NewJobPage() {
         .eq("is_active", true)
         .eq("is_sub_assembly", false)
         .order("name"),
+      supabase
+        .from("product_templates")
+        .select("id, name, product_number, customer_id")
+        .eq("is_active", true)
+        .eq("is_stockable", true)
+        .order("name"),
     ]);
     if (custsRes.data) setCustomers(custsRes.data as Customer[]);
     if (tplsRes.data) setTemplates(tplsRes.data as Template[]);
+    if (stockRes.data) setStockableTemplates(stockRes.data as Template[]);
     setLoading(false);
   }, [supabase]);
 
@@ -76,41 +87,65 @@ export default function NewJobPage() {
   // Products available for the chosen customer
   const customerProducts = templates.filter((t) => t.customer_id === customerId);
 
+  // The source list for the product picker depends on the mode.
+  const pickerSource = isBuild ? stockableTemplates : customerProducts;
+
   // Filtered by the type-ahead search
-  const filteredProducts = customerProducts.filter((t) => {
+  const filteredProducts = pickerSource.filter((t) => {
     if (!productSearch) return true;
     const s = productSearch.toLowerCase();
     return (t.name + " " + (t.product_number || "")).toLowerCase().includes(s);
   });
 
-  const selectedProduct = templates.find((t) => t.id === productId);
+  // selectedProduct may come from either list (build mode uses stockable templates)
+  const selectedProduct = [...templates, ...stockableTemplates].find((t) => t.id === productId);
 
   function pickProduct(t: Template) {
     setProductId(t.id);
     setProductSearch(t.name);
     setShowProductList(false);
     if (!jobNumberEdited) {
-      setJobNumber(t.name);
+      setJobNumber(isBuild ? "Build: " + t.name : t.name);
     }
   }
 
   function onCustomerChange(newCustomerId: string) {
     setCustomerId(newCustomerId);
-    // Reset product selection when customer changes
-    setProductId("");
-    setProductSearch("");
-    setShowProductList(false);
+    // Reset product selection when customer changes (build mode ignores customer for products)
+    if (!isBuild) {
+      setProductId("");
+      setProductSearch("");
+      setShowProductList(false);
+    }
   }
 
   function toggleCustom(checked: boolean) {
     setIsCustom(checked);
-    // Clear the side that no longer applies
+    // Clear product selection; custom and build are mutually exclusive
     setProductId("");
     setProductSearch("");
     setShowProductList(false);
-    if (!checked) {
+    if (checked) {
+      setIsBuild(false);
+    } else {
       setCustomName("");
       setUnitPrice("");
+    }
+  }
+
+  function toggleBuild(checked: boolean) {
+    setIsBuild(checked);
+    // Clear product selection; build and custom are mutually exclusive
+    setProductId("");
+    setProductSearch("");
+    setShowProductList(false);
+    if (checked) {
+      setIsCustom(false);
+      setCustomName("");
+      setUnitPrice("");
+      // Default the customer to your internal "MHC" customer so builds group together.
+      const mhc = customers.find((c) => c.name.trim().toLowerCase() === "mhc");
+      if (mhc) setCustomerId(mhc.id);
     }
   }
 
@@ -325,10 +360,15 @@ export default function NewJobPage() {
       return;
     }
     if (!customerId) {
-      setError("Please select a customer.");
+      setError(isBuild ? "Please select the customer to file this build under (your internal MHC customer)." : "Please select a customer.");
       return;
     }
-    if (isCustom) {
+    if (isBuild) {
+      if (!productId) {
+        setError("Please select the stockable item to build.");
+        return;
+      }
+    } else if (isCustom) {
       if (!customName.trim()) {
         setError("Please describe what you're building.");
         return;
@@ -386,6 +426,9 @@ export default function NewJobPage() {
         due_date: dueDate || null,
         notes: notes.trim() || null,
         board_order: newBoardOrder,
+        is_build_order: isBuild,
+        build_template_id: isBuild ? productId : null,
+        build_quantity: isBuild ? parseInt(quantity) : null,
       })
       .select()
       .single();
@@ -416,7 +459,7 @@ export default function NewJobPage() {
       return;
     }
 
-    // Templated jobs auto-generate their pick list and tasks.
+    // Templated jobs AND build orders auto-generate their pick list and tasks.
     // Custom jobs come in blank — you build the pick list and tasks by hand.
     if (!isCustom) {
       const itemsForGeneration = [{
@@ -480,19 +523,77 @@ export default function NewJobPage() {
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
+            {isBuild && (
+              <p className="text-xs text-gray-500 mt-1">Build orders are filed under your internal customer so they group together on the board.</p>
+            )}
           </div>
 
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
-              checked={isCustom}
-              onChange={(e) => toggleCustom(e.target.checked)}
+              checked={isBuild}
+              onChange={(e) => toggleBuild(e.target.checked)}
               className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
-            <span className="text-sm text-gray-700">Custom one-off job (no product template)</span>
+            <span className="text-sm text-gray-700">Build order (build a stockable fabricated item to stock)</span>
           </label>
 
-          {!isCustom ? (
+          {!isBuild && (
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={isCustom}
+                onChange={(e) => toggleCustom(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm text-gray-700">Custom one-off job (no product template)</span>
+            </label>
+          )}
+
+          {isBuild ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Item to build <span className="text-red-600">*</span>
+              </label>
+              {stockableTemplates.length === 0 ? (
+                <p className="text-sm text-amber-700 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md">
+                  No stockable items yet. Open a sub-assembly in <Link href="/admin/product-templates" className="underline font-medium">Product Templates</Link> and tick &quot;Stockable fabricated item&quot; on its Settings tab.
+                </p>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); setProductId(""); }}
+                    onFocus={() => setShowProductList(true)}
+                    placeholder="Start typing to find a stockable item..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {showProductList && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                      {filteredProducts.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-gray-500">No matching items.</p>
+                      ) : (
+                        filteredProducts.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => pickProduct(t)}
+                            className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
+                          >
+                            {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                  {selectedProduct && (
+                    <p className="text-xs text-green-700 mt-1">Building: {selectedProduct.name}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : !isCustom ? (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Product <span className="text-red-600">*</span>
@@ -573,7 +674,9 @@ export default function NewJobPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity <span className="text-red-600">*</span></label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {isBuild ? "Quantity to build" : "Quantity"} <span className="text-red-600">*</span>
+              </label>
               <input
                 type="number"
                 min="1"
@@ -582,6 +685,9 @@ export default function NewJobPage() {
                 onChange={(e) => setQuantity(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              {isBuild && (
+                <p className="text-xs text-gray-500 mt-1">How many units this build adds to fabricated stock when you receive it.</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -639,7 +745,7 @@ export default function NewJobPage() {
             disabled={saving || customers.length === 0}
             className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {saving ? "Creating job..." : "Create job"}
+            {saving ? "Creating job..." : isBuild ? "Create build order" : "Create job"}
           </button>
         </div>
       </form>

@@ -30,8 +30,15 @@ type Job = {
   notes: string | null;
   released_at: string | null;
   completed_at: string | null;
+  is_build_order: boolean;
+  build_template_id: string | null;
+  build_quantity: number | null;
   customers: { id: string; name: string } | null;
 };
+
+function money(n: number) {
+  return "$" + n.toFixed(2);
+}
 
 type Tab = "overview" | "picklist" | "cuttingnest" | "tasks" | "time" | "cost";
 
@@ -78,6 +85,11 @@ export default function JobDetailPage() {
   const [changingStatus, setChangingStatus] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [invoicing, setInvoicing] = useState(false);
+
+  // Build order: receive into fabricated stock
+  const [receiving, setReceiving] = useState(false);
+  const [buildTemplateName, setBuildTemplateName] = useState<string | null>(null);
+  const [received, setReceived] = useState<{ at: string; costPerUnit: number; qty: number } | null>(null);
 
   // Edit job (name + quantity + due date + custom price)
   const [lineItem, setLineItem] = useState<{ id: string; quantity: number; unit_price: number | null; isCustom: boolean } | null>(null);
@@ -127,6 +139,33 @@ export default function JobDetailPage() {
     } catch (e) {
       console.error("Stock shortfall check failed:", e);
       setShortfall([]);
+    }
+
+    // Build-order extras: the template name and whether it's already been received into stock.
+    const jobData = data as Job | null;
+    if (jobData?.is_build_order) {
+      if (jobData.build_template_id) {
+        const { data: tpl } = await supabase
+          .from("product_templates")
+          .select("name")
+          .eq("id", jobData.build_template_id)
+          .single();
+        setBuildTemplateName((tpl as { name: string } | null)?.name || null);
+      } else {
+        setBuildTemplateName(null);
+      }
+      const { data: fabRows } = await supabase
+        .from("fabricated_inventory")
+        .select("created_at, cost_per_unit, quantity")
+        .eq("source_job_id", id)
+        .eq("source", "build")
+        .order("created_at")
+        .limit(1);
+      const fr = (fabRows || []) as unknown as { created_at: string; cost_per_unit: number; quantity: number }[];
+      setReceived(fr.length > 0 ? { at: fr[0].created_at, costPerUnit: Number(fr[0].cost_per_unit), qty: Number(fr[0].quantity) } : null);
+    } else {
+      setBuildTemplateName(null);
+      setReceived(null);
     }
 
     setLoading(false);
@@ -310,10 +349,76 @@ export default function JobDetailPage() {
     }
   }
 
+  async function receiveBuild() {
+    if (!job || !job.is_build_order || !job.build_template_id || !job.build_quantity) return;
+    const qty = Number(job.build_quantity);
+    if (!(qty > 0)) {
+      alert("This build order has no build quantity set, so there's nothing to receive.");
+      return;
+    }
+    const ok = confirm(
+      "Receive " + qty + " unit(s)" + (buildTemplateName ? " of " + buildTemplateName : "") +
+      " into fabricated stock?\n\nThis captures the build's actual material, parts, and labor as the stocked cost per unit. The raw material and parts this build consumed were already taken out of inventory as you worked the job."
+    );
+    if (!ok) return;
+
+    setReceiving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      let companyId: string | null = null;
+      if (user) {
+        const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+        companyId = profile?.company_id || null;
+      }
+      if (!companyId) {
+        alert("Could not determine your company.");
+        setReceiving(false);
+        return;
+      }
+
+      // Guard against receiving the same build twice.
+      const { data: existing } = await supabase
+        .from("fabricated_inventory")
+        .select("id")
+        .eq("source_job_id", job.id)
+        .eq("source", "build")
+        .limit(1);
+      if (existing && existing.length > 0) {
+        alert("This build has already been received into stock.");
+        setReceiving(false);
+        loadJob();
+        return;
+      }
+
+      const report = await getJobCostReport(job.id);
+      const costPerUnit = qty > 0 ? report.totalActualCost / qty : 0;
+
+      const { error: insErr } = await supabase.from("fabricated_inventory").insert({
+        company_id: companyId,
+        product_template_id: job.build_template_id,
+        quantity: qty,
+        cost_per_unit: costPerUnit,
+        source: "build",
+        source_job_id: job.id,
+        notes: "Received from build order " + job.job_number,
+      });
+      if (insErr) throw new Error(insErr.message);
+
+      await loadJob();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Something went wrong.";
+      alert("Failed to receive into stock: " + msg);
+    } finally {
+      setReceiving(false);
+    }
+  }
+
   async function markInvoiced() {
     if (!job) return;
     const ok = confirm(
-      "Mark " + job.job_number + " as invoiced? This saves the cost summary and task time history to your permanent records, then removes the job from the active system. This cannot be undone."
+      job.is_build_order
+        ? "Archive build order " + job.job_number + "? This saves its cost and task-time history to your permanent records, then removes it from the active board. This cannot be undone. (Its units stay in fabricated stock.)"
+        : "Mark " + job.job_number + " as invoiced? This saves the cost summary and task time history to your permanent records, then removes the job from the active system. This cannot be undone."
     );
     if (!ok) return;
 
@@ -640,7 +745,35 @@ export default function JobDetailPage() {
         </div>
       )}
 
-      {isComplete && (
+      {isComplete && job.is_build_order && !received && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <p className="text-sm font-medium text-blue-900">
+              This build is complete. Receive {job.build_quantity ?? 0} unit(s){buildTemplateName ? " of " + buildTemplateName : ""} into fabricated stock.
+            </p>
+            <p className="text-sm text-blue-700 mt-0.5">Captures the build&apos;s actual material, parts, and labor as the stocked cost per unit.</p>
+          </div>
+          <button onClick={receiveBuild} disabled={receiving} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+            {receiving ? "Receiving..." : "Receive into stock"}
+          </button>
+        </div>
+      )}
+
+      {isComplete && job.is_build_order && received && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <p className="text-sm font-medium text-green-900">
+              Received {received.qty} unit(s) into fabricated stock on {received.at.slice(0, 10)} at {money(received.costPerUnit)}/unit.
+            </p>
+            <p className="text-sm text-green-700 mt-0.5">You can archive this build order to clear it from the board.</p>
+          </div>
+          <button onClick={markInvoiced} disabled={invoicing} className="bg-green-600 text-white px-4 py-2 rounded-md font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
+            {invoicing ? "Archiving..." : "Archive build order"}
+          </button>
+        </div>
+      )}
+
+      {isComplete && !job.is_build_order && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
           <div>
             <p className="text-sm font-medium text-green-900">This job is complete and ready to invoice.</p>

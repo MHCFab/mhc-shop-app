@@ -6,8 +6,10 @@ import { createClient } from "../../lib/supabase";
 import {
   getAvailableRawMaterials,
   getAvailablePurchasedParts,
+  getFabricatedStock,
   type AvailableRawMaterial,
   type AvailablePurchasedPart,
+  type FabricatedStockItem,
 } from "../../lib/inventory";
 
 const SHAPES = [
@@ -39,13 +41,14 @@ function describeMaterial(m: AvailableRawMaterial) {
   return shapeLabel(m.shape) + " " + m.size + wall + " (" + m.grade + ")";
 }
 
-type Tab = "raw_materials" | "purchased_parts";
+type Tab = "raw_materials" | "purchased_parts" | "fabricated";
 
 export default function InventoryPage() {
   const supabase = createClient();
   const [tab, setTab] = useState<Tab>("raw_materials");
   const [materials, setMaterials] = useState<AvailableRawMaterial[]>([]);
   const [parts, setParts] = useState<AvailablePurchasedPart[]>([]);
+  const [fabricated, setFabricated] = useState<FabricatedStockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [shapeFilter, setShapeFilter] = useState("all");
@@ -132,14 +135,16 @@ export default function InventoryPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [mats, pts, supsRes, custRes] = await Promise.all([
+    const [mats, pts, fab, supsRes, custRes] = await Promise.all([
       getAvailableRawMaterials(),
       getAvailablePurchasedParts(),
+      getFabricatedStock(),
       supabase.from("suppliers").select("id, name").order("name"),
       supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
     ]);
     setMaterials(mats);
     setParts(pts);
+    setFabricated(fab);
     setSuppliers(supsRes.data || []);
     setCustomers((custRes.data || []) as { id: string; name: string }[]);
     setLoading(false);
@@ -174,6 +179,18 @@ export default function InventoryPage() {
       return true;
     });
   }, [parts, categoryFilter, search, showInactive]);
+
+  const filteredFabricated = useMemo(() => {
+    return fabricated.filter((f) => {
+      if (!showInactive && !f.is_active) return false;
+      if (search) {
+        const s = search.toLowerCase();
+        const text = (f.name + " " + (f.product_number || "")).toLowerCase();
+        if (!text.includes(s)) return false;
+      }
+      return true;
+    });
+  }, [fabricated, search, showInactive]);
 
   // Group materials by shape (in SHAPES order) for collapsible sections.
   const materialGroups = useMemo(() => {
@@ -542,6 +559,14 @@ export default function InventoryPage() {
           >
             Purchased Parts
           </button>
+          <button
+            onClick={() => setTab("fabricated")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === "fabricated" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            Fabricated
+          </button>
         </div>
       </div>
 
@@ -557,7 +582,7 @@ export default function InventoryPage() {
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
-        ) : (
+        ) : tab === "purchased_parts" ? (
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
@@ -568,7 +593,7 @@ export default function InventoryPage() {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
-        )}
+        ) : null}
         <input
           type="text"
           placeholder="Search..."
@@ -643,7 +668,8 @@ export default function InventoryPage() {
             })}
           </div>
         )
-      ) : partGroups.length === 0 ? (
+      ) : tab === "purchased_parts" ? (
+        partGroups.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
           <p className="text-gray-600">No purchased parts match your filters.</p>
         </div>
@@ -697,6 +723,41 @@ export default function InventoryPage() {
               </div>
             );
           })}
+        </div>
+        )
+      ) : filteredFabricated.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
+          <p className="text-gray-600">No stockable fabricated items yet. Open a sub-assembly in Product Templates and tick &quot;Stockable fabricated item&quot; on its Settings tab, then build it with a build order.</p>
+        </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">On hand</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Latest build $/unit</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredFabricated.map((f) => (
+                <tr key={f.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                    {f.name}{f.product_number ? " (" + f.product_number + ")" : ""}
+                    {!f.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-right font-mono">
+                    <span className={f.onHand <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{f.onHand.toFixed(0)}</span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.latestBuildCost != null ? "$" + f.latestBuildCost.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-3 text-sm text-right">
+                    <Link href={"/admin/product-templates/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

@@ -11,6 +11,7 @@ type Template = {
   description: string | null;
   is_active: boolean;
   is_sub_assembly: boolean;
+  is_stockable: boolean;
   customer_id: string | null;
   retail_price_per_unit: number;
 };
@@ -34,6 +35,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     description: "",
     is_active: true,
     is_sub_assembly: false,
+    is_stockable: false,
     customer_id: "",
     retail_price_per_unit: "",
   });
@@ -55,6 +57,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: data.description || "",
         is_active: data.is_active,
         is_sub_assembly: data.is_sub_assembly,
+        is_stockable: data.is_stockable ?? false,
         customer_id: data.customer_id || "",
         retail_price_per_unit: String(data.retail_price_per_unit ?? ""),
       });
@@ -90,6 +93,8 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: form.description.trim() || null,
         is_active: form.is_active,
         is_sub_assembly: form.is_sub_assembly,
+        // Only a sub-assembly can be a stockable fabricated item.
+        is_stockable: form.is_sub_assembly ? form.is_stockable : false,
         customer_id: form.is_sub_assembly ? null : form.customer_id,
         retail_price_per_unit: parseFloat(form.retail_price_per_unit) || 0,
       })
@@ -150,11 +155,32 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           <input
             type="checkbox"
             checked={form.is_sub_assembly}
-            onChange={(e) => setForm({ ...form, is_sub_assembly: e.target.checked })}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                is_sub_assembly: e.target.checked,
+                // Clearing sub-assembly also clears stockable.
+                is_stockable: e.target.checked ? form.is_stockable : false,
+              })
+            }
             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
         </label>
+
+        {form.is_sub_assembly && (
+          <label className="flex items-start gap-2 ml-6">
+            <input
+              type="checkbox"
+              checked={form.is_stockable}
+              onChange={(e) => setForm({ ...form, is_stockable: e.target.checked })}
+              className="w-4 h-4 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">
+              Stockable fabricated item (build to stock with a build order, then pull from on-hand stock)
+            </span>
+          </label>
+        )}
 
         {!form.is_sub_assembly && (
           <div>
