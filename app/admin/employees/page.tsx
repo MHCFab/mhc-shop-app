@@ -28,6 +28,7 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"active" | "inactive">("active");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -46,6 +47,8 @@ export default function EmployeesPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    const { data: userData } = await supabase.auth.getUser();
+    setCurrentUserId(userData.user?.id ?? null);
     const [empRes, invRes] = await Promise.all([
       supabase.from("profiles").select("id, email, full_name, role, is_active, created_at").order("full_name"),
       supabase.from("employee_invitations").select("id, email, full_name, status, created_at").eq("status", "pending").order("created_at", { ascending: false }),
@@ -139,6 +142,36 @@ export default function EmployeesPage() {
       alert("Failed to update: " + error.message);
       return;
     }
+    loadData();
+  }
+
+  async function makeAdmin(emp: Employee) {
+    if (!confirm("Give " + (emp.full_name || emp.email) + " full admin access? They'll be able to manage employees, settings, and all company data.")) return;
+    setBusyId(emp.id);
+    const { error } = await supabase.from("profiles").update({ role: "admin" }).eq("id", emp.id);
+    setBusyId(null);
+    if (error) {
+      alert("Failed to update: " + error.message);
+      return;
+    }
+    flash((emp.full_name || emp.email) + " is now an admin.");
+    loadData();
+  }
+
+  async function removeAdmin(emp: Employee) {
+    if (emp.id === currentUserId) {
+      alert("You can't remove your own admin access.");
+      return;
+    }
+    if (!confirm("Remove admin access from " + (emp.full_name || emp.email) + "? They'll go back to a regular employee.")) return;
+    setBusyId(emp.id);
+    const { error } = await supabase.from("profiles").update({ role: "employee" }).eq("id", emp.id);
+    setBusyId(null);
+    if (error) {
+      alert("Failed to update: " + error.message);
+      return;
+    }
+    flash("Removed admin access from " + (emp.full_name || emp.email) + ".");
     loadData();
   }
 
@@ -313,11 +346,16 @@ export default function EmployeesPage() {
                     </td>
                     <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
                       {emp.role === "admin" ? (
-                        <span className="text-gray-400">-</span>
+                        emp.id === currentUserId ? (
+                          <span className="text-gray-400">(you)</span>
+                        ) : (
+                          <button onClick={() => removeAdmin(emp)} disabled={busy} className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50">Remove admin</button>
+                        )
                       ) : isEditing ? null : (
                         <>
                           <button onClick={() => openEditName(emp)} disabled={busy} className="text-blue-600 hover:text-blue-800 font-medium mr-3 disabled:opacity-50">Edit</button>
                           <button onClick={() => sendPasswordReset(emp)} disabled={busy} className="text-blue-600 hover:text-blue-800 font-medium mr-3 disabled:opacity-50">Reset password</button>
+                          <button onClick={() => makeAdmin(emp)} disabled={busy} className="text-purple-700 hover:text-purple-900 font-medium mr-3 disabled:opacity-50">Make admin</button>
                           <button onClick={() => toggleActive(emp)} disabled={busy} className="text-amber-700 hover:text-amber-900 font-medium mr-3 disabled:opacity-50">
                             {emp.is_active ? "Deactivate" : "Reactivate"}
                           </button>
