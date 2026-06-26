@@ -226,17 +226,64 @@ export default function PartDetailPage() {
   }
 
   async function handleDelete() {
-    const ok = confirm(
-      "Delete this part from your catalog? This also removes its inventory batches. If it's used by any product template or job, the delete will be blocked."
-    );
-    if (!ok) return;
+    if (!part) return;
     setDeleting(true);
-    const { error } = await supabase.from("purchased_parts").delete().eq("id", id);
-    setDeleting(false);
-    if (error) {
+
+    // 1) Check whether the part is genuinely in use anywhere that must NOT be
+    //    silently rewritten: a product template's BOM, a job's pick list, or a
+    //    job's scrap log. (Invoiced/archived jobs keep a text fallback and have no
+    //    foreign key here, so they don't block.)
+    const [tplRes, pickRes, varRes] = await Promise.all([
+      supabase.from("product_template_parts").select("purchased_part_id", { count: "exact", head: true }).eq("purchased_part_id", id),
+      supabase.from("job_pick_list_items").select("purchased_part_id", { count: "exact", head: true }).eq("purchased_part_id", id),
+      supabase.from("job_material_variances").select("purchased_part_id", { count: "exact", head: true }).eq("purchased_part_id", id),
+    ]);
+
+    const checkErr = tplRes.error || pickRes.error || varRes.error;
+    if (checkErr) {
+      setDeleting(false);
+      alert("Couldn't check whether this part is in use, so it wasn't deleted.\n\nDetails: " + checkErr.message);
+      return;
+    }
+
+    const usedTemplates = tplRes.count || 0;
+    const usedJobs = pickRes.count || 0;
+    const usedScrap = varRes.count || 0;
+
+    if (usedTemplates + usedJobs + usedScrap > 0) {
+      const reasons: string[] = [];
+      if (usedTemplates > 0) reasons.push(usedTemplates + " product template" + (usedTemplates === 1 ? "" : "s"));
+      if (usedJobs > 0) reasons.push(usedJobs + " job pick list" + (usedJobs === 1 ? "" : "s"));
+      if (usedScrap > 0) reasons.push("scrap logged on " + usedScrap + " job " + (usedScrap === 1 ? "entry" : "entries"));
+      setDeleting(false);
       alert(
-        "Can't delete this part because it's used in a product template or job. Mark it inactive instead to hide it from new work.\n\nDetails: " + error.message
+        'Can\'t delete "' + part.name + '" because it\'s still in use: ' + reasons.join(", ") + ".\n\n" +
+        "Deleting it would change past job costs and records, so it's blocked. Use \"Mark inactive\" to hide it from new work while keeping its history intact."
       );
+      return;
+    }
+
+    // 2) Safe to remove. Confirm, then clear the part's own purchase/adjustment
+    //    history (its only remaining references). Allocations cascade automatically.
+    const ok = confirm(
+      'Delete "' + part.name + '" from your catalog? This also removes its purchase and adjustment history. This cannot be undone.'
+    );
+    if (!ok) {
+      setDeleting(false);
+      return;
+    }
+
+    const { error: invErr } = await supabase.from("purchased_parts_inventory").delete().eq("purchased_part_id", id);
+    if (invErr) {
+      setDeleting(false);
+      alert("Couldn't remove this part's inventory history, so it wasn't deleted.\n\nDetails: " + invErr.message);
+      return;
+    }
+
+    const { error: delErr } = await supabase.from("purchased_parts").delete().eq("id", id);
+    setDeleting(false);
+    if (delErr) {
+      alert("Couldn't delete this part.\n\nDetails: " + delErr.message);
       return;
     }
     router.push("/admin/inventory");
