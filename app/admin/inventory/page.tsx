@@ -756,7 +756,7 @@ export default function InventoryPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.costPerUnit != null ? "$" + f.costPerUnit.toFixed(2) : "—"}</td>
                   <td className="px-4 py-3 text-sm text-right">
-                    <Link href={"/admin/product-templates/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
+                    <Link href={"/admin/inventory/fabricated/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
                   </td>
                 </tr>
               ))}

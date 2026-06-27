@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase";
+import { highestCostOnHand, type CostLayer } from "../../../../lib/inventory";
 
 const CATEGORIES = [
   { value: "laser_part", label: "Laser Part" },
@@ -36,6 +37,7 @@ type Batch = {
   cost_each: number;
   purchase_date: string;
   notes: string | null;
+  entry_type: string | null;
   suppliers: { name: string } | null;
 };
 
@@ -98,7 +100,7 @@ export default function PartDetailPage() {
       supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each, is_active, customer_id").eq("id", id).single(),
       supabase
         .from("purchased_parts_inventory")
-        .select("id, quantity, cost_each, purchase_date, notes, suppliers(name)")
+        .select("id, quantity, cost_each, purchase_date, notes, entry_type, suppliers(name)")
         .eq("purchased_part_id", id)
         .order("purchase_date", { ascending: false }),
       supabase
@@ -128,6 +130,19 @@ export default function PartDetailPage() {
   const totalInStock = batches.reduce((sum, b) => sum + Number(b.quantity), 0);
   const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
   const available = totalInStock - totalAllocated;
+
+  // Cost on hand: highest cost among purchase/opening layers still in stock.
+  const costEach = (() => {
+    if (!part) return 0;
+    const layers: CostLayer[] = batches
+      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity) > 0)
+      .map((b) => ({ date: b.purchase_date, qty: Number(b.quantity), cost: Number(b.cost_each) }));
+    const totalOut = batches.reduce((s, b) => {
+      const q = Number(b.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
+    return highestCostOnHand(layers, totalOut, Number(part.current_cost_each));
+  })();
 
   async function saveAdjustment(e: React.FormEvent) {
     e.preventDefault();
@@ -321,7 +336,7 @@ export default function PartDetailPage() {
           </div>
           <p className="text-gray-500 mt-1">
             {part.part_number && <span>{part.part_number} &middot; </span>}
-            {categoryLabel(part.category)} &middot; ${Number(part.current_cost_each).toFixed(4)} each
+            {categoryLabel(part.category)} &middot; ${costEach.toFixed(4)} each <span className="text-gray-400">(cost on hand)</span>
             {part.customer_id && <span> &middot; {customers.find((c) => c.id === part.customer_id)?.name || "Unknown customer"}</span>}
           </p>
           {part.description && <p className="text-gray-700 mt-2 max-w-2xl">{part.description}</p>}

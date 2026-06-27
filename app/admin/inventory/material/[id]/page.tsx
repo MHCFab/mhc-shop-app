@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase";
+import { highestCostOnHand, type CostLayer } from "../../../../lib/inventory";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -12,6 +13,7 @@ const SHAPES_MAP: Record<string, string> = {
   channel: "Channel",
   i_beam: "I-Beam",
   angle: "Angle",
+  flat_bar: "Flat Bar",
 };
 
 const SHAPES = [
@@ -42,6 +44,7 @@ type Batch = {
   purchase_date: string;
   source_note: string | null;
   notes: string | null;
+  entry_type: string | null;
   suppliers: { name: string } | null;
 };
 
@@ -62,6 +65,18 @@ function describeMaterial(m: RawMaterial) {
   return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
 }
 
+function entryTypeLabel(t: string | null): string {
+  switch (t) {
+    case "purchase": return "Purchase";
+    case "opening": return "Opening stock";
+    case "drop": return "Drop returned";
+    case "pull": return "Pulled for job";
+    case "adjustment": return "Adjustment";
+    case "reversal": return "Reversal";
+    default: return "—";
+  }
+}
+
 export default function MaterialDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -74,6 +89,7 @@ export default function MaterialDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"stock" | "history">("stock");
 
   // Manual adjustment modal
   const [showAdjust, setShowAdjust] = useState(false);
@@ -114,7 +130,7 @@ export default function MaterialDetailPage() {
       supabase.from("raw_materials").select("id, shape, size, wall_thickness, grade, current_cost_per_foot, is_active").eq("id", id).single(),
       supabase
         .from("raw_material_inventory")
-        .select("id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, source_note, notes, suppliers(name)")
+        .select("id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, source_note, notes, entry_type, suppliers(name)")
         .eq("raw_material_id", id)
         .order("purchase_date", { ascending: false }),
       supabase
@@ -155,6 +171,19 @@ export default function MaterialDetailPage() {
   const totalInStock = batches.reduce((sum, b) => sum + Number(b.stick_length_feet) * Number(b.quantity_sticks), 0);
   const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
   const available = totalInStock - totalAllocated;
+
+  // Cost on hand: highest cost among purchase/opening layers still in stock.
+  const costOnHand = (() => {
+    if (!material) return 0;
+    const layers: CostLayer[] = batches
+      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.stick_length_feet) * Number(b.quantity_sticks) > 0)
+      .map((b) => ({ date: b.purchase_date, qty: Number(b.stick_length_feet) * Number(b.quantity_sticks), cost: Number(b.cost_per_foot) }));
+    const totalOut = batches.reduce((s, b) => {
+      const f = Number(b.stick_length_feet) * Number(b.quantity_sticks);
+      return f < 0 ? s + -f : s;
+    }, 0);
+    return highestCostOnHand(layers, totalOut, Number(material.current_cost_per_foot));
+  })();
 
   async function saveAdjustment(e: React.FormEvent) {
     e.preventDefault();
@@ -301,7 +330,9 @@ export default function MaterialDetailPage() {
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>
             )}
           </div>
-          <p className="text-gray-500 mt-1">Current catalog cost: ${Number(material.current_cost_per_foot).toFixed(4)} / ft</p>
+          <p className="text-gray-500 mt-1">
+            Cost on hand: ${costOnHand.toFixed(4)} / ft <span className="text-gray-400">(highest-cost stock you still hold)</span>
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setShowAdjust(true)} className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-md font-medium hover:bg-gray-50 transition-colors">
@@ -334,62 +365,131 @@ export default function MaterialDetailPage() {
         </div>
       </div>
 
-      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-          <h3 className="text-base font-semibold text-gray-900">Available lengths</h3>
-          <p className="text-sm text-gray-600">How many sticks of each length you have on hand.</p>
+      <div className="border-b border-gray-200 mb-6">
+        <div className="flex gap-1">
+          <button
+            onClick={() => setTab("stock")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === "stock" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            Stock
+          </button>
+          <button
+            onClick={() => setTab("history")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === "history" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            Purchase &amp; price history
+          </button>
         </div>
-        {lengthGroups.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-gray-600">No inventory in stock.</p>
-        ) : (
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Length</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Sticks</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Total feet</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lengthGroups.map((g) => (
-                <tr key={g.length} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">{g.length.toFixed(2)} ft</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{g.sticks}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{(g.length * g.sticks).toFixed(2)} ft</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      </div>
 
-      {allocations.length > 0 && (
+      {tab === "stock" && (
+        <>
+          <section className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+              <h3 className="text-base font-semibold text-gray-900">Available lengths</h3>
+              <p className="text-sm text-gray-600">How many sticks of each length you have on hand.</p>
+            </div>
+            {lengthGroups.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-600">No inventory in stock.</p>
+            ) : (
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Length</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Sticks</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Total feet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lengthGroups.map((g) => (
+                    <tr key={g.length} className="border-b border-gray-100 last:border-0">
+                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">{g.length.toFixed(2)} ft</td>
+                      <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{g.sticks}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{(g.length * g.sticks).toFixed(2)} ft</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          {allocations.length > 0 && (
+            <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                <h3 className="text-base font-semibold text-gray-900">Allocated to jobs</h3>
+              </div>
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Job</th>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Basis</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Allocated (ft)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allocations.map((a) => (
+                    <tr key={a.id} className="border-b border-gray-100 last:border-0">
+                      <td className="px-4 py-3 text-sm">
+                        {a.jobs ? (
+                          <Link href={"/admin/jobs/" + a.jobs.id} className="text-blue-600 hover:text-blue-800 font-medium">{a.jobs.job_number}</Link>
+                        ) : "Unknown job"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700 capitalize">{a.basis}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(a.allocated_quantity).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
+      )}
+
+      {tab === "history" && (
         <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-            <h3 className="text-base font-semibold text-gray-900">Allocated to jobs</h3>
+            <h3 className="text-base font-semibold text-gray-900">Purchase &amp; price history</h3>
+            <p className="text-sm text-gray-600">Every stock movement, newest first. Only purchases and opening stock set the cost.</p>
           </div>
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Job</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Basis</th>
-                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Allocated (ft)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allocations.map((a) => (
-                <tr key={a.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm">
-                    {a.jobs ? (
-                      <Link href={"/admin/jobs/" + a.jobs.id} className="text-blue-600 hover:text-blue-800 font-medium">{a.jobs.job_number}</Link>
-                    ) : "Unknown job"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-700 capitalize">{a.basis}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(a.allocated_quantity).toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {batches.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-gray-600">No history yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Date</th>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Type</th>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Supplier</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Length</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Qty sticks</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Cost / ft</th>
+                    <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batches.map((b) => {
+                    const qty = Number(b.quantity_sticks);
+                    return (
+                      <tr key={b.id} className="border-b border-gray-100 last:border-0">
+                        <td className="px-4 py-3 text-sm text-gray-900">{b.purchase_date}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{entryTypeLabel(b.entry_type)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{Number(b.stick_length_feet).toFixed(2)} ft</td>
+                        <td className={"px-4 py-3 text-sm text-right font-mono " + (qty < 0 ? "text-red-600" : "text-gray-900")}>{qty > 0 ? "+" : ""}{qty}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_per_foot).toFixed(4)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{b.notes || b.source_note || "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 
@@ -398,7 +498,7 @@ export default function MaterialDetailPage() {
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <form onSubmit={saveAdjustment} className="p-6 space-y-3">
               <h2 className="text-xl font-bold text-gray-900">Adjust inventory</h2>
-              <p className="text-sm text-gray-600">Add or remove stock manually. Use a negative quantity to remove sticks (for example after scrapping a damaged piece).</p>
+              <p className="text-sm text-gray-600">Add or remove stock manually. Use a negative quantity to remove sticks (for example after scrapping a damaged piece). Adjustments change quantity only and never change the cost.</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (ft)</label>
@@ -460,10 +560,11 @@ export default function MaterialDetailPage() {
                   <input type="text" value={editForm.grade} onChange={(e) => setEditForm({ ...editForm, grade: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Current cost / ft</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Current cost / ft <span className="text-gray-400 font-normal">(seed)</span></label>
                   <input type="number" step="0.0001" min="0" value={editForm.current_cost_per_foot} onChange={(e) => setEditForm({ ...editForm, current_cost_per_foot: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
+              <p className="text-xs text-gray-500">Cost on hand is figured automatically from your purchases. This seed is only used before any stock has been purchased.</p>
               {editError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{editError}</div>}
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowEdit(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>

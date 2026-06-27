@@ -48,7 +48,15 @@ captured per-unit cost) to be decided — see #4.
 ### 6. Phase 3 — shared-nest builds + reorder targets
 Build multiple stockable items from a shared cutting nest; set reorder points/targets per fabricated item.
 
-## Done (this work)
-- Phase 1 fabricated sub-assemblies (stockable flag, build orders, receive-to-stock, Fabricated tab). Deployed.
+## Batch B — costing UI (DONE, pending deploy)
+- Raw-material detail page: Stock / History tabs; purchase & price history table with a Type column; headline shows computed cost on hand.
+- New fabricated detail page (Overview + History tabs); Fabricated tab "View item" now links there.
+- Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
+
+## Done (deployed)
+- Phase 1 fabricated sub-assemblies (stockable flag, build orders, receive-to-stock, Fabricated tab).
 - Purchased-part delete: accurate in-use check + safe cleanup.
 - Stockable toggle + opening stock on the template create/edit form.
+- Costing rule "highest cost still on hand" live across the inventory list and the job cost report
+  (items 1, 2, and part of 4 above). entry_type schema + tagging in place. LIFO columns relabeled "Cost".
+  Item 3 (material purchase-history table) and the detail-page cost display are the remaining Batch B work.
