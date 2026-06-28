@@ -72,6 +72,12 @@ export default function CostTab({ jobId }: { jobId: string }) {
               <td className="px-4 py-3 text-sm text-gray-500 pl-8">of which scrap</td>
               <td className="px-4 py-3 text-sm text-gray-500 text-right font-mono">{money(report.scrapCost)}</td>
             </tr>
+            {(report.fabricatedActualCost > 0 || report.estimateFabricatedCost > 0) && (
+              <tr className="border-b border-gray-100">
+                <td className="px-4 py-3 text-sm text-gray-700">Fabricated sub-assemblies (pulled from stock)</td>
+                <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{money(report.fabricatedActualCost)}</td>
+              </tr>
+            )}
             <tr className="bg-gray-50">
               <td className="px-4 py-3 text-sm font-semibold text-gray-900">Total cost</td>
               <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right font-mono">{money(report.totalActualCost)}</td>
@@ -130,6 +136,13 @@ export default function CostTab({ jobId }: { jobId: string }) {
               <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{money(report.estimatePartsCost)}</td>
               <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{money(report.partsActualCost)}</td>
             </tr>
+            {(report.fabricatedActualCost > 0 || report.estimateFabricatedCost > 0) && (
+              <tr className="border-b border-gray-100">
+                <td className="px-4 py-3 text-sm text-gray-700">Fabricated sub-assemblies</td>
+                <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{money(report.estimateFabricatedCost)}</td>
+                <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{money(report.fabricatedActualCost)}</td>
+              </tr>
+            )}
             <tr className="border-b border-gray-100">
               <td className="px-4 py-3 text-sm text-gray-700">Labor</td>
               <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{money(report.estimateLaborCost)}</td>

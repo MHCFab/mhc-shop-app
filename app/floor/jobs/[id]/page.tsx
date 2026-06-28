@@ -511,10 +511,12 @@ type PickItem = {
     id: string;
     item_type: string;
     raw_material_id: string | null;
+    product_template_id: string | null;
     planned_quantity: number;
     unit: string;
     raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
     purchased_parts: { name: string; part_number: string | null } | null;
+    product_templates: { name: string; product_number: string | null } | null;
   };
   
   type NestPull = {
@@ -535,7 +537,7 @@ type PickItem = {
       const [itemsRes, pullsRes] = await Promise.all([
         supabase
           .from("job_pick_list_items")
-          .select("id, item_type, raw_material_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number)")
+          .select("id, item_type, raw_material_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
           .eq("job_id", jobId)
           .order("item_type"),
         supabase
@@ -569,6 +571,10 @@ type PickItem = {
         const p = item.purchased_parts;
         return p.name + (p.part_number ? " (" + p.part_number + ")" : "");
       }
+      if (item.item_type === "fabricated" && item.product_templates) {
+        const t = item.product_templates;
+        return t.name + (t.product_number ? " (" + t.product_number + ")" : "");
+      }
       return "Item";
     }
   
@@ -588,6 +594,7 @@ type PickItem = {
   
     const materials = items.filter((i) => i.item_type === "raw_material");
     const parts = items.filter((i) => i.item_type === "purchased_part");
+    const fabricated = items.filter((i) => i.item_type === "fabricated");
   
     return (
       <div className="space-y-4">
@@ -623,6 +630,19 @@ type PickItem = {
             <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Purchased Parts</div>
             <ul className="divide-y divide-gray-100">
               {parts.map((i) => (
+                <li key={i.id} className="px-4 py-3 flex items-center justify-between">
+                  <span className="text-gray-900">{describe(i)}</span>
+                  <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {fabricated.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Fabricated Sub-Assemblies (grab from stock)</div>
+            <ul className="divide-y divide-gray-100">
+              {fabricated.map((i) => (
                 <li key={i.id} className="px-4 py-3 flex items-center justify-between">
                   <span className="text-gray-900">{describe(i)}</span>
                   <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>

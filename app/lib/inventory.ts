@@ -260,10 +260,10 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
 // ============================================
 
 export type JobStockShortfallItem = {
-  itemType: "raw_material" | "purchased_part";
-  id: string;        // raw_material_id or purchased_part_id
+  itemType: "raw_material" | "purchased_part" | "fabricated";
+  id: string;        // raw_material_id, purchased_part_id, or product_template_id
   label: string;     // human-readable description
-  unit: string;      // "ft" for materials, "ea" for parts
+  unit: string;      // "ft" for materials, "ea" for parts and fabricated units
   required: number;  // how much this job needs (from its pick list)
   available: number; // stock on hand minus what OTHER jobs have claimed
   short: number;     // how much you still need to acquire (required - available, min 0)
@@ -275,10 +275,10 @@ export type JobStockShortfallItem = {
 export async function getJobStockShortfall(jobId: string): Promise<JobStockShortfallItem[]> {
   const supabase = createClient();
 
-  const [pickRes, rmInvRes, ppInvRes, allocRes] = await Promise.all([
+  const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes] = await Promise.all([
     supabase
       .from("job_pick_list_items")
-      .select("item_type, raw_material_id, purchased_part_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number)")
+      .select("item_type, raw_material_id, purchased_part_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
       .eq("job_id", jobId),
     supabase
       .from("raw_material_inventory")
@@ -286,10 +286,13 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     supabase
       .from("purchased_parts_inventory")
       .select("purchased_part_id, quantity"),
+    supabase
+      .from("fabricated_inventory")
+      .select("product_template_id, quantity"),
     // All allocations EXCEPT this job's own, so we don't count the job against itself
     supabase
       .from("inventory_allocations")
-      .select("item_type, raw_material_id, purchased_part_id, allocated_quantity")
+      .select("item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity")
       .neq("job_id", jobId),
   ]);
 
@@ -297,21 +300,25 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     item_type: string;
     raw_material_id: string | null;
     purchased_part_id: string | null;
+    product_template_id: string | null;
     planned_quantity: number;
     unit: string;
     raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
     purchased_parts: { name: string; part_number: string | null } | null;
+    product_templates: { name: string; product_number: string | null } | null;
   };
   type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number };
   type PpInvRow = { purchased_part_id: string; quantity: number };
-  type AllocRow = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; allocated_quantity: number };
+  type FabInvRow = { product_template_id: string; quantity: number };
+  type AllocRow = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null; allocated_quantity: number };
 
   const pick = (pickRes.data || []) as unknown as PickRow[];
   const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
   const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
+  const fabInv = (fabInvRes.data || []) as unknown as FabInvRow[];
   const allocs = (allocRes.data || []) as unknown as AllocRow[];
 
-  // Total stock on hand per material / part
+  // Total stock on hand per material / part / fabricated item
   const rmStock = new Map<string, number>();
   for (const b of rmInv) {
     rmStock.set(
@@ -323,15 +330,22 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   for (const b of ppInv) {
     ppStock.set(b.purchased_part_id, (ppStock.get(b.purchased_part_id) || 0) + Number(b.quantity));
   }
+  const fabStock = new Map<string, number>();
+  for (const b of fabInv) {
+    fabStock.set(b.product_template_id, (fabStock.get(b.product_template_id) || 0) + Number(b.quantity));
+  }
 
   // What OTHER jobs have already claimed
   const rmAlloc = new Map<string, number>();
   const ppAlloc = new Map<string, number>();
+  const fabAlloc = new Map<string, number>();
   for (const a of allocs) {
     if (a.item_type === "raw_material" && a.raw_material_id) {
       rmAlloc.set(a.raw_material_id, (rmAlloc.get(a.raw_material_id) || 0) + Number(a.allocated_quantity));
     } else if (a.item_type === "purchased_part" && a.purchased_part_id) {
       ppAlloc.set(a.purchased_part_id, (ppAlloc.get(a.purchased_part_id) || 0) + Number(a.allocated_quantity));
+    } else if (a.item_type === "fabricated" && a.product_template_id) {
+      fabAlloc.set(a.product_template_id, (fabAlloc.get(a.product_template_id) || 0) + Number(a.allocated_quantity));
     }
   }
 
@@ -381,13 +395,37 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
           short: 0,
         });
       }
+    } else if (row.item_type === "fabricated" && row.product_template_id) {
+      const key = "fab:" + row.product_template_id;
+      const existing = reqMap.get(key);
+      if (existing) {
+        existing.required += planned;
+      } else {
+        reqMap.set(key, {
+          itemType: "fabricated",
+          id: row.product_template_id,
+          label: row.product_templates
+            ? row.product_templates.name + (row.product_templates.product_number ? " (" + row.product_templates.product_number + ")" : "")
+            : "Fabricated item",
+          unit: row.unit || "ea",
+          required: planned,
+          available: 0,
+          short: 0,
+        });
+      }
     }
   }
 
   const result: JobStockShortfallItem[] = [];
   for (const item of reqMap.values()) {
-    const stock = item.itemType === "raw_material" ? (rmStock.get(item.id) || 0) : (ppStock.get(item.id) || 0);
-    const claimedByOthers = item.itemType === "raw_material" ? (rmAlloc.get(item.id) || 0) : (ppAlloc.get(item.id) || 0);
+    const stock =
+      item.itemType === "raw_material" ? (rmStock.get(item.id) || 0)
+      : item.itemType === "purchased_part" ? (ppStock.get(item.id) || 0)
+      : (fabStock.get(item.id) || 0);
+    const claimedByOthers =
+      item.itemType === "raw_material" ? (rmAlloc.get(item.id) || 0)
+      : item.itemType === "purchased_part" ? (ppAlloc.get(item.id) || 0)
+      : (fabAlloc.get(item.id) || 0);
     const available = stock - claimedByOthers;
     const short = item.required - available;
 
@@ -398,9 +436,10 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     if (short > 0.001) result.push(item);
   }
 
-  // Materials first, then parts, each alphabetical by label
+  // Materials first, then parts, then fabricated; each alphabetical by label
+  const typeOrder: Record<string, number> = { raw_material: 0, purchased_part: 1, fabricated: 2 };
   result.sort((a, b) => {
-    if (a.itemType !== b.itemType) return a.itemType === "raw_material" ? -1 : 1;
+    if (a.itemType !== b.itemType) return typeOrder[a.itemType] - typeOrder[b.itemType];
     return a.label.localeCompare(b.label);
   });
 
@@ -422,11 +461,15 @@ export async function allocateJobInventory(jobId: string, companyId: string): Pr
   // Read the job's pick list
   const { data: pickList } = await supabase
     .from("job_pick_list_items")
-    .select("item_type, raw_material_id, purchased_part_id, planned_quantity, unit")
+    .select("item_type, raw_material_id, purchased_part_id, product_template_id, planned_quantity, unit")
     .eq("job_id", jobId);
 
   if (!pickList || pickList.length === 0) return;
 
+  // Soft reservations for every line — raw materials, purchased parts, AND
+  // fabricated sub-assemblies. Fabricated units reserve against fabricated stock
+  // exactly like purchased parts reserve against parts stock: the ledger itself
+  // isn't decremented here, only held by the allocation.
   const rows = pickList
     .filter((item) => Number(item.planned_quantity) > 0)
     .map((item) => ({
@@ -435,6 +478,7 @@ export async function allocateJobInventory(jobId: string, companyId: string): Pr
       item_type: item.item_type,
       raw_material_id: item.raw_material_id,
       purchased_part_id: item.purchased_part_id,
+      product_template_id: item.product_template_id,
       allocated_quantity: Number(item.planned_quantity),
       unit: item.unit,
       basis: "estimated" as const,
@@ -623,17 +667,20 @@ export type JobCostReport = {
   laborCost: number;
   materialActualCost: number;
   partsActualCost: number;
+  fabricatedActualCost: number;
   scrapCost: number;
   totalActualCost: number;
   costPerUnit: number;
   // Estimate
   estimateMaterialCost: number;
   estimatePartsCost: number;
+  estimateFabricatedCost: number;
   estimateLaborCost: number;
   totalEstimate: number;
   // Suggested retail
   suggestedMaterial: number;
   suggestedParts: number;
+  suggestedFabricated: number;
   suggestedLabor: number;
   suggestedRetailTotal: number;
   suggestedRetailPerUnit: number;
@@ -671,11 +718,11 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     }
   }
 
-  const [liRes, pickRes, timeRes, varRes, tasksRes, rmInvRes, ppInvRes] = await Promise.all([
+  const [liRes, pickRes, timeRes, varRes, tasksRes, rmInvRes, ppInvRes, fabInvRes] = await Promise.all([
     supabase.from("job_line_items").select("quantity, product_template_id, unit_price, product_templates(retail_price_per_unit)").eq("job_id", jobId),
     supabase
       .from("job_pick_list_items")
-      .select("item_type, planned_quantity, actual_quantity, raw_material_id, purchased_part_id, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .select("item_type, planned_quantity, actual_quantity, raw_material_id, purchased_part_id, product_template_id, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
       .eq("job_id", jobId),
     supabase.from("time_entries").select("started_at, ended_at").eq("job_id", jobId),
     supabase
@@ -685,6 +732,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     supabase.from("job_tasks").select("estimated_minutes_total").eq("job_id", jobId),
     supabase.from("raw_material_inventory").select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type"),
     supabase.from("purchased_parts_inventory").select("purchased_part_id, quantity, cost_each, purchase_date, entry_type"),
+    supabase.from("fabricated_inventory").select("product_template_id, quantity, cost_per_unit, source, created_at"),
   ]);
 
   type LiRow = { quantity: number; product_template_id: string | null; unit_price: number | null; product_templates: { retail_price_per_unit: number } | null };
@@ -694,6 +742,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     actual_quantity: number;
     raw_material_id: string | null;
     purchased_part_id: string | null;
+    product_template_id: string | null;
     raw_materials: { current_cost_per_foot: number } | null;
     purchased_parts: { current_cost_each: number } | null;
   };
@@ -709,6 +758,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   type TaskRow = { estimated_minutes_total: number };
   type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number; cost_per_foot: number; purchase_date: string; entry_type: string | null };
   type PpInvRow = { purchased_part_id: string; quantity: number; cost_each: number; purchase_date: string; entry_type: string | null };
+  type FabInvRow = { product_template_id: string; quantity: number; cost_per_unit: number; source: string; created_at: string };
 
   const lineItems = (liRes.data || []) as unknown as LiRow[];
   const pick = (pickRes.data || []) as unknown as PickRow[];
@@ -717,6 +767,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   const tasks = (tasksRes.data || []) as unknown as TaskRow[];
   const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
   const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
+  const fabInv = (fabInvRes.data || []) as unknown as FabInvRow[];
 
   // Per-item unit cost under the "highest cost still on hand" rule.
   function rawCost(rawMaterialId: string | null, fallback: number): number {
@@ -745,6 +796,21 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     }, 0);
     return highestCostOnHand(layers, out, fallback);
   }
+  // Per-unit cost of a fabricated sub-assembly under the same rule: build and
+  // opening rows are price layers; consumption depletes them oldest-first.
+  function fabCost(productTemplateId: string | null): number {
+    if (!productTemplateId) return 0;
+    const rows = fabInv.filter((r) => r.product_template_id === productTemplateId);
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.source === "build" || r.source === "opening") && Number(r.quantity) > 0)
+      .map((r) => ({ date: r.created_at, qty: Number(r.quantity), cost: Number(r.cost_per_unit) }));
+    if (layers.length === 0) return 0;
+    const out = rows.reduce((s, r) => {
+      const q = Number(r.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
+    return highestCostOnHand(layers, out, 0);
+  }
 
   const units = lineItems.reduce((s, li) => s + Number(li.quantity), 0);
 
@@ -757,16 +823,24 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   const laborHours = laborMinutes / 60;
   const laborCost = laborHours * burdenRate;
 
-  // Material & parts actual cost
+  // Material, parts, and fabricated-stock actual cost
   let materialActualCost = 0;
   let partsActualCost = 0;
+  let fabricatedActualCost = 0;
   let estimateMaterialCost = 0;
   let estimatePartsCost = 0;
+  let estimateFabricatedCost = 0;
   for (const p of pick) {
     if (p.item_type === "raw_material") {
       const cost = rawCost(p.raw_material_id, Number(p.raw_materials?.current_cost_per_foot || 0));
       materialActualCost += Number(p.actual_quantity) * cost;
       estimateMaterialCost += Number(p.planned_quantity) * cost;
+    } else if (p.item_type === "fabricated") {
+      // Fabricated units are pulled at the planned quantity at release (no
+      // cutting-nest "actual" applies), so planned drives both estimate and actual.
+      const cost = fabCost(p.product_template_id);
+      fabricatedActualCost += Number(p.planned_quantity) * cost;
+      estimateFabricatedCost += Number(p.planned_quantity) * cost;
     } else {
       const cost = partCost(p.purchased_part_id, Number(p.purchased_parts?.current_cost_each || 0));
       partsActualCost += Number(p.actual_quantity) * cost;
@@ -784,20 +858,21 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     }
   }
 
-  const totalActualCost = laborCost + materialActualCost + partsActualCost;
+  const totalActualCost = laborCost + materialActualCost + partsActualCost + fabricatedActualCost;
   const costPerUnit = units > 0 ? totalActualCost / units : 0;
 
   // Estimate labor from template task estimates
   const estimateLaborMinutes = tasks.reduce((s, t) => s + Number(t.estimated_minutes_total), 0);
   const estimateLaborCost = (estimateLaborMinutes / 60) * burdenRate;
-  const totalEstimate = estimateMaterialCost + estimatePartsCost + estimateLaborCost;
+  const totalEstimate = estimateMaterialCost + estimatePartsCost + estimateFabricatedCost + estimateLaborCost;
 
-  // Suggested retail: estimated material/parts with markup + actual labor at shop rate (no scrap)
+  // Suggested retail: estimated material/parts/fabricated with markup + actual labor at shop rate (no scrap)
   const markupMult = 1 + markupPercent / 100;
   const suggestedMaterial = estimateMaterialCost * markupMult;
   const suggestedParts = estimatePartsCost * markupMult;
+  const suggestedFabricated = estimateFabricatedCost * markupMult;
   const suggestedLabor = laborHours * shopLaborRate;
-  const suggestedRetailTotal = suggestedMaterial + suggestedParts + suggestedLabor;
+  const suggestedRetailTotal = suggestedMaterial + suggestedParts + suggestedFabricated + suggestedLabor;
   const suggestedRetailPerUnit = units > 0 ? suggestedRetailTotal / units : 0;
 
   // Your retail (from product template, summed across line items)
@@ -822,15 +897,18 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     laborCost,
     materialActualCost,
     partsActualCost,
+    fabricatedActualCost,
     scrapCost,
     totalActualCost,
     costPerUnit,
     estimateMaterialCost,
     estimatePartsCost,
+    estimateFabricatedCost,
     estimateLaborCost,
     totalEstimate,
     suggestedMaterial,
     suggestedParts,
+    suggestedFabricated,
     suggestedLabor,
     suggestedRetailTotal,
     suggestedRetailPerUnit,

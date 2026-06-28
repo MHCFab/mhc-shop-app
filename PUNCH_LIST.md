@@ -38,12 +38,17 @@ converge.)
 
 ## Fabricated sub-assemblies — remaining phases
 
-### 5. Phase 2 — jobs pull finished sub-assemblies from fabricated stock
-When a product's recipe includes a stockable sub-assembly, a job should pull the finished unit from
-fabricated stock instead of re-expanding it into raw material + tasks. Needs: stop expansion at stockable
-subs, a `'fabricated'` allocation type (schema change), a consumption ledger entry, an extended shortfall
-alert, and an employee SELECT policy on `fabricated_inventory`. Costing of the pulled unit (LIFO vs the
-captured per-unit cost) to be decided — see #4.
+### 5. Phase 2 — jobs pull finished sub-assemblies from fabricated stock  *(DONE, pending deploy)*
+When a product's recipe includes a stockable sub-assembly, a job now pulls the finished unit from
+fabricated stock instead of re-expanding it into raw material + tasks. Final design (after iteration):
+fabricated consumption **mirrors purchased parts** — a job soft-reserves fabricated units in
+`inventory_allocations` (item_type `'fabricated'`, new `product_template_id` column) at release; the
+`fabricated_inventory` ledger is NOT auto-decremented (only builds / opening / manual adjust move it).
+Shortfall = total on-hand − other jobs' fabricated reservations, warn-but-allow. Cost report values each
+pulled unit at the fabricated item's "highest cost on hand" × planned qty (no separate actuals workflow).
+No employee policy added — fabricated stock/cost stays admin-only like raw materials; the floor sees the
+item via the pick list. Schema: `fabricated-phase2-schema.sql` (product_template_id on
+job_pick_list_items + inventory_allocations, item_type CHECKs widened to include 'fabricated').
 
 ### 6. Phase 3 — shared-nest builds + reorder targets
 Build multiple stockable items from a shared cutting nest; set reorder points/targets per fabricated item.

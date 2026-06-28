@@ -201,7 +201,7 @@ export default function NewJobPage() {
         .order("sort_order"),
       supabase
         .from("product_templates")
-        .select("id, name")
+        .select("id, name, is_stockable")
         .in("id", templateIdArr),
     ]);
 
@@ -232,13 +232,33 @@ export default function NewJobPage() {
     const templateNames = new Map<string, string>(
       (templatesData.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
     );
+    // Stockable sub-assemblies are pulled from fabricated stock, not re-expanded.
+    const stockableIds = new Set<string>(
+      (templatesData.data || [])
+        .filter((t: { id: string; is_stockable?: boolean | null }) => t.is_stockable)
+        .map((t: { id: string }) => t.id)
+    );
 
     const templateQtyTotals = new Map<string, number>();
+    // How many finished units of each stockable sub-assembly the job needs.
+    // We stop recursion at a stockable CHILD and pull it from stock instead.
+    // The top-level item itself always expands — including a build order, which
+    // is literally building the stockable item; only its stockable *children*
+    // (e.g. welded halves stocked separately) are pulled rather than rebuilt.
+    const fabricatedQtyTotals = new Map<string, number>();
     function expandTemplate(templateId: string, multiplier: number) {
       templateQtyTotals.set(templateId, (templateQtyTotals.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
       for (const link of childLinks) {
-        expandTemplate(link.child_template_id, multiplier * Number(link.quantity_per_unit));
+        const childQty = multiplier * Number(link.quantity_per_unit);
+        if (stockableIds.has(link.child_template_id)) {
+          fabricatedQtyTotals.set(
+            link.child_template_id,
+            (fabricatedQtyTotals.get(link.child_template_id) || 0) + childQty
+          );
+        } else {
+          expandTemplate(link.child_template_id, childQty);
+        }
       }
     }
     for (const item of items) {
@@ -274,6 +294,7 @@ export default function NewJobPage() {
         item_type: "raw_material" as const,
         raw_material_id: rawMaterialId,
         purchased_part_id: null,
+        product_template_id: null,
         planned_quantity: info.quantity,
         actual_quantity: 0,
         unit: "ft",
@@ -283,9 +304,23 @@ export default function NewJobPage() {
         company_id: companyId,
         job_id: jobId,
         item_type: "purchased_part" as const,
-        purchased_part_id: partId,
         raw_material_id: null,
+        purchased_part_id: partId,
+        product_template_id: null,
         planned_quantity: info.quantity,
+        actual_quantity: 0,
+        unit: "ea",
+        notes: null,
+      })),
+      // Stockable sub-assemblies: one row per finished unit pulled from fabricated stock.
+      ...Array.from(fabricatedQtyTotals.entries()).map(([templateId, qty]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "fabricated" as const,
+        raw_material_id: null,
+        purchased_part_id: null,
+        product_template_id: templateId,
+        planned_quantity: qty,
         actual_quantity: 0,
         unit: "ea",
         notes: null,
@@ -300,6 +335,9 @@ export default function NewJobPage() {
       accumulator.set(templateId, (accumulator.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
       for (const link of childLinks) {
+        // A stockable sub-assembly is pulled finished from stock — none of its
+        // build tasks land on this job.
+        if (stockableIds.has(link.child_template_id)) continue;
         expandForLine(link.child_template_id, multiplier * Number(link.quantity_per_unit), accumulator);
       }
     }

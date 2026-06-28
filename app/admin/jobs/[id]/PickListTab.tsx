@@ -15,9 +15,10 @@ const SHAPES_MAP: Record<string, string> = {
 
 type PickListItem = {
   id: string;
-  item_type: "raw_material" | "purchased_part";
+  item_type: "raw_material" | "purchased_part" | "fabricated";
   raw_material_id: string | null;
   purchased_part_id: string | null;
+  product_template_id: string | null;
   planned_quantity: number;
   actual_quantity: number;
   unit: string;
@@ -33,6 +34,10 @@ type PickListItem = {
     name: string;
     part_number: string | null;
     current_cost_each: number;
+  } | null;
+  product_templates: {
+    name: string;
+    product_number: string | null;
   } | null;
 };
 
@@ -59,6 +64,10 @@ function describePickItem(item: PickListItem) {
   if (item.item_type === "purchased_part" && item.purchased_parts) {
     const p = item.purchased_parts;
     return p.name + (p.part_number ? " (" + p.part_number + ")" : "");
+  }
+  if (item.item_type === "fabricated" && item.product_templates) {
+    const t = item.product_templates;
+    return t.name + (t.product_number ? " (" + t.product_number + ")" : "");
   }
   return "Unknown item";
 }
@@ -104,7 +113,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
     setLoading(true);
     const { data, error } = await supabase
       .from("job_pick_list_items")
-      .select("*, raw_materials(shape, size, wall_thickness, grade, current_cost_per_foot), purchased_parts(name, part_number, current_cost_each)")
+      .select("*, raw_materials(shape, size, wall_thickness, grade, current_cost_per_foot), purchased_parts(name, part_number, current_cost_each), product_templates(name, product_number)")
       .eq("job_id", jobId)
       .order("item_type")
       .order("created_at");
@@ -287,8 +296,8 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
 
     const templateIdArr = Array.from(allTemplateIds);
 
-    // Fetch all materials, parts, and sub-assembly links
-    const [matsRes, partsRes, subLinksRes] = await Promise.all([
+    // Fetch all materials, parts, sub-assembly links, and the stockable flag
+    const [matsRes, partsRes, subLinksRes, stockRes] = await Promise.all([
       supabase
         .from("product_template_materials")
         .select("product_template_id, feet_per_unit, raw_materials(id)")
@@ -301,6 +310,10 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
         .from("product_template_sub_assemblies")
         .select("parent_template_id, child_template_id, quantity_per_unit")
         .in("parent_template_id", templateIdArr),
+      supabase
+        .from("product_templates")
+        .select("id, is_stockable")
+        .in("id", templateIdArr),
     ]);
 
     type MatRow = {
@@ -322,14 +335,30 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
     const tplMaterials = (matsRes.data || []) as unknown as MatRow[];
     const tplParts = (partsRes.data || []) as unknown as PartRow[];
     const tplSubs = (subLinksRes.data || []) as unknown as SubLinkRow[];
+    const stockableIds = new Set<string>(
+      ((stockRes.data || []) as unknown as { id: string; is_stockable: boolean | null }[])
+        .filter((t) => t.is_stockable)
+        .map((t) => t.id)
+    );
 
-    // Calculate total quantity needed of each template
+    // Calculate total quantity needed of each template. Stockable sub-assemblies
+    // are pulled from fabricated stock, so we stop recursion at a stockable child
+    // and record how many finished units to pull instead.
     const templateQtyTotals = new Map<string, number>();
+    const fabricatedQtyTotals = new Map<string, number>();
     function expandTemplate(templateId: string, multiplier: number) {
       templateQtyTotals.set(templateId, (templateQtyTotals.get(templateId) || 0) + multiplier);
       const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
       for (const link of childLinks) {
-        expandTemplate(link.child_template_id, multiplier * Number(link.quantity_per_unit));
+        const childQty = multiplier * Number(link.quantity_per_unit);
+        if (stockableIds.has(link.child_template_id)) {
+          fabricatedQtyTotals.set(
+            link.child_template_id,
+            (fabricatedQtyTotals.get(link.child_template_id) || 0) + childQty
+          );
+        } else {
+          expandTemplate(link.child_template_id, childQty);
+        }
       }
     }
     for (const li of lineItems) {
@@ -360,6 +389,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
         item_type: "raw_material" as const,
         raw_material_id: rmId,
         purchased_part_id: null,
+        product_template_id: null,
         planned_quantity: qty,
         actual_quantity: 0,
         unit: "ft",
@@ -369,8 +399,21 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
         company_id: companyId,
         job_id: jobId,
         item_type: "purchased_part" as const,
-        purchased_part_id: ppId,
         raw_material_id: null,
+        purchased_part_id: ppId,
+        product_template_id: null,
+        planned_quantity: qty,
+        actual_quantity: 0,
+        unit: "ea",
+        notes: null,
+      })),
+      ...Array.from(fabricatedQtyTotals.entries()).map(([templateId, qty]) => ({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "fabricated" as const,
+        raw_material_id: null,
+        purchased_part_id: null,
+        product_template_id: templateId,
         planned_quantity: qty,
         actual_quantity: 0,
         unit: "ea",
@@ -395,6 +438,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   const totalActualCost = items.reduce((sum, i) => sum + Number(i.actual_quantity) * itemCostPerUnit(i), 0);
   const rawMaterialItems = items.filter((i) => i.item_type === "raw_material");
   const partItems = items.filter((i) => i.item_type === "purchased_part");
+  const fabricatedItems = items.filter((i) => i.item_type === "fabricated");
 
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
@@ -507,7 +551,58 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
 
       <PickListSection title="Raw Materials" items={rawMaterialItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
       <PickListSection title="Purchased Parts" items={partItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
+      {fabricatedItems.length > 0 && (
+        <FabricatedPickSection items={fabricatedItems} handleDelete={handleDelete} readOnly={readOnly} />
+      )}
     </div>
+  );
+}
+
+// Stockable sub-assemblies pulled from fabricated stock. Shown separately from
+// the material-cost table — their cost is computed under the "highest cost on
+// hand" rule and reported on the Cost tab, not from a catalog price here.
+function FabricatedPickSection({
+  items,
+  handleDelete,
+  readOnly,
+}: {
+  items: PickListItem[];
+  handleDelete: (item: PickListItem) => void;
+  readOnly: boolean;
+}) {
+  return (
+    <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+        <h3 className="text-base font-semibold text-gray-900">Fabricated Sub-Assemblies</h3>
+        <p className="text-xs text-gray-500 mt-0.5">Pulled finished from fabricated stock at release. Cost is on the Cost tab.</p>
+      </div>
+      <table className="w-full">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr>
+            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Item</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Quantity</th>
+            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id} className="border-b border-gray-100 last:border-0">
+              <td className="px-4 py-3 text-sm text-gray-900">{describePickItem(item)}</td>
+              <td className="px-4 py-3 text-sm text-right font-mono text-gray-900">{Number(item.planned_quantity).toFixed(2)} {item.unit}</td>
+              <td className="px-4 py-3 text-sm text-gray-700">{item.notes || "-"}</td>
+              <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                {readOnly ? (
+                  <span className="text-gray-400">-</span>
+                ) : (
+                  <button onClick={() => handleDelete(item)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }
 
