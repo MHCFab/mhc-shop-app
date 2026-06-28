@@ -734,35 +734,50 @@ export default function InventoryPage() {
           <p className="text-gray-600">No stockable fabricated items yet. Open a sub-assembly in Product Templates and tick &quot;Stockable fabricated item&quot; on its Settings tab, then build it with a build order.</p>
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
-                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">On hand</th>
-                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost / unit</th>
-                <th className="px-4 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredFabricated.map((f) => (
-                <tr key={f.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                    {f.name}{f.product_number ? " (" + f.product_number + ")" : ""}
-                    {!f.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono">
-                    <span className={f.onHand <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{f.onHand.toFixed(0)}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.costPerUnit != null ? "$" + f.costPerUnit.toFixed(2) : "—"}</td>
-                  <td className="px-4 py-3 text-sm text-right">
-                    <Link href={"/admin/inventory/fabricated/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
-                  </td>
+        <>
+          {fabricated.some((f) => f.belowReorder) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+              <p className="text-sm text-amber-800">
+                <span className="font-semibold">{fabricated.filter((f) => f.belowReorder).length}</span>{" "}
+                fabricated {fabricated.filter((f) => f.belowReorder).length === 1 ? "item is" : "items are"} at or below the reorder point.
+              </p>
+            </div>
+          )}
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">On hand</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reorder at</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Target</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost / unit</th>
+                  <th className="px-4 py-2"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredFabricated.map((f) => (
+                  <tr key={f.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                      {f.name}{f.product_number ? " (" + f.product_number + ")" : ""}
+                      {!f.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+                      {f.belowReorder && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Reorder</span>}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right font-mono">
+                      <span className={f.onHand <= 0 ? "text-red-600 font-semibold" : f.belowReorder ? "text-amber-700 font-semibold" : "text-gray-900"}>{f.onHand.toFixed(0)}</span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.reorderPoint != null ? f.reorderPoint.toFixed(0) : "—"}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.reorderTarget != null ? f.reorderTarget.toFixed(0) : "—"}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">{f.costPerUnit != null ? "$" + f.costPerUnit.toFixed(2) : "—"}</td>
+                    <td className="px-4 py-3 text-sm text-right">
+                      <Link href={"/admin/inventory/fabricated/" + f.id} className="text-blue-600 hover:text-blue-800 font-medium">View item</Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {showPurchase && (

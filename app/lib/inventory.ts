@@ -209,6 +209,10 @@ export type FabricatedStockItem = {
   is_active: boolean;
   onHand: number;             // running sum of the ledger (signed)
   costPerUnit: number | null; // highest cost still on hand (builds + opening stock)
+  reorderPoint: number | null;   // build more when onHand <= this (null = not tracked)
+  reorderTarget: number | null;  // build back up to this level
+  belowReorder: boolean;         // reorderPoint set and onHand at/below it
+  suggestedBuild: number;        // how many to build to reach target (0 if not below)
 };
 
 // Each stockable template, with its on-hand quantity (sum of the fabricated_inventory
@@ -220,7 +224,7 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
   const [tplRes, ledgerRes] = await Promise.all([
     supabase
       .from("product_templates")
-      .select("id, name, product_number, is_active")
+      .select("id, name, product_number, is_active, reorder_point, reorder_target")
       .eq("is_stockable", true)
       .order("name"),
     supabase
@@ -228,7 +232,7 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
       .select("product_template_id, quantity, cost_per_unit, source, created_at"),
   ]);
 
-  type TplRow = { id: string; name: string; product_number: string | null; is_active: boolean };
+  type TplRow = { id: string; name: string; product_number: string | null; is_active: boolean; reorder_point: number | null; reorder_target: number | null };
   type LedgerRow = { product_template_id: string; quantity: number; cost_per_unit: number; source: string; created_at: string };
 
   const tpls = (tplRes.data || []) as unknown as TplRow[];
@@ -244,6 +248,12 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
       const q = Number(r.quantity);
       return q < 0 ? s + -q : s;
     }, 0);
+    const reorderPoint = t.reorder_point != null ? Number(t.reorder_point) : null;
+    const reorderTarget = t.reorder_target != null ? Number(t.reorder_target) : null;
+    const belowReorder = reorderPoint != null && onHand <= reorderPoint;
+    // Build back up to the target (or just to the point if no target is set).
+    const buildTo = reorderTarget != null ? reorderTarget : reorderPoint;
+    const suggestedBuild = belowReorder && buildTo != null ? Math.max(0, buildTo - onHand) : 0;
     return {
       id: t.id,
       name: t.name,
@@ -251,6 +261,10 @@ export async function getFabricatedStock(): Promise<FabricatedStockItem[]> {
       is_active: t.is_active,
       onHand,
       costPerUnit: layers.length > 0 ? highestCostOnHand(layers, totalOut, 0) : null,
+      reorderPoint,
+      reorderTarget,
+      belowReorder,
+      suggestedBuild,
     };
   });
 }

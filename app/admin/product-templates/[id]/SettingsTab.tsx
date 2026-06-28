@@ -12,6 +12,8 @@ type Template = {
   is_active: boolean;
   is_sub_assembly: boolean;
   is_stockable: boolean;
+  reorder_point: number | null;
+  reorder_target: number | null;
   customer_id: string | null;
   retail_price_per_unit: number;
 };
@@ -36,6 +38,8 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     is_active: true,
     is_sub_assembly: false,
     is_stockable: false,
+    reorder_point: "",
+    reorder_target: "",
     customer_id: "",
     retail_price_per_unit: "",
   });
@@ -58,6 +62,8 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         is_active: data.is_active,
         is_sub_assembly: data.is_sub_assembly,
         is_stockable: data.is_stockable ?? false,
+        reorder_point: data.reorder_point != null ? String(data.reorder_point) : "",
+        reorder_target: data.reorder_target != null ? String(data.reorder_target) : "",
         customer_id: data.customer_id || "",
         retail_price_per_unit: String(data.retail_price_per_unit ?? ""),
       });
@@ -84,6 +90,28 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
       return;
     }
 
+    // Only a sub-assembly can be a stockable fabricated item, and only a
+    // stockable item carries reorder values.
+    const stockable = form.is_sub_assembly ? form.is_stockable : false;
+
+    function parseReorder(value: string, label: string): number | null | "error" {
+      if (!stockable || value.trim() === "") return null;
+      const n = parseFloat(value);
+      if (isNaN(n) || n < 0) {
+        setError(label + " must be 0 or more.");
+        return "error";
+      }
+      return n;
+    }
+    const reorderPoint = parseReorder(form.reorder_point, "Reorder point");
+    if (reorderPoint === "error") return;
+    const reorderTarget = parseReorder(form.reorder_target, "Reorder target");
+    if (reorderTarget === "error") return;
+    if (reorderPoint != null && reorderTarget != null && reorderTarget < reorderPoint) {
+      setError("Reorder target should be at least the reorder point.");
+      return;
+    }
+
     setSaving(true);
     const { error } = await supabase
       .from("product_templates")
@@ -93,8 +121,9 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         description: form.description.trim() || null,
         is_active: form.is_active,
         is_sub_assembly: form.is_sub_assembly,
-        // Only a sub-assembly can be a stockable fabricated item.
-        is_stockable: form.is_sub_assembly ? form.is_stockable : false,
+        is_stockable: stockable,
+        reorder_point: reorderPoint,
+        reorder_target: reorderTarget,
         customer_id: form.is_sub_assembly ? null : form.customer_id,
         retail_price_per_unit: parseFloat(form.retail_price_per_unit) || 0,
       })
@@ -180,6 +209,37 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
               Stockable fabricated item (build to stock with a build order, then pull from on-hand stock)
             </span>
           </label>
+        )}
+
+        {form.is_sub_assembly && form.is_stockable && (
+          <div className="ml-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Reorder point</label>
+              <input
+                type="number"
+                step="1"
+                min="0"
+                value={form.reorder_point}
+                onChange={(e) => setForm({ ...form, reorder_point: e.target.value })}
+                placeholder="e.g. 4"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">Flag this item to reorder when on-hand drops to this or below. Leave blank to not track it.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Build-to target</label>
+              <input
+                type="number"
+                step="1"
+                min="0"
+                value={form.reorder_target}
+                onChange={(e) => setForm({ ...form, reorder_target: e.target.value })}
+                placeholder="e.g. 12"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">When below the reorder point, suggest building back up to this level. Leave blank to build to the reorder point.</p>
+            </div>
+          </div>
         )}
 
         {!form.is_sub_assembly && (

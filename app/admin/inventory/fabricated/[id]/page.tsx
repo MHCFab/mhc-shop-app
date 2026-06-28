@@ -12,6 +12,8 @@ type Template = {
   product_number: string | null;
   is_active: boolean;
   is_stockable: boolean;
+  reorder_point: number | null;
+  reorder_target: number | null;
 };
 
 type LedgerRow = {
@@ -47,7 +49,7 @@ export default function FabricatedDetailPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [tplRes, ledgerRes] = await Promise.all([
-      supabase.from("product_templates").select("id, name, product_number, is_active, is_stockable").eq("id", id).single(),
+      supabase.from("product_templates").select("id, name, product_number, is_active, is_stockable, reorder_point, reorder_target").eq("id", id).single(),
       supabase
         .from("fabricated_inventory")
         .select("id, quantity, cost_per_unit, source, notes, created_at")
@@ -69,6 +71,11 @@ export default function FabricatedDetailPage() {
   }, [loadData]);
 
   const onHand = ledger.reduce((s, r) => s + Number(r.quantity), 0);
+  const reorderPoint = template?.reorder_point != null ? Number(template.reorder_point) : null;
+  const reorderTarget = template?.reorder_target != null ? Number(template.reorder_target) : null;
+  const belowReorder = reorderPoint != null && onHand <= reorderPoint;
+  const buildTo = reorderTarget != null ? reorderTarget : reorderPoint;
+  const suggestedBuild = belowReorder && buildTo != null ? Math.max(0, buildTo - onHand) : 0;
   const costPerUnit = (() => {
     const layers: CostLayer[] = ledger
       .filter((r) => (r.source === "build" || r.source === "opening") && Number(r.quantity) > 0)
@@ -128,16 +135,33 @@ export default function FabricatedDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="text-xs uppercase tracking-wide text-blue-700 font-medium">On hand</div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <div className={"rounded-lg p-4 border " + (belowReorder ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200")}>
+          <div className={"text-xs uppercase tracking-wide font-medium " + (belowReorder ? "text-amber-700" : "text-blue-700")}>On hand</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">{onHand.toFixed(0)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Cost / unit</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">{costPerUnit != null ? "$" + costPerUnit.toFixed(2) : "—"}</div>
         </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Reorder at / target</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">
+            {reorderPoint != null ? reorderPoint.toFixed(0) + " / " + (reorderTarget != null ? reorderTarget.toFixed(0) : "—") : <span className="text-gray-400">Not tracked</span>}
+          </div>
+        </div>
       </div>
+
+      {belowReorder && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-amber-800">
+            On hand is at or below the reorder point{suggestedBuild > 0 ? <> — suggest building <span className="font-semibold">{suggestedBuild.toFixed(0)}</span> to reach the target.</> : "."}
+          </p>
+          <Link href="/admin/jobs/new" className="bg-blue-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors whitespace-nowrap">
+            New build order
+          </Link>
+        </div>
+      )}
 
       <div className="border-b border-gray-200 mb-6">
         <div className="flex gap-1">
