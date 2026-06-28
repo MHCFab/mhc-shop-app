@@ -936,3 +936,219 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     markupPercent,
   };
 }
+// ============================================
+// Build-order output cost split (shared-nest builds)
+// ============================================
+
+export type BuildOutputCost = {
+  templateId: string;
+  name: string;
+  quantity: number;
+  estCostPerUnit: number; // estimated bill-of-materials cost per unit (material + parts + fabricated children)
+  costPerUnit: number;    // actual job cost allocated to this output, per unit
+  totalCost: number;      // costPerUnit * quantity
+};
+
+// Split a build order's total ACTUAL cost (material + parts + labor, from
+// getJobCostReport) across the items it produces, in proportion to each item's
+// estimated bill-of-materials cost (BOM cost per unit x quantity), valued under the
+// same "highest cost still on hand" rule used everywhere else.
+//
+// Outputs come from the build_outputs table (one row per item a shared-nest build
+// produces). A plain single-output build that predates build_outputs has no rows, so
+// we fall back to jobs.build_template_id / jobs.build_quantity and return one output.
+//
+// If no BOM cost can be determined (totalWeight is 0), the cost is split evenly per
+// unit so nothing is ever stocked at $0 by surprise.
+export async function getBuildOutputsCostSplit(jobId: string): Promise<BuildOutputCost[]> {
+  const supabase = createClient();
+
+  // 1) Determine the outputs (build_outputs rows, else the single build fields).
+  const { data: jobRow } = await supabase
+    .from("jobs")
+    .select("build_template_id, build_quantity")
+    .eq("id", jobId)
+    .single();
+  const { data: boData } = await supabase
+    .from("build_outputs")
+    .select("product_template_id, quantity")
+    .eq("job_id", jobId);
+
+  type BoRow = { product_template_id: string; quantity: number };
+  const bo = (boData || []) as unknown as BoRow[];
+  const jr = jobRow as { build_template_id: string | null; build_quantity: number | null } | null;
+
+  let outputs: { templateId: string; quantity: number }[] = [];
+  if (bo.length > 0) {
+    outputs = bo.map((r) => ({ templateId: r.product_template_id, quantity: Number(r.quantity) }));
+  } else if (jr?.build_template_id && jr?.build_quantity != null) {
+    outputs = [{ templateId: jr.build_template_id, quantity: Number(jr.build_quantity) }];
+  }
+  if (outputs.length === 0) return [];
+
+  // 2) Walk every output's sub-assembly tree so we can value its full BOM.
+  const allTemplateIds = new Set<string>();
+  const queue = [...new Set(outputs.map((o) => o.templateId))];
+  while (queue.length > 0) {
+    const tid = queue.shift()!;
+    if (allTemplateIds.has(tid)) continue;
+    allTemplateIds.add(tid);
+    const { data } = await supabase
+      .from("product_template_sub_assemblies")
+      .select("child_template_id")
+      .eq("parent_template_id", tid);
+    for (const row of (data || []) as { child_template_id: string }[]) {
+      if (!allTemplateIds.has(row.child_template_id)) queue.push(row.child_template_id);
+    }
+  }
+  const templateIdArr = Array.from(allTemplateIds);
+
+  const [matsRes, partsRes, subLinksRes, tplRes, rmInvRes, ppInvRes, fabInvRes] = await Promise.all([
+    supabase
+      .from("product_template_materials")
+      .select("product_template_id, feet_per_unit, raw_materials(id, current_cost_per_foot)")
+      .in("product_template_id", templateIdArr),
+    supabase
+      .from("product_template_parts")
+      .select("product_template_id, quantity_per_unit, purchased_parts(id, current_cost_each)")
+      .in("product_template_id", templateIdArr),
+    supabase
+      .from("product_template_sub_assemblies")
+      .select("parent_template_id, child_template_id, quantity_per_unit")
+      .in("parent_template_id", templateIdArr),
+    supabase
+      .from("product_templates")
+      .select("id, name, is_stockable")
+      .in("id", templateIdArr),
+    supabase.from("raw_material_inventory").select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type"),
+    supabase.from("purchased_parts_inventory").select("purchased_part_id, quantity, cost_each, purchase_date, entry_type"),
+    supabase.from("fabricated_inventory").select("product_template_id, quantity, cost_per_unit, source, created_at"),
+  ]);
+
+  type TplMatRow = { product_template_id: string; feet_per_unit: number; raw_materials: { id: string; current_cost_per_foot: number } | null };
+  type TplPartRow = { product_template_id: string; quantity_per_unit: number; purchased_parts: { id: string; current_cost_each: number } | null };
+  type TplSubRow = { parent_template_id: string; child_template_id: string; quantity_per_unit: number };
+  type TplRow = { id: string; name: string; is_stockable: boolean | null };
+  type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number; cost_per_foot: number; purchase_date: string; entry_type: string | null };
+  type PpInvRow = { purchased_part_id: string; quantity: number; cost_each: number; purchase_date: string; entry_type: string | null };
+  type FabInvRow = { product_template_id: string; quantity: number; cost_per_unit: number; source: string; created_at: string };
+
+  const tplMaterials = (matsRes.data || []) as unknown as TplMatRow[];
+  const tplParts = (partsRes.data || []) as unknown as TplPartRow[];
+  const tplSubs = (subLinksRes.data || []) as unknown as TplSubRow[];
+  const tpls = (tplRes.data || []) as unknown as TplRow[];
+  const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
+  const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
+  const fabInv = (fabInvRes.data || []) as unknown as FabInvRow[];
+
+  const templateNames = new Map<string, string>(tpls.map((t) => [t.id, t.name]));
+  const stockableIds = new Set<string>(tpls.filter((t) => t.is_stockable).map((t) => t.id));
+
+  // Cost-rule helpers — identical to getJobCostReport's.
+  function rawCost(rawMaterialId: string, fallback: number): number {
+    const rows = rmInv.filter((r) => r.raw_material_id === rawMaterialId);
+    if (rows.length === 0) return fallback;
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.stick_length_feet) * Number(r.quantity_sticks) > 0)
+      .map((r) => ({ date: r.purchase_date, qty: Number(r.stick_length_feet) * Number(r.quantity_sticks), cost: Number(r.cost_per_foot) }));
+    const out = rows.reduce((s, r) => {
+      const f = Number(r.stick_length_feet) * Number(r.quantity_sticks);
+      return f < 0 ? s + -f : s;
+    }, 0);
+    return highestCostOnHand(layers, out, fallback);
+  }
+  function partCost(purchasedPartId: string, fallback: number): number {
+    const rows = ppInv.filter((r) => r.purchased_part_id === purchasedPartId);
+    if (rows.length === 0) return fallback;
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.quantity) > 0)
+      .map((r) => ({ date: r.purchase_date, qty: Number(r.quantity), cost: Number(r.cost_each) }));
+    const out = rows.reduce((s, r) => {
+      const q = Number(r.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
+    return highestCostOnHand(layers, out, fallback);
+  }
+  function fabCost(productTemplateId: string): number {
+    const rows = fabInv.filter((r) => r.product_template_id === productTemplateId);
+    const layers: CostLayer[] = rows
+      .filter((r) => (r.source === "build" || r.source === "opening") && Number(r.quantity) > 0)
+      .map((r) => ({ date: r.created_at, qty: Number(r.quantity), cost: Number(r.cost_per_unit) }));
+    if (layers.length === 0) return 0;
+    const out = rows.reduce((s, r) => {
+      const q = Number(r.quantity);
+      return q < 0 ? s + -q : s;
+    }, 0);
+    return highestCostOnHand(layers, out, 0);
+  }
+
+  // Estimated BOM cost for ONE unit of a template: expand its tree, stopping at a
+  // stockable child (which is pulled finished from stock and valued at its fab cost).
+  function bomCostPerUnit(rootTemplateId: string): number {
+    const matFeet = new Map<string, number>();
+    const partQty = new Map<string, number>();
+    const fabQty = new Map<string, number>();
+    function expand(templateId: string, multiplier: number) {
+      for (const m of tplMaterials.filter((x) => x.product_template_id === templateId)) {
+        if (!m.raw_materials) continue;
+        matFeet.set(m.raw_materials.id, (matFeet.get(m.raw_materials.id) || 0) + Number(m.feet_per_unit) * multiplier);
+      }
+      for (const p of tplParts.filter((x) => x.product_template_id === templateId)) {
+        if (!p.purchased_parts) continue;
+        partQty.set(p.purchased_parts.id, (partQty.get(p.purchased_parts.id) || 0) + Number(p.quantity_per_unit) * multiplier);
+      }
+      for (const link of tplSubs.filter((s) => s.parent_template_id === templateId)) {
+        const childQty = multiplier * Number(link.quantity_per_unit);
+        if (stockableIds.has(link.child_template_id)) {
+          fabQty.set(link.child_template_id, (fabQty.get(link.child_template_id) || 0) + childQty);
+        } else {
+          expand(link.child_template_id, childQty);
+        }
+      }
+    }
+    expand(rootTemplateId, 1);
+
+    let cost = 0;
+    for (const [rmId, feet] of matFeet.entries()) {
+      const fallback = tplMaterials.find((x) => x.raw_materials?.id === rmId)?.raw_materials?.current_cost_per_foot || 0;
+      cost += feet * rawCost(rmId, Number(fallback));
+    }
+    for (const [ppId, qty] of partQty.entries()) {
+      const fallback = tplParts.find((x) => x.purchased_parts?.id === ppId)?.purchased_parts?.current_cost_each || 0;
+      cost += qty * partCost(ppId, Number(fallback));
+    }
+    for (const [childId, qty] of fabQty.entries()) {
+      cost += qty * fabCost(childId);
+    }
+    return cost;
+  }
+
+  // 3) Weight each output by estCostPerUnit * quantity, then split the actual cost.
+  const report = await getJobCostReport(jobId);
+  const total = report.totalActualCost;
+
+  const enriched = outputs.map((o) => {
+    const estCostPerUnit = bomCostPerUnit(o.templateId);
+    return { ...o, estCostPerUnit, weight: estCostPerUnit * o.quantity };
+  });
+  const totalWeight = enriched.reduce((s, e) => s + e.weight, 0);
+  const totalUnits = enriched.reduce((s, e) => s + e.quantity, 0);
+
+  return enriched.map((e) => {
+    let totalCost: number;
+    if (totalWeight > 0) {
+      totalCost = total * (e.weight / totalWeight);
+    } else {
+      totalCost = totalUnits > 0 ? total * (e.quantity / totalUnits) : 0;
+    }
+    const costPerUnit = e.quantity > 0 ? totalCost / e.quantity : 0;
+    return {
+      templateId: e.templateId,
+      name: templateNames.get(e.templateId) || "Item",
+      quantity: e.quantity,
+      estCostPerUnit: e.estCostPerUnit,
+      costPerUnit,
+      totalCost,
+    };
+  });
+}

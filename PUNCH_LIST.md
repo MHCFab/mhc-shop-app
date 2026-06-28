@@ -51,7 +51,14 @@ item via the pick list. Schema: `fabricated-phase2-schema.sql` (product_template
 job_pick_list_items + inventory_allocations, item_type CHECKs widened to include 'fabricated').
 
 ### 6. Phase 3 — shared-nest builds + reorder targets
-Build multiple stockable items from a shared cutting nest; set reorder points/targets per fabricated item.
+- **Reorder targets — DONE, deployed 2026-06-27.** `product_templates.reorder_point` + `reorder_target`
+  (schema `fabricated-phase3-reorder-schema.sql`). Set on the template Settings tab (stockable only).
+  `getFabricatedStock` returns reorderPoint/reorderTarget/belowReorder/suggestedBuild (compared against
+  raw on-hand, not net of reservations — Erik's call). Surfaced: Reorder badge + point/target columns +
+  low count on the inventory Fabricated tab; point/target/suggested-build + New build order button on the
+  fabricated detail page; "Fabricated items to reorder" widget (most-short-first) on the admin dashboard.
+- **Shared-nest builds — STILL TO DO.** Build multiple stockable items from one shared cutting nest.
+  (Next fresh session.)
 
 ## Batch B — costing UI (DONE, pending deploy)
 - Raw-material detail page: Stock / History tabs; purchase & price history table with a Type column; headline shows computed cost on hand.

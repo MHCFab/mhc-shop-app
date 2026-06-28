@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
-import { allocateJobInventory, releaseJobInventory, getJobCostReport, getJobStockShortfall, type JobStockShortfallItem } from "../../../lib/inventory";
+import { allocateJobInventory, releaseJobInventory, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import CuttingNestTab from "./CuttingNestTab";
@@ -88,8 +88,8 @@ export default function JobDetailPage() {
 
   // Build order: receive into fabricated stock
   const [receiving, setReceiving] = useState(false);
-  const [buildTemplateName, setBuildTemplateName] = useState<string | null>(null);
-  const [received, setReceived] = useState<{ at: string; costPerUnit: number; qty: number } | null>(null);
+  const [buildOutputs, setBuildOutputs] = useState<{ templateId: string; name: string; quantity: number }[]>([]);
+  const [received, setReceived] = useState<{ at: string; lines: { name: string; qty: number; costPerUnit: number }[] } | null>(null);
 
   // Edit job (name + quantity + due date + custom price)
   const [lineItem, setLineItem] = useState<{ id: string; quantity: number; unit_price: number | null; isCustom: boolean } | null>(null);
@@ -141,30 +141,44 @@ export default function JobDetailPage() {
       setShortfall([]);
     }
 
-    // Build-order extras: the template name and whether it's already been received into stock.
+    // Build-order extras: the items this build produces, and whether it's already
+    // been received into fabricated stock.
     const jobData = data as Job | null;
     if (jobData?.is_build_order) {
-      if (jobData.build_template_id) {
+      // Outputs come from build_outputs (shared-nest builds). Older single-output
+      // builds have no rows, so fall back to the job's build_template_id / quantity.
+      const { data: boData } = await supabase
+        .from("build_outputs")
+        .select("product_template_id, quantity, product_templates(name)")
+        .eq("job_id", id);
+      const bo = (boData || []) as unknown as { product_template_id: string; quantity: number; product_templates: { name: string } | null }[];
+      if (bo.length > 0) {
+        setBuildOutputs(bo.map((r) => ({ templateId: r.product_template_id, name: r.product_templates?.name || "Item", quantity: Number(r.quantity) })));
+      } else if (jobData.build_template_id) {
         const { data: tpl } = await supabase
           .from("product_templates")
           .select("name")
           .eq("id", jobData.build_template_id)
           .single();
-        setBuildTemplateName((tpl as { name: string } | null)?.name || null);
+        setBuildOutputs([{ templateId: jobData.build_template_id, name: (tpl as { name: string } | null)?.name || "Item", quantity: Number(jobData.build_quantity || 0) }]);
       } else {
-        setBuildTemplateName(null);
+        setBuildOutputs([]);
       }
+
       const { data: fabRows } = await supabase
         .from("fabricated_inventory")
-        .select("created_at, cost_per_unit, quantity")
+        .select("created_at, cost_per_unit, quantity, product_template_id, product_templates(name)")
         .eq("source_job_id", id)
         .eq("source", "build")
-        .order("created_at")
-        .limit(1);
-      const fr = (fabRows || []) as unknown as { created_at: string; cost_per_unit: number; quantity: number }[];
-      setReceived(fr.length > 0 ? { at: fr[0].created_at, costPerUnit: Number(fr[0].cost_per_unit), qty: Number(fr[0].quantity) } : null);
+        .order("created_at");
+      const fr = (fabRows || []) as unknown as { created_at: string; cost_per_unit: number; quantity: number; product_template_id: string; product_templates: { name: string } | null }[];
+      setReceived(
+        fr.length > 0
+          ? { at: fr[0].created_at, lines: fr.map((r) => ({ name: r.product_templates?.name || "Item", qty: Number(r.quantity), costPerUnit: Number(r.cost_per_unit) })) }
+          : null
+      );
     } else {
-      setBuildTemplateName(null);
+      setBuildOutputs([]);
       setReceived(null);
     }
 
@@ -350,15 +364,20 @@ export default function JobDetailPage() {
   }
 
   async function receiveBuild() {
-    if (!job || !job.is_build_order || !job.build_template_id || !job.build_quantity) return;
-    const qty = Number(job.build_quantity);
-    if (!(qty > 0)) {
-      alert("This build order has no build quantity set, so there's nothing to receive.");
+    if (!job || !job.is_build_order) return;
+    if (buildOutputs.length === 0) {
+      alert("This build order has no items to receive.");
       return;
     }
+    const totalUnits = buildOutputs.reduce((s, o) => s + Number(o.quantity), 0);
+    if (!(totalUnits > 0)) {
+      alert("This build order has no quantity set, so there's nothing to receive.");
+      return;
+    }
+    const summary = buildOutputs.map((o) => o.quantity + " \u00d7 " + o.name).join(", ");
     const ok = confirm(
-      "Receive " + qty + " unit(s)" + (buildTemplateName ? " of " + buildTemplateName : "") +
-      " into fabricated stock?\n\nThis captures the build's actual material, parts, and labor as the stocked cost per unit. The raw material and parts this build consumed were already taken out of inventory as you worked the job."
+      "Receive into fabricated stock?\n\n" + summary +
+      "\n\nThe build's actual material, parts, and labor are split across these items in proportion to their estimated bill-of-materials cost, and each is stocked at its own cost per unit. The raw material and parts this build consumed were already taken out of inventory as you worked the job."
     );
     if (!ok) return;
 
@@ -390,18 +409,24 @@ export default function JobDetailPage() {
         return;
       }
 
-      const report = await getJobCostReport(job.id);
-      const costPerUnit = qty > 0 ? report.totalActualCost / qty : 0;
+      // Split the job's total actual cost across the outputs by estimated BOM cost.
+      const split = await getBuildOutputsCostSplit(job.id);
+      if (split.length === 0) {
+        alert("Couldn't work out this build's outputs to receive.");
+        setReceiving(false);
+        return;
+      }
 
-      const { error: insErr } = await supabase.from("fabricated_inventory").insert({
+      const rows = split.map((s) => ({
         company_id: companyId,
-        product_template_id: job.build_template_id,
-        quantity: qty,
-        cost_per_unit: costPerUnit,
+        product_template_id: s.templateId,
+        quantity: s.quantity,
+        cost_per_unit: s.costPerUnit,
         source: "build",
         source_job_id: job.id,
         notes: "Received from build order " + job.job_number,
-      });
+      }));
+      const { error: insErr } = await supabase.from("fabricated_inventory").insert(rows);
       if (insErr) throw new Error(insErr.message);
 
       await loadJob();
@@ -693,7 +718,7 @@ export default function JobDetailPage() {
             {job.customers?.name || "Unknown customer"}
             {job.customer_po && <span className="text-gray-500"> &middot; PO {job.customer_po}</span>}
           </p>
-          {lineItem && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>}
+          {lineItem && !(job.is_build_order && buildOutputs.length > 1) && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>}
           {lineItem?.isCustom && lineItem.unit_price != null && (
             <p className="text-sm text-gray-500 mt-1">Price/unit: ${Number(lineItem.unit_price).toFixed(2)}</p>
           )}
@@ -748,10 +773,17 @@ export default function JobDetailPage() {
       {isComplete && job.is_build_order && !received && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
           <div>
-            <p className="text-sm font-medium text-blue-900">
-              This build is complete. Receive {job.build_quantity ?? 0} unit(s){buildTemplateName ? " of " + buildTemplateName : ""} into fabricated stock.
+            <p className="text-sm font-medium text-blue-900">This build is complete. Receive it into fabricated stock:</p>
+            <ul className="text-sm text-blue-900 mt-1 list-disc list-inside">
+              {buildOutputs.map((o) => (
+                <li key={o.templateId}>{o.quantity} unit(s) of {o.name}</li>
+              ))}
+            </ul>
+            <p className="text-sm text-blue-700 mt-1">
+              {buildOutputs.length > 1
+                ? "The build's actual material, parts, and labor are split across these items by their estimated bill-of-materials cost."
+                : "Captures the build's actual material, parts, and labor as the stocked cost per unit."}
             </p>
-            <p className="text-sm text-blue-700 mt-0.5">Captures the build&apos;s actual material, parts, and labor as the stocked cost per unit.</p>
           </div>
           <button onClick={receiveBuild} disabled={receiving} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
             {receiving ? "Receiving..." : "Receive into stock"}
@@ -762,10 +794,13 @@ export default function JobDetailPage() {
       {isComplete && job.is_build_order && received && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
           <div>
-            <p className="text-sm font-medium text-green-900">
-              Received {received.qty} unit(s) into fabricated stock on {received.at.slice(0, 10)} at {money(received.costPerUnit)}/unit.
-            </p>
-            <p className="text-sm text-green-700 mt-0.5">You can archive this build order to clear it from the board.</p>
+            <p className="text-sm font-medium text-green-900">Received into fabricated stock on {received.at.slice(0, 10)}:</p>
+            <ul className="text-sm text-green-900 mt-1 list-disc list-inside">
+              {received.lines.map((l, i) => (
+                <li key={i}>{l.qty} unit(s) of {l.name} at {money(l.costPerUnit)}/unit</li>
+              ))}
+            </ul>
+            <p className="text-sm text-green-700 mt-1">You can archive this build order to clear it from the board.</p>
           </div>
           <button onClick={markInvoiced} disabled={invoicing} className="bg-green-600 text-white px-4 py-2 rounded-md font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
             {invoicing ? "Archiving..." : "Archive build order"}

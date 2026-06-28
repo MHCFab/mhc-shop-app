@@ -48,6 +48,9 @@ export default function NewJobPage() {
 
   // Build order (build a stockable item to stock)
   const [isBuild, setIsBuild] = useState(false);
+  const [buildOutputs, setBuildOutputs] = useState<{ templateId: string; name: string; quantity: string }[]>([]);
+  const [outputSearch, setOutputSearch] = useState("");
+  const [showOutputList, setShowOutputList] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -139,6 +142,9 @@ export default function NewJobPage() {
     setProductId("");
     setProductSearch("");
     setShowProductList(false);
+    setBuildOutputs([]);
+    setOutputSearch("");
+    setShowOutputList(false);
     if (checked) {
       setIsCustom(false);
       setCustomName("");
@@ -147,6 +153,32 @@ export default function NewJobPage() {
       const mhc = customers.find((c) => c.name.trim().toLowerCase() === "mhc");
       if (mhc) setCustomerId(mhc.id);
     }
+  }
+
+  // Build outputs (shared-nest builds): the list of stockable items this build produces.
+  const filteredOutputs = stockableTemplates.filter((t) => {
+    if (buildOutputs.some((o) => o.templateId === t.id)) return false;
+    if (!outputSearch) return true;
+    const s = outputSearch.toLowerCase();
+    return (t.name + " " + (t.product_number || "")).toLowerCase().includes(s);
+  });
+
+  function addOutput(t: Template) {
+    setBuildOutputs((prev) => {
+      if (prev.some((o) => o.templateId === t.id)) return prev;
+      if (!jobNumberEdited && prev.length === 0) setJobNumber("Build: " + t.name);
+      return [...prev, { templateId: t.id, name: t.name, quantity: "1" }];
+    });
+    setOutputSearch("");
+    setShowOutputList(false);
+  }
+
+  function setOutputQty(templateId: string, value: string) {
+    setBuildOutputs((prev) => prev.map((o) => (o.templateId === templateId ? { ...o, quantity: value } : o)));
+  }
+
+  function removeOutput(templateId: string) {
+    setBuildOutputs((prev) => prev.filter((o) => o.templateId !== templateId));
   }
 
   function describeMaterial(m: {
@@ -402,13 +434,24 @@ export default function NewJobPage() {
       return;
     }
     if (isBuild) {
-      if (!productId) {
-        setError("Please select the stockable item to build.");
+      if (buildOutputs.length === 0) {
+        setError("Add at least one item to build.");
         return;
+      }
+      for (const o of buildOutputs) {
+        const q = parseInt(o.quantity, 10);
+        if (isNaN(q) || q <= 0) {
+          setError("Each item to build needs a quantity of at least 1 (" + o.name + ").");
+          return;
+        }
       }
     } else if (isCustom) {
       if (!customName.trim()) {
         setError("Please describe what you're building.");
+        return;
+      }
+      if (parseInt(quantity) <= 0 || isNaN(parseInt(quantity))) {
+        setError("Quantity must be at least 1.");
         return;
       }
     } else {
@@ -416,10 +459,10 @@ export default function NewJobPage() {
         setError("Please select a product.");
         return;
       }
-    }
-    if (parseInt(quantity) <= 0 || isNaN(parseInt(quantity))) {
-      setError("Quantity must be at least 1.");
-      return;
+      if (parseInt(quantity) <= 0 || isNaN(parseInt(quantity))) {
+        setError("Quantity must be at least 1.");
+        return;
+      }
     }
     if (!jobNumber.trim()) {
       setError("Job number is required.");
@@ -465,8 +508,8 @@ export default function NewJobPage() {
         notes: notes.trim() || null,
         board_order: newBoardOrder,
         is_build_order: isBuild,
-        build_template_id: isBuild ? productId : null,
-        build_quantity: isBuild ? parseInt(quantity) : null,
+        build_template_id: isBuild ? buildOutputs[0].templateId : null,
+        build_quantity: isBuild ? parseInt(buildOutputs[0].quantity, 10) : null,
       })
       .select()
       .single();
@@ -477,18 +520,51 @@ export default function NewJobPage() {
       return;
     }
 
+    // A build order creates one line item per output it produces (so each output
+    // gets its own tasks); a templated job is a single line item; a custom job is a
+    // single line item with no template.
+    type DesiredLine = { templateId: string; quantity: number; sort_order: number };
+    const desired: DesiredLine[] = isBuild
+      ? buildOutputs.map((o, idx) => ({ templateId: o.templateId, quantity: parseInt(o.quantity, 10), sort_order: idx }))
+      : isCustom
+        ? []
+        : [{ templateId: productId, quantity: parseInt(quantity), sort_order: 0 }];
+
+    type LineInsert = {
+      company_id: string;
+      job_id: string;
+      product_template_id: string | null;
+      quantity: number;
+      notes: null;
+      sort_order: number;
+      name: string | null;
+      unit_price: number | null;
+    };
+    const lineRows: LineInsert[] = isCustom
+      ? [{
+          company_id: companyId,
+          job_id: job.id,
+          product_template_id: null,
+          quantity: parseInt(quantity),
+          notes: null,
+          sort_order: 0,
+          name: customName.trim(),
+          unit_price: unitPriceValue,
+        }]
+      : desired.map((d) => ({
+          company_id: companyId,
+          job_id: job.id,
+          product_template_id: d.templateId,
+          quantity: d.quantity,
+          notes: null,
+          sort_order: d.sort_order,
+          name: null,
+          unit_price: null,
+        }));
+
     const { data: insertedLineItems, error: lineError } = await supabase
       .from("job_line_items")
-      .insert({
-        company_id: companyId,
-        job_id: job.id,
-        product_template_id: isCustom ? null : productId,
-        quantity: parseInt(quantity),
-        notes: null,
-        sort_order: 0,
-        name: isCustom ? customName.trim() : null,
-        unit_price: isCustom ? unitPriceValue : null,
-      })
+      .insert(lineRows)
       .select();
 
     if (lineError || !insertedLineItems || insertedLineItems.length === 0) {
@@ -497,14 +573,32 @@ export default function NewJobPage() {
       return;
     }
 
+    // Record what a build order produces, so the job page can receive each item into
+    // fabricated stock at its own cost per unit.
+    if (isBuild) {
+      const { error: boError } = await supabase.from("build_outputs").insert(
+        buildOutputs.map((o) => ({
+          company_id: companyId,
+          job_id: job.id,
+          product_template_id: o.templateId,
+          quantity: parseInt(o.quantity, 10),
+        }))
+      );
+      if (boError) {
+        setError("Job created, but failed to save its build outputs: " + boError.message);
+        router.push("/admin/jobs/" + job.id);
+        return;
+      }
+    }
+
     // Templated jobs AND build orders auto-generate their pick list and tasks.
     // Custom jobs come in blank — you build the pick list and tasks by hand.
     if (!isCustom) {
-      const itemsForGeneration = [{
-        lineItemId: insertedLineItems[0].id,
-        templateId: productId,
-        quantity: parseInt(quantity),
-      }];
+      const insertedArr = insertedLineItems as unknown as { id: string; sort_order: number }[];
+      const itemsForGeneration = desired.map((d) => {
+        const li = insertedArr.find((x) => Number(x.sort_order) === d.sort_order);
+        return { lineItemId: li ? li.id : insertedArr[0].id, templateId: d.templateId, quantity: d.quantity };
+      });
 
       try {
         await generatePickListAndTasks(job.id, itemsForGeneration);
@@ -591,44 +685,69 @@ export default function NewJobPage() {
           {isBuild ? (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Item to build <span className="text-red-600">*</span>
+                Items to build <span className="text-red-600">*</span>
               </label>
               {stockableTemplates.length === 0 ? (
                 <p className="text-sm text-amber-700 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md">
                   No stockable items yet. Open a sub-assembly in <Link href="/admin/product-templates" className="underline font-medium">Product Templates</Link> and tick &quot;Stockable fabricated item&quot; on its Settings tab.
                 </p>
               ) : (
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={productSearch}
-                    onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); setProductId(""); }}
-                    onFocus={() => setShowProductList(true)}
-                    placeholder="Start typing to find a stockable item..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {showProductList && (
-                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                      {filteredProducts.length === 0 ? (
-                        <p className="px-3 py-2 text-sm text-gray-500">No matching items.</p>
-                      ) : (
-                        filteredProducts.map((t) => (
+                <>
+                  {buildOutputs.length > 0 && (
+                    <div className="space-y-2 mb-2">
+                      {buildOutputs.map((o) => (
+                        <div key={o.templateId} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                          <span className="flex-1 text-sm text-gray-900">{o.name}</span>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={o.quantity}
+                            onChange={(e) => setOutputQty(o.templateId, e.target.value)}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded-md text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
                           <button
-                            key={t.id}
                             type="button"
-                            onClick={() => pickProduct(t)}
-                            className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
+                            onClick={() => removeOutput(o.templateId)}
+                            className="text-gray-400 hover:text-red-600 text-lg leading-none px-1"
+                            aria-label={"Remove " + o.name}
                           >
-                            {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                            &times;
                           </button>
-                        ))
-                      )}
+                        </div>
+                      ))}
                     </div>
                   )}
-                  {selectedProduct && (
-                    <p className="text-xs text-green-700 mt-1">Building: {selectedProduct.name}</p>
-                  )}
-                </div>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={outputSearch}
+                      onChange={(e) => { setOutputSearch(e.target.value); setShowOutputList(true); }}
+                      onFocus={() => setShowOutputList(true)}
+                      placeholder="Start typing to add an item to build..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    {showOutputList && (
+                      <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        {filteredOutputs.length === 0 ? (
+                          <p className="px-3 py-2 text-sm text-gray-500">No matching items.</p>
+                        ) : (
+                          filteredOutputs.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => addOutput(t)}
+                              className="block w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50"
+                            >
+                              {t.name}{t.product_number ? " (" + t.product_number + ")" : ""}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">Add one item for a normal build, or several to build them together from one shared cutting nest. Each item is stocked separately at its own cost.</p>
+                </>
               )}
             </div>
           ) : !isCustom ? (
@@ -711,22 +830,21 @@ export default function NewJobPage() {
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {isBuild ? "Quantity to build" : "Quantity"} <span className="text-red-600">*</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              {isBuild && (
-                <p className="text-xs text-gray-500 mt-1">How many units this build adds to fabricated stock when you receive it.</p>
-              )}
-            </div>
+            {!isBuild && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Quantity <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Job number <span className="text-red-600">*</span>
