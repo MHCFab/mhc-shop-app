@@ -25,6 +25,7 @@ export default function PhotosTab({ templateId }: { templateId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [editingCaptionId, setEditingCaptionId] = useState<string | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
+  const [lightbox, setLightbox] = useState<PhotoWithUrl | null>(null);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -201,14 +202,21 @@ export default function PhotosTab({ templateId }: { templateId: string }) {
             <div key={p.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="relative w-full h-48 bg-gray-100">
                 {p.url ? (
-                  <Image
-                    src={p.url}
-                    alt={p.caption || "Product photo"}
-                    fill
-                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                    className="object-cover"
-                    unoptimized
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setLightbox(p)}
+                    className="relative block w-full h-full cursor-zoom-in"
+                    aria-label="Open photo full size"
+                  >
+                    <Image
+                      src={p.url}
+                      alt={p.caption || "Product photo"}
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                      className="object-cover"
+                      unoptimized
+                    />
+                  </button>
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-sm text-gray-400">Image unavailable</div>
                 )}
@@ -252,6 +260,28 @@ export default function PhotosTab({ templateId }: { templateId: string }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div className="relative max-w-4xl w-full" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setLightbox(null)}
+              className="absolute -top-3 -right-3 z-10 bg-white text-gray-800 rounded-full w-9 h-9 flex items-center justify-center shadow-lg text-xl leading-none"
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <div className="relative w-full bg-black rounded-lg overflow-hidden" style={{ height: "80vh" }}>
+              <Image src={lightbox.url} alt={lightbox.caption || "Product photo"} fill sizes="100vw" className="object-contain" unoptimized />
+            </div>
+            {lightbox.caption && <p className="text-sm text-white mt-3 text-center">{lightbox.caption}</p>}
+          </div>
         </div>
       )}
     </div>

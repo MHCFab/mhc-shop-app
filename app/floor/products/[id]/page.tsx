@@ -44,6 +44,7 @@ export default function FloorProductDetail() {
   const [savingNote, setSavingNote] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [lightbox, setLightbox] = useState<Photo | null>(null);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -187,9 +188,14 @@ export default function FloorProductDetail() {
           <div className="grid grid-cols-2 gap-2 p-3">
             {photos.map((p) => (
               <div key={p.id} className="rounded-lg overflow-hidden border border-gray-200">
-                <div className="relative w-full h-40 bg-gray-100">
+                <button
+                  type="button"
+                  onClick={() => p.url && setLightbox(p)}
+                  className="relative block w-full h-40 bg-gray-100 cursor-zoom-in"
+                  aria-label="Open photo full size"
+                >
                   {p.url && <Image src={p.url} alt={p.caption || "Product photo"} fill sizes="50vw" className="object-cover" unoptimized />}
-                </div>
+                </button>
                 {p.caption && <p className="text-xs text-gray-700 p-2">{p.caption}</p>}
               </div>
             ))}
@@ -232,6 +238,28 @@ export default function FloorProductDetail() {
           )}
         </div>
       </div>
+
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div className="relative max-w-3xl w-full" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setLightbox(null)}
+              className="absolute -top-3 -right-3 z-10 bg-white text-gray-800 rounded-full w-10 h-10 flex items-center justify-center shadow-lg text-2xl leading-none"
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <div className="relative w-full bg-black rounded-lg overflow-hidden" style={{ height: "80vh" }}>
+              {lightbox.url && <Image src={lightbox.url} alt={lightbox.caption || "Product photo"} fill sizes="100vw" className="object-contain" unoptimized />}
+            </div>
+            {lightbox.caption && <p className="text-sm text-white mt-3 text-center">{lightbox.caption}</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
