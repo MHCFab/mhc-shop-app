@@ -117,6 +117,13 @@ export default function MaterialDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [togglingActive, setTogglingActive] = useState(false);
 
+  // Edit / delete a single history entry (purchases, opening stock, adjustments)
+  const [editEntry, setEditEntry] = useState<Batch | null>(null);
+  const [entryForm, setEntryForm] = useState({ purchase_date: "", stick_length_feet: "", quantity_sticks: "", cost_per_foot: "", notes: "" });
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const [savingEntry, setSavingEntry] = useState(false);
+  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
+
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -301,6 +308,66 @@ export default function MaterialDetailPage() {
     router.push("/admin/inventory");
   }
 
+  // Only manually-entered stock rows can be edited/deleted here. Job pulls, drops, and
+  // reversals are owned by the cutting nest and must be changed from the job.
+  const EDITABLE_ENTRY_TYPES = ["purchase", "opening", "adjustment"];
+  function isEditableEntry(t: string | null): boolean {
+    return t != null && EDITABLE_ENTRY_TYPES.includes(t);
+  }
+
+  function openEntryEdit(b: Batch) {
+    setEntryError(null);
+    setEntryForm({
+      purchase_date: b.purchase_date,
+      stick_length_feet: String(b.stick_length_feet),
+      quantity_sticks: String(b.quantity_sticks),
+      cost_per_foot: String(b.cost_per_foot),
+      notes: b.notes || "",
+    });
+    setEditEntry(b);
+  }
+
+  async function saveEntryEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editEntry) return;
+    setEntryError(null);
+    const len = parseFloat(entryForm.stick_length_feet);
+    const qty = parseInt(entryForm.quantity_sticks, 10);
+    const cost = parseFloat(entryForm.cost_per_foot);
+    if (isNaN(len) || len <= 0) { setEntryError("Enter a valid stick length."); return; }
+    if (isNaN(qty)) { setEntryError("Enter a quantity (negative removes stock)."); return; }
+    if (isNaN(cost) || cost < 0) { setEntryError("Enter a valid cost per foot."); return; }
+    if (!entryForm.purchase_date) { setEntryError("Enter a date."); return; }
+    setSavingEntry(true);
+    const { error } = await supabase
+      .from("raw_material_inventory")
+      .update({
+        purchase_date: entryForm.purchase_date,
+        stick_length_feet: len,
+        quantity_sticks: qty,
+        cost_per_foot: cost,
+        notes: entryForm.notes.trim() || null,
+      })
+      .eq("id", editEntry.id);
+    setSavingEntry(false);
+    if (error) { setEntryError(error.message); return; }
+    setEditEntry(null);
+    loadData();
+  }
+
+  async function deleteEntry(b: Batch) {
+    const ok = confirm(
+      "Delete this " + entryTypeLabel(b.entry_type).toLowerCase() + " entry from " + b.purchase_date +
+      "?\n\nThis removes it from stock and from the cost history. This cannot be undone."
+    );
+    if (!ok) return;
+    setDeletingEntryId(b.id);
+    const { error } = await supabase.from("raw_material_inventory").delete().eq("id", b.id);
+    setDeletingEntryId(null);
+    if (error) { alert("Could not delete this entry.\n\nDetails: " + error.message); return; }
+    loadData();
+  }
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-8">
@@ -453,7 +520,7 @@ export default function MaterialDetailPage() {
         <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
             <h3 className="text-base font-semibold text-gray-900">Purchase &amp; price history</h3>
-            <p className="text-sm text-gray-600">Every stock movement, newest first. Only purchases and opening stock set the cost.</p>
+            <p className="text-sm text-gray-600">Every stock movement, newest first. Only purchases and opening stock set the cost. You can edit or delete purchases, opening stock, and manual adjustments; job pulls and drops are managed from the job&apos;s cutting nest.</p>
           </div>
           {batches.length === 0 ? (
             <p className="px-4 py-6 text-sm text-gray-600">No history yet.</p>
@@ -469,6 +536,7 @@ export default function MaterialDetailPage() {
                     <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Qty sticks</th>
                     <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Cost / ft</th>
                     <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+                    <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -483,6 +551,16 @@ export default function MaterialDetailPage() {
                         <td className={"px-4 py-3 text-sm text-right font-mono " + (qty < 0 ? "text-red-600" : "text-gray-900")}>{qty > 0 ? "+" : ""}{qty}</td>
                         <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_per_foot).toFixed(4)}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{b.notes || b.source_note || "-"}</td>
+                        <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                          {isEditableEntry(b.entry_type) ? (
+                            <span className="inline-flex gap-3 justify-end">
+                              <button onClick={() => openEntryEdit(b)} className="text-blue-600 hover:text-blue-800 font-medium">Edit</button>
+                              <button onClick={() => deleteEntry(b)} disabled={deletingEntryId === b.id} className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50">{deletingEntryId === b.id ? "Deleting..." : "Delete"}</button>
+                            </span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -569,6 +647,44 @@ export default function MaterialDetailPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowEdit(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
                 <button type="submit" disabled={savingEdit} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingEdit ? "Saving..." : "Save"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editEntry && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <form onSubmit={saveEntryEdit} className="p-6 space-y-3">
+              <h2 className="text-xl font-bold text-gray-900">Edit {entryTypeLabel(editEntry.entry_type).toLowerCase()} entry</h2>
+              <p className="text-sm text-gray-600">Fixing an entry recalculates your cost on hand automatically. Use a negative quantity to represent stock that was removed.</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={entryForm.purchase_date} onChange={(e) => setEntryForm({ ...entryForm, purchase_date: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (ft)</label>
+                  <input type="number" step="0.01" min="0" value={entryForm.stick_length_feet} onChange={(e) => setEntryForm({ ...entryForm, stick_length_feet: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Qty sticks (+/-)</label>
+                  <input type="number" step="1" value={entryForm.quantity_sticks} onChange={(e) => setEntryForm({ ...entryForm, quantity_sticks: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cost per foot</label>
+                <input type="number" step="0.0001" min="0" value={entryForm.cost_per_foot} onChange={(e) => setEntryForm({ ...entryForm, cost_per_foot: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <input type="text" value={entryForm.notes} onChange={(e) => setEntryForm({ ...entryForm, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {entryError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{entryError}</div>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setEditEntry(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
+                <button type="submit" disabled={savingEntry} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingEntry ? "Saving..." : "Save changes"}</button>
               </div>
             </form>
           </div>

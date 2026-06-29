@@ -544,7 +544,7 @@ type PickItem = {
           .from("cutting_nest_entries")
           .select("raw_material_id, entry_type, length_feet, quantity")
           .eq("job_id", jobId)
-          .eq("entry_type", "pull"),
+          .in("entry_type", ["pull", "drop"]),
       ]);
       setItems((itemsRes.data || []) as unknown as PickItem[]);
       setPulls((pullsRes.data || []) as unknown as NestPull[]);
@@ -581,7 +581,21 @@ type PickItem = {
     // Group pull entries by material, then by length
     function sticksFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
       if (!rawMaterialId) return [];
-      const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId);
+      const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "pull");
+      const map = new Map<number, number>();
+      for (const p of mine) {
+        const len = Number(p.length_feet);
+        map.set(len, (map.get(len) || 0) + Number(p.quantity));
+      }
+      return Array.from(map.entries())
+        .map(([length, sticks]) => ({ length, sticks }))
+        .sort((a, b) => b.length - a.length);
+    }
+
+    // Drops the boss logged back to inventory for this material — the crew keeps these.
+    function dropsFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
+      if (!rawMaterialId) return [];
+      const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "drop");
       const map = new Map<number, number>();
       for (const p of mine) {
         const len = Number(p.length_feet);
@@ -604,6 +618,7 @@ type PickItem = {
             <ul className="divide-y divide-gray-100">
               {materials.map((i) => {
                 const sticks = sticksFor(i.raw_material_id);
+                const drops = dropsFor(i.raw_material_id);
                 return (
                   <li key={i.id} className="px-4 py-3">
                     <div className="font-medium text-gray-900">{describe(i)}</div>
@@ -617,6 +632,20 @@ type PickItem = {
                             <span className="font-mono font-semibold text-gray-900">× {s.sticks}</span>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {drops.length > 0 && (
+                      <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-green-800">Keep these drops — return to inventory</div>
+                        <div className="mt-1 space-y-1">
+                          {drops.map((d) => (
+                            <div key={d.length} className="flex items-center justify-between text-sm">
+                              <span className="text-green-900">{d.length.toFixed(2)} ft drop</span>
+                              <span className="font-mono font-semibold text-green-900">× {d.sticks}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-1 text-xs text-green-700">Any other cut-offs are scrap.</div>
                       </div>
                     )}
                   </li>

@@ -289,7 +289,7 @@ export type JobStockShortfallItem = {
 export async function getJobStockShortfall(jobId: string): Promise<JobStockShortfallItem[]> {
   const supabase = createClient();
 
-  const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes] = await Promise.all([
+  const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes, nestRes] = await Promise.all([
     supabase
       .from("job_pick_list_items")
       .select("item_type, raw_material_id, purchased_part_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
@@ -308,6 +308,13 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
       .from("inventory_allocations")
       .select("item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity")
       .neq("job_id", jobId),
+    // This job's OWN cutting-nest pulls/drops. Material already pulled for the job has
+    // left free inventory, but it is covering this job's requirement, so it must count
+    // toward 'available' for this job — otherwise pulling sticks looks like a shortfall.
+    supabase
+      .from("cutting_nest_entries")
+      .select("raw_material_id, entry_type, length_feet, quantity")
+      .eq("job_id", jobId),
   ]);
 
   type PickRow = {
@@ -325,12 +332,27 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   type PpInvRow = { purchased_part_id: string; quantity: number };
   type FabInvRow = { product_template_id: string; quantity: number };
   type AllocRow = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null; allocated_quantity: number };
+  type NestRow = { raw_material_id: string; entry_type: string; length_feet: number; quantity: number };
 
   const pick = (pickRes.data || []) as unknown as PickRow[];
   const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
   const ppInv = (ppInvRes.data || []) as unknown as PpInvRow[];
   const fabInv = (fabInvRes.data || []) as unknown as FabInvRow[];
   const allocs = (allocRes.data || []) as unknown as AllocRow[];
+  const nest = (nestRes.data || []) as unknown as NestRow[];
+
+  // Net feet this job has already pulled for itself (pulls minus drops returned), per
+  // raw material. Only raw materials flow through the cutting nest.
+  const thisJobPulled = new Map<string, number>();
+  for (const e of nest) {
+    if (!e.raw_material_id) continue;
+    const feet = Number(e.length_feet) * Number(e.quantity);
+    if (e.entry_type === "pull") {
+      thisJobPulled.set(e.raw_material_id, (thisJobPulled.get(e.raw_material_id) || 0) + feet);
+    } else if (e.entry_type === "drop") {
+      thisJobPulled.set(e.raw_material_id, (thisJobPulled.get(e.raw_material_id) || 0) - feet);
+    }
+  }
 
   // Total stock on hand per material / part / fabricated item
   const rmStock = new Map<string, number>();
@@ -440,7 +462,10 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
       item.itemType === "raw_material" ? (rmAlloc.get(item.id) || 0)
       : item.itemType === "purchased_part" ? (ppAlloc.get(item.id) || 0)
       : (fabAlloc.get(item.id) || 0);
-    const available = stock - claimedByOthers;
+    // Material this job has already pulled is no longer free stock, but it covers the
+    // job, so add it back in (raw materials only; parts/fabricated never pull a nest).
+    const alreadyPulled = item.itemType === "raw_material" ? (thisJobPulled.get(item.id) || 0) : 0;
+    const available = stock - claimedByOthers + alreadyPulled;
     const short = item.required - available;
 
     item.available = available;
