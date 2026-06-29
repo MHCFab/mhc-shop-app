@@ -57,6 +57,8 @@ export default function ProductTemplatesPage() {
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   async function loadCompanyId() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -92,7 +94,7 @@ export default function ProductTemplatesPage() {
     return map;
   }, [customers]);
 
-  const filtered = useMemo(() => {
+  const baseFiltered = useMemo(() => {
     return templates.filter((t) => {
       if (filterType === "products" && t.is_sub_assembly) return false;
       if (filterType === "sub_assemblies" && !t.is_sub_assembly) return false;
@@ -105,6 +107,39 @@ export default function ProductTemplatesPage() {
       return true;
     });
   }, [templates, search, filterType, customerName]);
+
+  // Inactive templates hidden by the "show inactive" toggle (within the current filters).
+  const inactiveHiddenCount = useMemo(
+    () => baseFiltered.filter((t) => !t.is_active).length,
+    [baseFiltered]
+  );
+
+  const filtered = useMemo(
+    () => (showInactive ? baseFiltered : baseFiltered.filter((t) => t.is_active)),
+    [baseFiltered, showInactive]
+  );
+
+  // Group products under their customer; sub-assemblies share one group at the end.
+  const groups = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; items: ProductTemplate[]; isSub: boolean }>();
+    for (const t of filtered) {
+      const isSub = t.is_sub_assembly;
+      const key = isSub ? "__subs__" : (t.customer_id || "__none__");
+      const label = isSub
+        ? "Sub-assemblies"
+        : t.customer_id
+          ? (customerName[t.customer_id] || "Unknown customer")
+          : "No customer";
+      if (!map.has(key)) map.set(key, { key, label, items: [], isSub });
+      map.get(key)!.items.push(t);
+    }
+    const arr = Array.from(map.values());
+    arr.sort((a, b) => {
+      if (a.isSub !== b.isSub) return a.isSub ? 1 : -1; // sub-assemblies last
+      return a.label.localeCompare(b.label);
+    });
+    return arr;
+  }, [filtered, customerName]);
 
   function openNew() {
     setForm(emptyForm);
@@ -135,6 +170,15 @@ export default function ProductTemplatesPage() {
     setEditingId(null);
     setForm(emptyForm);
     setError(null);
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -423,6 +467,15 @@ export default function ProductTemplatesPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+        <label className="flex items-center gap-2 text-sm text-gray-700 whitespace-nowrap px-1">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          Show inactive{!showInactive && inactiveHiddenCount > 0 ? " (" + inactiveHiddenCount + ")" : ""}
+        </label>
       </div>
 
       {loading ? (
@@ -432,57 +485,59 @@ export default function ProductTemplatesPage() {
           <p className="text-gray-600">
             {templates.length === 0
               ? "No product templates yet. Click Add product template to add your first one."
-              : "No templates match your search."}
+              : "No templates match your filters."}
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((t) => (
-            <div key={t.id} className="bg-white border border-gray-200 rounded-lg p-5 hover:border-blue-400 hover:shadow-md transition-all">
-              <div className="flex items-start justify-between mb-2">
-                <div className="min-w-0 flex-1">
-                  <Link href={"/admin/product-templates/" + t.id} className="block">
-                    <h2 className="text-lg font-semibold text-gray-900 truncate hover:text-blue-700">{t.name}</h2>
-                    {t.product_number && <p className="text-sm text-gray-500">{t.product_number}</p>}
-                  </Link>
-                  {!t.is_sub_assembly && t.customer_id && (
-                    <p className="text-sm text-gray-600 mt-0.5">{customerName[t.customer_id] || "Unknown customer"}</p>
-                  )}
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  {t.is_active ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
-                  )}
-                  {t.is_sub_assembly && (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">Sub-assembly</span>
-                  )}
-                </div>
+        <div className="space-y-4">
+          {groups.map((g) => {
+            const isCollapsed = collapsed.has(g.key);
+            return (
+              <div key={g.key} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g.key)}
+                  className="w-full flex items-center gap-2 px-4 py-3 bg-gray-50 border-b border-gray-200 hover:bg-gray-100 transition-colors text-left"
+                >
+                  <span className="text-gray-400 text-xs w-3">{isCollapsed ? "▸" : "▾"}</span>
+                  <span className="font-semibold text-gray-900">{g.label}</span>
+                  <span className="text-sm font-normal text-gray-500">({g.items.length})</span>
+                </button>
+                {!isCollapsed && (
+                  <ul className="divide-y divide-gray-100">
+                    {g.items.map((t) => (
+                      <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-gray-50">
+                        <div className="min-w-0 flex-1">
+                          <Link href={"/admin/product-templates/" + t.id} className="font-medium text-gray-900 hover:text-blue-700">
+                            {t.name}
+                          </Link>
+                          {t.product_number && <span className="text-sm text-gray-500 ml-2">{t.product_number}</span>}
+                          {!t.is_active && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
+                          )}
+                          {t.is_sub_assembly && t.is_stockable && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">Stockable</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-sm shrink-0">
+                          <Link href={"/admin/product-templates/" + t.id} className="text-blue-600 hover:text-blue-800 font-medium">Open</Link>
+                          <button onClick={() => openEdit(t)} className="text-gray-600 hover:text-gray-900 font-medium">Edit</button>
+                          <button
+                            onClick={() => handleDuplicate(t)}
+                            disabled={duplicatingId === t.id}
+                            className="text-gray-600 hover:text-gray-900 font-medium disabled:opacity-50"
+                          >
+                            {duplicatingId === t.id ? "Copying..." : "Duplicate"}
+                          </button>
+                          <button onClick={() => handleDelete(t)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              {t.description && <p className="text-sm text-gray-700 mb-4 line-clamp-3">{t.description}</p>}
-              <div className="flex items-center justify-between text-sm">
-                <Link href={"/admin/product-templates/" + t.id} className="text-blue-600 hover:text-blue-800 font-medium">
-                  Open
-                </Link>
-                <div className="flex gap-3">
-                  <button onClick={() => openEdit(t)} className="text-gray-600 hover:text-gray-900 font-medium">
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => handleDuplicate(t)}
-                    disabled={duplicatingId === t.id}
-                    className="text-gray-600 hover:text-gray-900 font-medium disabled:opacity-50"
-                  >
-                    {duplicatingId === t.id ? "Copying..." : "Duplicate"}
-                  </button>
-                  <button onClick={() => handleDelete(t)} className="text-red-600 hover:text-red-800 font-medium">
-                    Delete
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
