@@ -39,6 +39,7 @@ export default function TasksTab({ templateId }: { templateId: string }) {
   const [form, setForm] = useState<Form>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -118,6 +119,7 @@ export default function TasksTab({ templateId }: { templateId: string }) {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotice(null);
     setSaving(true);
 
     if (!form.name.trim()) {
@@ -156,6 +158,43 @@ export default function TasksTab({ templateId }: { templateId: string }) {
       setError(error.message);
       setSaving(false);
       return;
+    }
+
+    // When an existing template task is edited, push the new per-unit estimate to
+    // the matching tasks on all current (non-archived) jobs. Each job task's total
+    // is recomputed from its own stored batch quantity; status and time history are
+    // left untouched. Archived jobs live in a separate table and are unaffected.
+    if (editingId) {
+      const { data: jobTaskRows, error: jtErr } = await supabase
+        .from("job_tasks")
+        .select("id, batch_quantity")
+        .eq("source_task_id", editingId);
+      if (jtErr) {
+        setError("Task saved, but updating current jobs failed: " + jtErr.message);
+        setSaving(false);
+        return;
+      }
+      const rows = (jobTaskRows || []) as unknown as { id: string; batch_quantity: number }[];
+      if (rows.length > 0) {
+        const idsByQty = new Map<number, string[]>();
+        for (const r of rows) {
+          const q = Number(r.batch_quantity);
+          if (!idsByQty.has(q)) idsByQty.set(q, []);
+          idsByQty.get(q)!.push(r.id);
+        }
+        for (const [q, ids] of idsByQty) {
+          const { error: upErr } = await supabase
+            .from("job_tasks")
+            .update({ estimated_minutes_total: mins * q })
+            .in("id", ids);
+          if (upErr) {
+            setError("Task saved, but updating current jobs failed: " + upErr.message);
+            setSaving(false);
+            return;
+          }
+        }
+        setNotice("Estimate updated on " + rows.length + " task" + (rows.length === 1 ? "" : "s") + " across current jobs.");
+      }
     }
 
     setSaving(false);
@@ -202,6 +241,7 @@ export default function TasksTab({ templateId }: { templateId: string }) {
   return (
     <div className="space-y-4">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
+      {notice && <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">{notice}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
