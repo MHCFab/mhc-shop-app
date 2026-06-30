@@ -757,6 +757,17 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     }
   }
 
+  // Per-customer labor rate override for the suggested retail price.
+  // If the job's customer has a rate set, it replaces the shop rate; otherwise the shop rate is used.
+  let effectiveLaborRate = shopLaborRate;
+  const { data: jobCustRow } = await supabase.from("jobs").select("customer_id").eq("id", jobId).single();
+  const custIdForRate = (jobCustRow as { customer_id: string | null } | null)?.customer_id || null;
+  if (custIdForRate) {
+    const { data: custRate } = await supabase.from("customers").select("labor_rate_per_hour").eq("id", custIdForRate).single();
+    const rate = (custRate as { labor_rate_per_hour: number | null } | null)?.labor_rate_per_hour;
+    if (rate != null) effectiveLaborRate = Number(rate);
+  }
+
   const [liRes, pickRes, timeRes, varRes, tasksRes, rmInvRes, ppInvRes, fabInvRes] = await Promise.all([
     supabase.from("job_line_items").select("quantity, product_template_id, unit_price, product_templates(retail_price_per_unit)").eq("job_id", jobId),
     supabase
@@ -910,7 +921,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   const suggestedMaterial = estimateMaterialCost * markupMult;
   const suggestedParts = estimatePartsCost * markupMult;
   const suggestedFabricated = estimateFabricatedCost * markupMult;
-  const suggestedLabor = laborHours * shopLaborRate;
+  const suggestedLabor = laborHours * effectiveLaborRate;
   const suggestedRetailTotal = suggestedMaterial + suggestedParts + suggestedFabricated + suggestedLabor;
   const suggestedRetailPerUnit = units > 0 ? suggestedRetailTotal / units : 0;
 
@@ -957,7 +968,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     netProfitPerUnit,
     marginPercent,
     burdenRate,
-    shopLaborRate,
+    shopLaborRate: effectiveLaborRate,
     markupPercent,
   };
 }

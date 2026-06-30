@@ -12,6 +12,7 @@ type Customer = {
   address: string | null;
   notes: string | null;
   is_active: boolean;
+  labor_rate_per_hour: number | null;
 };
 
 type Form = {
@@ -22,6 +23,7 @@ type Form = {
   address: string;
   notes: string;
   is_active: boolean;
+  labor_rate: string;
 };
 
 const emptyForm: Form = {
@@ -32,6 +34,7 @@ const emptyForm: Form = {
   address: "",
   notes: "",
   is_active: true,
+  labor_rate: "",
 };
 
 export default function CustomersPage() {
@@ -90,6 +93,7 @@ export default function CustomersPage() {
       address: c.address || "",
       notes: c.notes || "",
       is_active: c.is_active,
+      labor_rate: c.labor_rate_per_hour != null ? String(c.labor_rate_per_hour) : "",
     });
     setEditingId(c.id);
     setError(null);
@@ -119,6 +123,17 @@ export default function CustomersPage() {
       return;
     }
 
+    let laborRate: number | null = null;
+    if (form.labor_rate.trim() !== "") {
+      const r = Number(form.labor_rate);
+      if (!Number.isFinite(r) || r < 0) {
+        setError("Labor rate must be a number of 0 or more, or left blank.");
+        setSaving(false);
+        return;
+      }
+      laborRate = r;
+    }
+
     const payload = {
       name: form.name.trim(),
       contact_name: form.contact_name.trim() || null,
@@ -127,6 +142,7 @@ export default function CustomersPage() {
       address: form.address.trim() || null,
       notes: form.notes.trim() || null,
       is_active: form.is_active,
+      labor_rate_per_hour: laborRate,
     };
 
     const { error } = editingId
@@ -191,6 +207,7 @@ export default function CustomersPage() {
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Contact</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Phone</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Email</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Labor rate</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
               </tr>
@@ -202,6 +219,9 @@ export default function CustomersPage() {
                   <td className="px-4 py-3 text-sm text-gray-700">{c.contact_name || "-"}</td>
                   <td className="px-4 py-3 text-sm text-gray-700">{c.phone || "-"}</td>
                   <td className="px-4 py-3 text-sm text-gray-700">{c.email || "-"}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">
+                    {c.labor_rate_per_hour != null ? "$" + Number(c.labor_rate_per_hour).toFixed(2) + "/hr" : <span className="text-gray-400">Default</span>}
+                  </td>
                   <td className="px-4 py-3 text-sm">
                     {c.is_active ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
@@ -269,6 +289,20 @@ export default function CustomersPage() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Labor rate ($ per hour)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Leave blank to use the shop default"
+                    value={form.labor_rate}
+                    onChange={(e) => setForm({ ...form, labor_rate: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Used for this customer&apos;s suggested retail price. Blank = the shop labor rate from Settings.</p>
                 </div>
 
                 <div>
