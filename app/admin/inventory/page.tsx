@@ -193,14 +193,33 @@ export default function InventoryPage() {
     });
   }, [fabricated, search, showInactive]);
 
-  // Group materials by shape (in SHAPES order) for collapsible sections.
+  // Group materials by shape (in SHAPES order) for collapsible sections. Round tube gets a
+  // second level grouped by grade (ERW, DOM, solid, ...) to declutter its long list; other
+  // shapes stay as a single flat list.
   const materialGroups = useMemo(() => {
     return SHAPES
-      .map((s) => ({
-        key: s.value,
-        label: s.label,
-        items: filteredMaterials.filter((m) => m.shape === s.value),
-      }))
+      .map((s) => {
+        const items = filteredMaterials.filter((m) => m.shape === s.value);
+        let gradeGroups:
+          | { key: string; label: string; items: AvailableRawMaterial[] }[]
+          | null = null;
+        if (s.value === "round_tube" && items.length > 0) {
+          const map = new Map<string, { key: string; label: string; items: AvailableRawMaterial[] }>();
+          for (const m of items) {
+            const g = (m.grade || "").trim();
+            const gradeKey = g || "__none__";
+            const label = g || "No grade";
+            if (!map.has(gradeKey)) map.set(gradeKey, { key: s.value + "::" + gradeKey, label, items: [] });
+            map.get(gradeKey)!.items.push(m);
+          }
+          gradeGroups = Array.from(map.values()).sort((a, b) => {
+            if (a.label === "No grade") return 1;
+            if (b.label === "No grade") return -1;
+            return a.label.localeCompare(b.label);
+          });
+        }
+        return { key: s.value, label: s.label, items, gradeGroups };
+      })
       .filter((g) => g.items.length > 0);
   }, [filteredMaterials]);
 
@@ -250,6 +269,25 @@ export default function InventoryPage() {
         <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${p.costEach.toFixed(4)}</td>
         <td className="px-4 py-3 text-sm text-right">
           <Link href={"/admin/inventory/part/" + p.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
+        </td>
+      </tr>
+    );
+  }
+
+  function renderMaterialRow(m: AvailableRawMaterial, indent = false) {
+    return (
+      <tr key={m.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+        <td className={"px-4 py-3 text-sm text-gray-900 font-medium" + (indent ? " pl-12" : "")}>
+          {describeMaterial(m)}
+          {!m.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
+        </td>
+        <td className="px-4 py-3 text-sm text-right font-mono">
+          <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{m.available.toFixed(2)}</span>
+        </td>
+        <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{m.allocated.toFixed(2)}</td>
+        <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.costPerFoot.toFixed(4)}</td>
+        <td className="px-4 py-3 text-sm text-right">
+          <Link href={"/admin/inventory/material/" + m.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
         </td>
       </tr>
     );
@@ -651,22 +689,25 @@ export default function InventoryPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {g.items.map((m) => (
-                          <tr key={m.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                            <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                              {describeMaterial(m)}
-                              {!m.is_active && <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">Inactive</span>}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-right font-mono">
-                              <span className={m.available <= 0 ? "text-red-600 font-semibold" : "text-gray-900"}>{m.available.toFixed(2)}</span>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-500">{m.allocated.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">${m.costPerFoot.toFixed(4)}</td>
-                            <td className="px-4 py-3 text-sm text-right">
-                              <Link href={"/admin/inventory/material/" + m.id} className="text-blue-600 hover:text-blue-800 font-medium">Details</Link>
-                            </td>
-                          </tr>
-                        ))}
+                        {g.gradeGroups
+                          ? g.gradeGroups.map((gg) => {
+                              const gopen = isOpen(gg.key);
+                              return (
+                                <Fragment key={gg.key}>
+                                  <tr className="bg-gray-50/60 border-b border-gray-100">
+                                    <td colSpan={5} className="px-4 py-2 pl-8">
+                                      <button onClick={() => toggleGroup(gg.key)} className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full text-left">
+                                        <span className={"inline-block transition-transform " + (gopen ? "rotate-90" : "")}>&#9656;</span>
+                                        {gg.label}
+                                        <span className="text-xs text-gray-400 font-normal">({gg.items.length})</span>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                  {gopen && gg.items.map((m) => renderMaterialRow(m, true))}
+                                </Fragment>
+                              );
+                            })
+                          : g.items.map((m) => renderMaterialRow(m))}
                       </tbody>
                     </table>
                   )}

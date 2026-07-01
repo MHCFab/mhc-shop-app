@@ -36,12 +36,6 @@ Decide whether fabricated cost should instead use true LIFO/actual consumed cost
 consumption costing. (Note: if #1 makes catalog cost = latest purchase cost, current-cost and LIFO largely
 converge.)
 
-## Inventory UX
-
-### Declutter round-tube selection by grade  *(open, raised 2026-07-01)*
-On the raw-material inventory page, break the round-tube list out by grade (ERW, DOM, solid, etc.) so the
-selection isn't one long list. Next session.
-
 ## Fabricated sub-assemblies — remaining phases
 
 ### 5. Phase 2 — jobs pull finished sub-assemblies from fabricated stock  *(DONE, pending deploy)*
@@ -72,6 +66,10 @@ job_pick_list_items + inventory_allocations, item_type CHECKs widened to include
 - Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
 
 ## Done (deployed)
+- **Round-tube list grouped by grade (pending deploy 2026-07-01).** On the raw-material inventory page,
+  the Round Tube section now nests a second level by grade (ERW, DOM, solid, 'No grade' last), mirroring the
+  purchased-parts category->customer pattern (renderMaterialRow helper + gradeGroups on the round_tube
+  group only; other shapes unchanged). Collapsible; auto-expands while searching.
 - **Catalog cost auto-updates + history shows true cost (pending deploy 2026-07-01).** Resolves costing
   item #1 above. Adding/editing/deleting a purchase, opening stock, or adjustment now calls new
   `recalcMaterialCost()` (lib/inventory.ts) to set `current_cost_per_foot` = highest-cost-on-hand, so the
