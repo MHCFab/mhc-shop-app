@@ -195,7 +195,7 @@ export default function CuttingNestTab({
 
   async function handleSaveDrop(item: PickItem) {
     if (!companyId || !item.raw_materials) return;
-    const form = dropForm[item.id] || { length: "", unit: "ft", qty: "" };
+    const form = dropForm[item.id] || { length: "", unit: "in", qty: "" };
     let length = parseFloat(form.length);
     const qty = parseInt(form.qty);
     if (isNaN(length) || length <= 0 || isNaN(qty) || qty <= 0) {
@@ -215,7 +215,7 @@ export default function CuttingNestTab({
         costPerFoot: Number(item.raw_materials.current_cost_per_foot),
         jobNumber,
       });
-      setDropForm({ ...dropForm, [item.id]: { length: "", unit: "ft", qty: "" } });
+      setDropForm({ ...dropForm, [item.id]: { length: "", unit: "in", qty: "" } });
       await syncPickListActuals();
       await loadData();
       if (onChanged) onChanged();
@@ -363,7 +363,7 @@ export default function CuttingNestTab({
           const net = pf - sf;
           const costPerFoot = Number(item.raw_materials?.current_cost_per_foot || 0);
           const pForm = pullForm[item.id] || { length: "", qty: "" };
-          const dForm = dropForm[item.id] || { length: "", unit: "ft" as const, qty: "" };
+          const dForm = dropForm[item.id] || { length: "", unit: "in" as const, qty: "" };
 
           return (
             <div key={item.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -400,9 +400,9 @@ export default function CuttingNestTab({
                       <tbody>
                         {pulls.map((e) => (
                           <tr key={e.id} className="border-t border-gray-100">
-                            <td className="px-3 py-2 text-gray-900 font-mono">{Number(e.length_feet).toFixed(2)} ft</td>
+                            <td className="px-3 py-2 text-gray-900 font-mono">{(Number(e.length_feet) * 12).toFixed(1)} in</td>
                             <td className="px-3 py-2 text-gray-700">× {e.quantity}</td>
-                            <td className="px-3 py-2 text-gray-700 font-mono text-right">{(Number(e.length_feet) * e.quantity).toFixed(2)} ft</td>
+                            <td className="px-3 py-2 text-gray-700 font-mono text-right">{(Number(e.length_feet) * e.quantity * 12).toFixed(1)} in</td>
                             <td className="px-3 py-2 text-right">
                               {!isFinalized && (
                                 <button onClick={() => handleReverse(e)} disabled={busy} className="text-red-600 hover:text-red-800 font-medium text-xs disabled:opacity-50">Undo</button>
@@ -423,9 +423,9 @@ export default function CuttingNestTab({
                       <tbody>
                         {drops.map((e) => (
                           <tr key={e.id} className="border-t border-gray-100">
-                            <td className="px-3 py-2 text-gray-900 font-mono">{Number(e.length_feet).toFixed(2)} ft</td>
+                            <td className="px-3 py-2 text-gray-900 font-mono">{(Number(e.length_feet) * 12).toFixed(1)} in</td>
                             <td className="px-3 py-2 text-gray-700">× {e.quantity}</td>
-                            <td className="px-3 py-2 text-gray-700 font-mono text-right">{(Number(e.length_feet) * e.quantity).toFixed(2)} ft</td>
+                            <td className="px-3 py-2 text-gray-700 font-mono text-right">{(Number(e.length_feet) * e.quantity * 12).toFixed(1)} in</td>
                             <td className="px-3 py-2 text-right">
                               {!isFinalized && (
                                 <button onClick={() => handleReverse(e)} disabled={busy} className="text-red-600 hover:text-red-800 font-medium text-xs disabled:opacity-50">Undo</button>
@@ -452,7 +452,7 @@ export default function CuttingNestTab({
                         >
                           <option value="">-- Select length --</option>
                           {lengths.map((l) => (
-                            <option key={l.length} value={l.length}>{l.length.toFixed(2)} ft ({l.sticks} available)</option>
+                            <option key={l.length} value={l.length}>{(l.length * 12).toFixed(1)} in ({l.sticks} available)</option>
                           ))}
                         </select>
                       </div>

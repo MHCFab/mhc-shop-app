@@ -628,7 +628,7 @@ type PickItem = {
                       <div className="mt-2 space-y-1">
                         {sticks.map((s) => (
                           <div key={s.length} className="flex items-center justify-between text-sm">
-                            <span className="text-gray-700">{s.length.toFixed(2)} ft sticks</span>
+                            <span className="text-gray-700">{(s.length * 12).toFixed(1)} in sticks</span>
                             <span className="font-mono font-semibold text-gray-900">× {s.sticks}</span>
                           </div>
                         ))}
@@ -640,7 +640,7 @@ type PickItem = {
                         <div className="mt-1 space-y-1">
                           {drops.map((d) => (
                             <div key={d.length} className="flex items-center justify-between text-sm">
-                              <span className="text-green-900">{d.length.toFixed(2)} ft drop</span>
+                              <span className="text-green-900">{(d.length * 12).toFixed(1)} in drop</span>
                               <span className="font-mono font-semibold text-green-900">× {d.sticks}</span>
                             </div>
                           ))}
@@ -735,7 +735,7 @@ function ScrapModal({
   const [lengths, setLengths] = useState<{ length: number; sticks: number }[]>([]);
   const [pullLength, setPullLength] = useState("");
   const [remainderLength, setRemainderLength] = useState("");
-  const [remainderUnit, setRemainderUnit] = useState<"ft" | "in">("ft");
+  const [remainderUnit, setRemainderUnit] = useState<"ft" | "in">("in");
   const [saveRemainder, setSaveRemainder] = useState(true);
 
   // Purchased part: simple quantity
@@ -950,7 +950,7 @@ function ScrapModal({
                     <select value={pullLength} onChange={(e) => setPullLength(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                       <option value="">-- Select length --</option>
                       {lengths.map((l) => (
-                        <option key={l.length} value={l.length}>{l.length.toFixed(2)} ft ({l.sticks} available)</option>
+                        <option key={l.length} value={l.length}>{(l.length * 12).toFixed(1)} in ({l.sticks} available)</option>
                       ))}
                     </select>
                   </div>

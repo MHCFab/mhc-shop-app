@@ -233,10 +233,11 @@ export default function MaterialDetailPage() {
       setAdjustError("Could not determine your company. Try refreshing.");
       return;
     }
-    const len = parseFloat(adjustForm.stick_length_feet);
+    const lenInches = parseFloat(adjustForm.stick_length_feet); // form entered in inches
+    const len = lenInches / 12; // stored in feet
     const qty = parseInt(adjustForm.quantity_sticks);
     const cost = parseFloat(adjustForm.cost_per_foot);
-    if (isNaN(len) || len <= 0 || isNaN(qty) || isNaN(cost) || cost < 0) {
+    if (isNaN(lenInches) || lenInches <= 0 || isNaN(qty) || isNaN(cost) || cost < 0) {
       setAdjustError("Enter a valid length, quantity, and cost per foot. Quantity can be negative to remove stock.");
       return;
     }
@@ -354,7 +355,7 @@ export default function MaterialDetailPage() {
     setEntryError(null);
     setEntryForm({
       purchase_date: b.purchase_date,
-      stick_length_feet: String(b.stick_length_feet),
+      stick_length_feet: String(+(Number(b.stick_length_feet) * 12).toFixed(2)), // shown in inches
       quantity_sticks: String(b.quantity_sticks),
       cost_per_foot: String(b.cost_per_foot),
       notes: b.notes || "",
@@ -366,10 +367,11 @@ export default function MaterialDetailPage() {
     e.preventDefault();
     if (!editEntry) return;
     setEntryError(null);
-    const len = parseFloat(entryForm.stick_length_feet);
+    const lenInches = parseFloat(entryForm.stick_length_feet); // form entered in inches
+    const len = lenInches / 12; // stored in feet
     const qty = parseInt(entryForm.quantity_sticks, 10);
     const cost = parseFloat(entryForm.cost_per_foot);
-    if (isNaN(len) || len <= 0) { setEntryError("Enter a valid stick length."); return; }
+    if (isNaN(lenInches) || lenInches <= 0) { setEntryError("Enter a valid stick length."); return; }
     if (isNaN(qty)) { setEntryError("Enter a quantity (negative removes stock)."); return; }
     if (isNaN(cost) || cost < 0) { setEntryError("Enter a valid cost per foot."); return; }
     if (!entryForm.purchase_date) { setEntryError("Enter a date."); return; }
@@ -511,7 +513,7 @@ export default function MaterialDetailPage() {
                 <tbody>
                   {lengthGroups.map((g) => (
                     <tr key={g.length} className="border-b border-gray-100 last:border-0">
-                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">{g.length.toFixed(2)} ft</td>
+                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">{(g.length * 12).toFixed(1)} in</td>
                       <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{g.sticks}</td>
                       <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{(g.length * g.sticks).toFixed(2)} ft</td>
                     </tr>
@@ -584,7 +586,7 @@ export default function MaterialDetailPage() {
                         <td className="px-4 py-3 text-sm text-gray-900">{b.purchase_date}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{entryTypeLabel(b.entry_type)}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{Number(b.stick_length_feet).toFixed(2)} ft</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{(Number(b.stick_length_feet) * 12).toFixed(1)} in</td>
                         <td className={"px-4 py-3 text-sm text-right font-mono " + (qty < 0 ? "text-red-600" : "text-gray-900")}>{qty > 0 ? "+" : ""}{qty}</td>
                         <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${(isEditableEntry(b.entry_type) ? Number(b.cost_per_foot) : costOnHand).toFixed(4)}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{b.notes || b.source_note || "-"}</td>
@@ -616,8 +618,8 @@ export default function MaterialDetailPage() {
               <p className="text-sm text-gray-600">Add or remove stock manually. Use a negative quantity to remove sticks (for example after scrapping a damaged piece). Adjustments change quantity only and never change the cost.</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (ft)</label>
-                  <input type="number" step="0.01" min="0" value={adjustForm.stick_length_feet} onChange={(e) => setAdjustForm({ ...adjustForm, stick_length_feet: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (in)</label>
+                  <input type="number" step="0.1" min="0" value={adjustForm.stick_length_feet} onChange={(e) => setAdjustForm({ ...adjustForm, stick_length_feet: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Qty sticks (+/-)</label>
@@ -702,8 +704,8 @@ export default function MaterialDetailPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (ft)</label>
-                  <input type="number" step="0.01" min="0" value={entryForm.stick_length_feet} onChange={(e) => setEntryForm({ ...entryForm, stick_length_feet: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Stick length (in)</label>
+                  <input type="number" step="0.1" min="0" value={entryForm.stick_length_feet} onChange={(e) => setEntryForm({ ...entryForm, stick_length_feet: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Qty sticks (+/-)</label>
