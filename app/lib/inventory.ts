@@ -510,7 +510,7 @@ export async function allocateJobInventory(jobId: string, companyId: string): Pr
   // exactly like purchased parts reserve against parts stock: the ledger itself
   // isn't decremented here, only held by the allocation.
   const rows = pickList
-    .filter((item) => Number(item.planned_quantity) > 0)
+    .filter((item) => Number(item.planned_quantity) > 0 && item.item_type !== "custom")
     .map((item) => ({
       company_id: companyId,
       job_id: jobId,
@@ -772,7 +772,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     supabase.from("job_line_items").select("quantity, product_template_id, unit_price, product_templates(retail_price_per_unit)").eq("job_id", jobId),
     supabase
       .from("job_pick_list_items")
-      .select("item_type, planned_quantity, actual_quantity, raw_material_id, purchased_part_id, product_template_id, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
+      .select("item_type, planned_quantity, actual_quantity, raw_material_id, purchased_part_id, product_template_id, custom_category, custom_unit_cost, raw_materials(current_cost_per_foot), purchased_parts(current_cost_each)")
       .eq("job_id", jobId),
     supabase.from("time_entries").select("started_at, ended_at").eq("job_id", jobId),
     supabase
@@ -793,6 +793,8 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     raw_material_id: string | null;
     purchased_part_id: string | null;
     product_template_id: string | null;
+    custom_category: string | null;
+    custom_unit_cost: number | null;
     raw_materials: { current_cost_per_foot: number } | null;
     purchased_parts: { current_cost_each: number } | null;
   };
@@ -891,6 +893,17 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
       const cost = fabCost(p.product_template_id);
       fabricatedActualCost += Number(p.planned_quantity) * cost;
       estimateFabricatedCost += Number(p.planned_quantity) * cost;
+    } else if (p.item_type === "custom") {
+      // One-off (non-inventory) cost: use the typed unit cost. Category decides
+      // whether it lands in the material or the parts bucket on the Cost tab.
+      const cost = Number(p.custom_unit_cost || 0);
+      if (p.custom_category === "material") {
+        materialActualCost += Number(p.actual_quantity) * cost;
+        estimateMaterialCost += Number(p.planned_quantity) * cost;
+      } else {
+        partsActualCost += Number(p.actual_quantity) * cost;
+        estimatePartsCost += Number(p.planned_quantity) * cost;
+      }
     } else {
       const cost = partCost(p.purchased_part_id, Number(p.purchased_parts?.current_cost_each || 0));
       partsActualCost += Number(p.actual_quantity) * cost;

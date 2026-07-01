@@ -13,9 +13,20 @@ const SHAPES_MAP: Record<string, string> = {
   flat_bar: "Flat Bar",
 };
 
+const CUSTOM_CATEGORIES: { value: string; label: string }[] = [
+  { value: "material", label: "Material" },
+  { value: "laser_part", label: "Laser part" },
+  { value: "powdercoat", label: "Powdercoat" },
+  { value: "hardware", label: "Hardware" },
+];
+
+function customCategoryLabel(value: string | null) {
+  return CUSTOM_CATEGORIES.find((c) => c.value === value)?.label || "Other";
+}
+
 type PickListItem = {
   id: string;
-  item_type: "raw_material" | "purchased_part" | "fabricated";
+  item_type: "raw_material" | "purchased_part" | "fabricated" | "custom";
   raw_material_id: string | null;
   purchased_part_id: string | null;
   product_template_id: string | null;
@@ -23,6 +34,9 @@ type PickListItem = {
   actual_quantity: number;
   unit: string;
   notes: string | null;
+  custom_name: string | null;
+  custom_category: string | null;
+  custom_unit_cost: number | null;
   raw_materials: {
     shape: string;
     size: string;
@@ -69,6 +83,9 @@ function describePickItem(item: PickListItem) {
     const t = item.product_templates;
     return t.name + (t.product_number ? " (" + t.product_number + ")" : "");
   }
+  if (item.item_type === "custom") {
+    return item.custom_name || "One-off item";
+  }
   return "Unknown item";
 }
 
@@ -78,6 +95,7 @@ function describeMaterialOption(m: RawMaterialOption) {
 }
 
 function itemCostPerUnit(item: PickListItem) {
+  if (item.item_type === "custom") return Number(item.custom_unit_cost || 0);
   if (item.item_type === "raw_material") return Number(item.raw_materials?.current_cost_per_foot || 0);
   return Number(item.purchased_parts?.current_cost_each || 0);
 }
@@ -99,7 +117,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   const [adding, setAdding] = useState(false);
   const [allMaterials, setAllMaterials] = useState<RawMaterialOption[]>([]);
   const [allParts, setAllParts] = useState<PartOption[]>([]);
-  const [addForm, setAddForm] = useState({ item_type: "raw_material" as "raw_material" | "purchased_part", item_id: "", planned_quantity: "", notes: "" });
+  const [addForm, setAddForm] = useState({ mode: "inventory" as "inventory" | "custom", item_type: "raw_material" as "raw_material" | "purchased_part", item_id: "", planned_quantity: "", notes: "", custom_category: "material", custom_name: "", custom_unit_cost: "" });
   const [savingAdd, setSavingAdd] = useState(false);
 
   const loadCompanyId = useCallback(async () => {
@@ -196,7 +214,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   }
 
   function openAdd() {
-    setAddForm({ item_type: "raw_material", item_id: "", planned_quantity: "", notes: "" });
+    setAddForm({ mode: "inventory", item_type: "raw_material", item_id: "", planned_quantity: "", notes: "", custom_category: "material", custom_name: "", custom_unit_cost: "" });
     setAdding(true);
   }
 
@@ -206,6 +224,50 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       alert("Could not determine your company. Try refreshing the page.");
       return;
     }
+
+    if (addForm.mode === "custom") {
+      const name = addForm.custom_name.trim();
+      if (!name) {
+        alert("Enter a name for the one-off item.");
+        return;
+      }
+      const unitCost = parseFloat(addForm.custom_unit_cost);
+      if (isNaN(unitCost) || unitCost < 0) {
+        alert("Enter a cost of 0 or more.");
+        return;
+      }
+      const cq = parseFloat(addForm.planned_quantity);
+      if (isNaN(cq) || cq <= 0) {
+        alert("Enter a quantity greater than 0.");
+        return;
+      }
+      setSavingAdd(true);
+      const { error: cErr } = await supabase.from("job_pick_list_items").insert({
+        company_id: companyId,
+        job_id: jobId,
+        item_type: "custom",
+        is_custom: true,
+        raw_material_id: null,
+        purchased_part_id: null,
+        product_template_id: null,
+        custom_name: name,
+        custom_category: addForm.custom_category,
+        custom_unit_cost: unitCost,
+        planned_quantity: cq,
+        actual_quantity: cq,
+        unit: "ea",
+        notes: addForm.notes.trim() || null,
+      });
+      setSavingAdd(false);
+      if (cErr) {
+        alert("Failed to add item: " + cErr.message);
+        return;
+      }
+      setAdding(false);
+      loadItems();
+      return;
+    }
+
     if (!addForm.item_id) {
       alert(addForm.item_type === "raw_material" ? "Pick a material to add." : "Pick a part to add.");
       return;
@@ -439,6 +501,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
   const rawMaterialItems = items.filter((i) => i.item_type === "raw_material");
   const partItems = items.filter((i) => i.item_type === "purchased_part");
   const fabricatedItems = items.filter((i) => i.item_type === "fabricated");
+  const customItems = items.filter((i) => i.item_type === "custom");
 
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
@@ -488,38 +551,94 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       {adding && !readOnly && (
         <form onSubmit={saveAdd} className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
           <h4 className="text-sm font-semibold text-gray-900">Add an item to the pick list</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+          {isCustomJob && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
               <select
-                value={addForm.item_type}
-                onChange={(e) => setAddForm({ ...addForm, item_type: e.target.value as "raw_material" | "purchased_part", item_id: "" })}
+                value={addForm.mode}
+                onChange={(e) => setAddForm({ ...addForm, mode: e.target.value as "inventory" | "custom" })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="raw_material">Raw material</option>
-                <option value="purchased_part">Purchased part</option>
+                <option value="inventory">From inventory</option>
+                <option value="custom">One-off cost (not from inventory)</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {addForm.item_type === "raw_material" ? "Material" : "Part"}
-              </label>
-              <select
-                value={addForm.item_id}
-                onChange={(e) => setAddForm({ ...addForm, item_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select --</option>
-                {addForm.item_type === "raw_material"
-                  ? allMaterials.map((m) => <option key={m.id} value={m.id}>{describeMaterialOption(m)}</option>)
-                  : allParts.map((p) => <option key={p.id} value={p.id}>{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</option>)}
-              </select>
+          )}
+
+          {addForm.mode === "inventory" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                <select
+                  value={addForm.item_type}
+                  onChange={(e) => setAddForm({ ...addForm, item_type: e.target.value as "raw_material" | "purchased_part", item_id: "" })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="raw_material">Raw material</option>
+                  <option value="purchased_part">Purchased part</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {addForm.item_type === "raw_material" ? "Material" : "Part"}
+                </label>
+                <select
+                  value={addForm.item_id}
+                  onChange={(e) => setAddForm({ ...addForm, item_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">-- Select --</option>
+                  {addForm.item_type === "raw_material"
+                    ? allMaterials.map((m) => <option key={m.id} value={m.id}>{describeMaterialOption(m)}</option>)
+                    : allParts.map((p) => <option key={p.id} value={p.id}>{p.name}{p.part_number ? " (" + p.part_number + ")" : ""}</option>)}
+                </select>
+              </div>
             </div>
-          </div>
+          )}
+
+          {addForm.mode === "custom" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select
+                  value={addForm.custom_category}
+                  onChange={(e) => setAddForm({ ...addForm, custom_category: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {CUSTOM_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <input
+                  type="text"
+                  value={addForm.custom_name}
+                  onChange={(e) => setAddForm({ ...addForm, custom_name: e.target.value })}
+                  placeholder="e.g. Powdercoat - black, 2 gates"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {addForm.mode === "custom" && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cost each ($)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={addForm.custom_unit_cost}
+                  onChange={(e) => setAddForm({ ...addForm, custom_unit_cost: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Planned quantity {addForm.item_type === "raw_material" ? "(ft)" : "(ea)"}
+                {addForm.mode === "custom" ? "Quantity" : "Planned quantity " + (addForm.item_type === "raw_material" ? "(ft)" : "(ea)")}
               </label>
               <input
                 type="number"
@@ -553,6 +672,9 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       <PickListSection title="Purchased Parts" items={partItems} editingId={editingId} editValues={editValues} setEditValues={setEditValues} openEdit={openEdit} saveEdit={saveEdit} closeEdit={() => setEditingId(null)} handleDelete={handleDelete} readOnly={readOnly} />
       {fabricatedItems.length > 0 && (
         <FabricatedPickSection items={fabricatedItems} handleDelete={handleDelete} readOnly={readOnly} />
+      )}
+      {customItems.length > 0 && (
+        <CustomPickSection items={customItems} handleDelete={handleDelete} readOnly={readOnly} onChanged={loadItems} />
       )}
     </div>
   );
@@ -600,6 +722,131 @@ function FabricatedPickSection({
               </td>
             </tr>
           ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function CustomPickSection({
+  items,
+  handleDelete,
+  readOnly,
+  onChanged,
+}: {
+  items: PickListItem[];
+  handleDelete: (item: PickListItem) => void;
+  readOnly: boolean;
+  onChanged: () => void;
+}) {
+  const supabase = createClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [vals, setVals] = useState({ planned_quantity: "", actual_quantity: "", custom_unit_cost: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+
+  function openEdit(item: PickListItem) {
+    setEditingId(item.id);
+    setVals({
+      planned_quantity: String(item.planned_quantity),
+      actual_quantity: String(item.actual_quantity),
+      custom_unit_cost: item.custom_unit_cost != null ? String(item.custom_unit_cost) : "",
+      notes: item.notes || "",
+    });
+  }
+
+  async function save(id: string) {
+    const pq = parseFloat(vals.planned_quantity);
+    const aq = parseFloat(vals.actual_quantity);
+    const uc = parseFloat(vals.custom_unit_cost);
+    if (isNaN(pq) || pq < 0) { alert("Quantity must be 0 or more."); return; }
+    if (isNaN(aq) || aq < 0) { alert("Actual quantity must be 0 or more."); return; }
+    if (isNaN(uc) || uc < 0) { alert("Cost each must be 0 or more."); return; }
+    setSaving(true);
+    const { error } = await supabase
+      .from("job_pick_list_items")
+      .update({ planned_quantity: pq, actual_quantity: aq, custom_unit_cost: uc, notes: vals.notes.trim() || null })
+      .eq("id", id);
+    setSaving(false);
+    if (error) { alert("Failed to save: " + error.message); return; }
+    setEditingId(null);
+    onChanged();
+  }
+
+  return (
+    <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+        <h3 className="text-base font-semibold text-gray-900">One-off Items</h3>
+        <p className="text-xs text-gray-500 mt-0.5">Ad-hoc purchases entered with a manual cost (not from inventory).</p>
+      </div>
+      <table className="w-full">
+        <thead className="bg-gray-50 border-b border-gray-200">
+          <tr>
+            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Category</th>
+            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Item</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Planned</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actual</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$/unit</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Planned $</th>
+            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const isEditing = editingId === item.id;
+            const cost = Number(item.custom_unit_cost || 0);
+            const plannedCost = Number(item.planned_quantity) * cost;
+            return (
+              <tr key={item.id} className="border-b border-gray-100 last:border-0">
+                <td className="px-4 py-3 text-sm text-gray-700">{customCategoryLabel(item.custom_category)}</td>
+                <td className="px-4 py-3 text-sm text-gray-900">{item.custom_name || "One-off item"}</td>
+                <td className="px-4 py-3 text-sm text-right font-mono">
+                  {isEditing ? (
+                    <input type="number" step="0.01" min="0" value={vals.planned_quantity} onChange={(e) => setVals({ ...vals, planned_quantity: e.target.value })} className="w-20 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                  ) : (
+                    <span className="text-gray-900">{Number(item.planned_quantity).toFixed(2)} {item.unit}</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-sm text-right font-mono">
+                  {isEditing ? (
+                    <input type="number" step="0.01" min="0" value={vals.actual_quantity} onChange={(e) => setVals({ ...vals, actual_quantity: e.target.value })} className="w-20 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                  ) : (
+                    <span className="text-gray-700">{Number(item.actual_quantity).toFixed(2)} {item.unit}</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-sm text-right font-mono text-gray-700">
+                  {isEditing ? (
+                    <input type="number" step="0.01" min="0" value={vals.custom_unit_cost} onChange={(e) => setVals({ ...vals, custom_unit_cost: e.target.value })} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                  ) : (
+                    "$" + cost.toFixed(2)
+                  )}
+                </td>
+                <td className="px-4 py-3 text-sm text-right font-mono text-gray-900">${plannedCost.toFixed(2)}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">
+                  {isEditing ? (
+                    <input type="text" value={vals.notes} onChange={(e) => setVals({ ...vals, notes: e.target.value })} className="w-full px-2 py-1 border border-gray-300 rounded text-gray-900" />
+                  ) : (
+                    item.notes || "-"
+                  )}
+                </td>
+                <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                  {readOnly ? (
+                    <span className="text-gray-400">-</span>
+                  ) : isEditing ? (
+                    <>
+                      <button onClick={() => save(item.id)} disabled={saving} className="text-blue-600 hover:text-blue-800 font-medium mr-3 disabled:opacity-50">Save</button>
+                      <button onClick={() => setEditingId(null)} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => openEdit(item)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                      <button onClick={() => handleDelete(item)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>

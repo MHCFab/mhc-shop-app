@@ -574,6 +574,7 @@ export default function JobDetailPage() {
             .from("job_pick_list_items")
             .select("item_type, raw_material_id, purchased_part_id, planned_quantity, actual_quantity, unit, notes, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number)")
             .eq("job_id", job.id)
+            .neq("item_type", "custom")
             .order("item_type")
             .order("created_at");
           type PickSnap = {

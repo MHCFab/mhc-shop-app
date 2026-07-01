@@ -758,7 +758,9 @@ function ScrapModal({
         purchased_parts: { name: string; part_number: string | null } | null;
       };
 
-      const mapped = ((data || []) as unknown as Row[]).map((r) => {
+      const mapped = ((data || []) as unknown as Row[])
+        .filter((r) => r.item_type !== "custom")
+        .map((r) => {
         let label = "Item";
         let costPerFoot = 0;
         if (r.item_type === "raw_material" && r.raw_materials) {
