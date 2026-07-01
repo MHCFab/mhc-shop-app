@@ -66,6 +66,11 @@ job_pick_list_items + inventory_allocations, item_type CHECKs widened to include
 - Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
 
 ## Done (deployed)
+- **Stock alert didn't clear after purchases (fixed, pending deploy 2026-07-01).** `getJobStockShortfall`
+  subtracted reservations from ALL other jobs, including already-**complete** jobs that keep their
+  `inventory_allocations` rows until they're invoiced/archived. So finished jobs phantom-held stock and
+  buying material/parts could never clear an active job's alert. Fix: the shortfall now ignores allocations
+  belonging to jobs with status 'complete'. Read-only change in `app/lib/inventory.ts`; no schema change.
 - Phase 1 fabricated sub-assemblies (stockable flag, build orders, receive-to-stock, Fabricated tab).
 - Purchased-part delete: accurate in-use check + safe cleanup.
 - Stockable toggle + opening stock on the template create/edit form.

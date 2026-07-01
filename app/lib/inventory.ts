@@ -289,7 +289,7 @@ export type JobStockShortfallItem = {
 export async function getJobStockShortfall(jobId: string): Promise<JobStockShortfallItem[]> {
   const supabase = createClient();
 
-  const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes, nestRes] = await Promise.all([
+  const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes, nestRes, completeJobsRes] = await Promise.all([
     supabase
       .from("job_pick_list_items")
       .select("item_type, raw_material_id, purchased_part_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
@@ -306,7 +306,7 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     // All allocations EXCEPT this job's own, so we don't count the job against itself
     supabase
       .from("inventory_allocations")
-      .select("item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity")
+      .select("job_id, item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity")
       .neq("job_id", jobId),
     // This job's OWN cutting-nest pulls/drops. Material already pulled for the job has
     // left free inventory, but it is covering this job's requirement, so it must count
@@ -315,6 +315,14 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
       .from("cutting_nest_entries")
       .select("raw_material_id, entry_type, length_feet, quantity")
       .eq("job_id", jobId),
+    // Jobs that are already complete keep their allocation rows until the job is invoiced
+    // and archived. A finished job is no longer competing for free stock, so we must NOT
+    // count its reservations against other jobs — otherwise buying more material or parts
+    // can never clear another job's shortfall alert.
+    supabase
+      .from("jobs")
+      .select("id")
+      .eq("status", "complete"),
   ]);
 
   type PickRow = {
@@ -331,8 +339,9 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   type RmInvRow = { raw_material_id: string; stick_length_feet: number; quantity_sticks: number };
   type PpInvRow = { purchased_part_id: string; quantity: number };
   type FabInvRow = { product_template_id: string; quantity: number };
-  type AllocRow = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null; allocated_quantity: number };
+  type AllocRow = { job_id: string; item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null; allocated_quantity: number };
   type NestRow = { raw_material_id: string; entry_type: string; length_feet: number; quantity: number };
+  type CompleteJobRow = { id: string };
 
   const pick = (pickRes.data || []) as unknown as PickRow[];
   const rmInv = (rmInvRes.data || []) as unknown as RmInvRow[];
@@ -340,6 +349,9 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   const fabInv = (fabInvRes.data || []) as unknown as FabInvRow[];
   const allocs = (allocRes.data || []) as unknown as AllocRow[];
   const nest = (nestRes.data || []) as unknown as NestRow[];
+  const completeJobIds = new Set(
+    ((completeJobsRes.data || []) as unknown as CompleteJobRow[]).map((j) => j.id)
+  );
 
   // Net feet this job has already pulled for itself (pulls minus drops returned), per
   // raw material. Only raw materials flow through the cutting nest.
@@ -376,6 +388,9 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   const ppAlloc = new Map<string, number>();
   const fabAlloc = new Map<string, number>();
   for (const a of allocs) {
+    // Skip reservations held by jobs that are already complete (see query above) — a
+    // finished job should not block another job's stock from showing as available.
+    if (completeJobIds.has(a.job_id)) continue;
     if (a.item_type === "raw_material" && a.raw_material_id) {
       rmAlloc.set(a.raw_material_id, (rmAlloc.get(a.raw_material_id) || 0) + Number(a.allocated_quantity));
     } else if (a.item_type === "purchased_part" && a.purchased_part_id) {
