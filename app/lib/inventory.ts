@@ -170,6 +170,40 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
   });
 }
 
+// Recompute a raw material's stored catalog cost (current_cost_per_foot) to the current
+// "highest cost still on hand" after any purchase / opening-stock / adjustment change, so it
+// never goes stale. Costing already derives this live; this keeps the stored field in sync
+// (the cutting nest stamps it on pulls and uses it for its dollar preview).
+export async function recalcMaterialCost(rawMaterialId: string): Promise<void> {
+  const supabase = createClient();
+  const [invRes, matRes] = await Promise.all([
+    supabase
+      .from("raw_material_inventory")
+      .select("stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type")
+      .eq("raw_material_id", rawMaterialId),
+    supabase
+      .from("raw_materials")
+      .select("current_cost_per_foot")
+      .eq("id", rawMaterialId)
+      .single(),
+  ]);
+  const rows = invRes.data || [];
+  const layers: CostLayer[] = rows
+    .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity_sticks) > 0)
+    .map((b) => ({
+      date: b.purchase_date,
+      qty: Number(b.stick_length_feet) * Number(b.quantity_sticks),
+      cost: Number(b.cost_per_foot),
+    }));
+  const totalOut = rows.reduce((sum, b) => {
+    const feet = Number(b.stick_length_feet) * Number(b.quantity_sticks);
+    return feet < 0 ? sum + -feet : sum;
+  }, 0);
+  const fallback = matRes.data ? Number((matRes.data as { current_cost_per_foot: number }).current_cost_per_foot) : 0;
+  const cost = highestCostOnHand(layers, totalOut, fallback);
+  await supabase.from("raw_materials").update({ current_cost_per_foot: cost }).eq("id", rawMaterialId);
+}
+
 export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPart[]> {
   const supabase = createClient();
 

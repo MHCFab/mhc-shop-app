@@ -36,6 +36,12 @@ Decide whether fabricated cost should instead use true LIFO/actual consumed cost
 consumption costing. (Note: if #1 makes catalog cost = latest purchase cost, current-cost and LIFO largely
 converge.)
 
+## Inventory UX
+
+### Declutter round-tube selection by grade  *(open, raised 2026-07-01)*
+On the raw-material inventory page, break the round-tube list out by grade (ERW, DOM, solid, etc.) so the
+selection isn't one long list. Next session.
+
 ## Fabricated sub-assemblies — remaining phases
 
 ### 5. Phase 2 — jobs pull finished sub-assemblies from fabricated stock  *(DONE, pending deploy)*
@@ -66,6 +72,14 @@ job_pick_list_items + inventory_allocations, item_type CHECKs widened to include
 - Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
 
 ## Done (deployed)
+- **Catalog cost auto-updates + history shows true cost (pending deploy 2026-07-01).** Resolves costing
+  item #1 above. Adding/editing/deleting a purchase, opening stock, or adjustment now calls new
+  `recalcMaterialCost()` (lib/inventory.ts) to set `current_cost_per_foot` = highest-cost-on-hand, so the
+  stored field (used by the cutting-nest cost stamp + dollar preview) no longer goes stale. The material
+  history's movement rows (pull/drop/reversal) now display the computed cost-on-hand instead of the old
+  stamped value. Note: an existing material's stored cost refreshes on its next purchase/edit; the history
+  display is correct immediately. Wired in inventory list page (new-material opening + raw purchase) and
+  material detail page (adjust/edit/delete).
 - **Reservation double-count → negative available / false shortage (fixed, pending deploy 2026-07-01).**
   Finalizing a cutting nest set each job's raw-material reservation to its *net consumed*, but that material
   had already left stock via the pulls — so it was subtracted twice (e.g. 1.25x.095 ERW showed -32.25 ft).

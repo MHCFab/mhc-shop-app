@@ -7,6 +7,7 @@ import {
   getAvailableRawMaterials,
   getAvailablePurchasedParts,
   getFabricatedStock,
+  recalcMaterialCost,
   type AvailableRawMaterial,
   type AvailablePurchasedPart,
   type FabricatedStockItem,
@@ -376,6 +377,7 @@ export default function InventoryPage() {
         setNewItemError("Material was created, but saving the starting stock failed: " + invErr.message);
         return;
       }
+      await recalcMaterialCost(newMat.id);
     }
 
     setSavingNewItem(false);
@@ -491,6 +493,7 @@ export default function InventoryPage() {
       setPurchaseError(error.message);
       return;
     }
+    await recalcMaterialCost(rmForm.raw_material_id);
     setShowPurchase(false);
     loadData();
   }

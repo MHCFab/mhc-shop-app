@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase";
-import { highestCostOnHand, type CostLayer } from "../../../../lib/inventory";
+import { highestCostOnHand, recalcMaterialCost, type CostLayer } from "../../../../lib/inventory";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -258,6 +258,7 @@ export default function MaterialDetailPage() {
       setAdjustError(error.message);
       return;
     }
+    await recalcMaterialCost(id);
     setShowAdjust(false);
     setAdjustForm({ stick_length_feet: "", quantity_sticks: "", cost_per_foot: "", note: "" });
     loadData();
@@ -385,6 +386,7 @@ export default function MaterialDetailPage() {
       .eq("id", editEntry.id);
     setSavingEntry(false);
     if (error) { setEntryError(error.message); return; }
+    await recalcMaterialCost(id);
     setEditEntry(null);
     loadData();
   }
@@ -399,6 +401,7 @@ export default function MaterialDetailPage() {
     const { error } = await supabase.from("raw_material_inventory").delete().eq("id", b.id);
     setDeletingEntryId(null);
     if (error) { alert("Could not delete this entry.\n\nDetails: " + error.message); return; }
+    await recalcMaterialCost(id);
     loadData();
   }
 
@@ -583,7 +586,7 @@ export default function MaterialDetailPage() {
                         <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
                         <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{Number(b.stick_length_feet).toFixed(2)} ft</td>
                         <td className={"px-4 py-3 text-sm text-right font-mono " + (qty < 0 ? "text-red-600" : "text-gray-900")}>{qty > 0 ? "+" : ""}{qty}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_per_foot).toFixed(4)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${(isEditableEntry(b.entry_type) ? Number(b.cost_per_foot) : costOnHand).toFixed(4)}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{b.notes || b.source_note || "-"}</td>
                         <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
                           {isEditableEntry(b.entry_type) ? (
