@@ -46,6 +46,18 @@ export default function TimeTab({ jobId }: { jobId: string }) {
   const [editStart, setEditStart] = useState("");
   const [editEnd, setEditEnd] = useState("");
   const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState<string | null>(null);
+
+  // Manual "add time" form (one open at a time, per task)
+  const [addingTaskId, setAddingTaskId] = useState<string | null>(null);
+  const [addEmployee, setAddEmployee] = useState("");
+  const [addMode, setAddMode] = useState<"duration" | "range">("duration");
+  const [addDate, setAddDate] = useState("");
+  const [addHours, setAddHours] = useState("");
+  const [addMinutes, setAddMinutes] = useState("");
+  const [addStart, setAddStart] = useState("");
+  const [addEnd, setAddEnd] = useState("");
+  const [addSaving, setAddSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +77,11 @@ export default function TimeTab({ jobId }: { jobId: string }) {
     const profMap: Record<string, Profile> = {};
     for (const p of (profRes.data || []) as unknown as Profile[]) profMap[p.id] = p;
     setProfiles(profMap);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: prof } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+      if (prof) setCompanyId((prof as { company_id: string }).company_id);
+    }
     setLoading(false);
   }, [supabase, jobId]);
 
@@ -121,9 +138,64 @@ export default function TimeTab({ jobId }: { jobId: string }) {
     load();
   }
 
+  function openAdd(taskId: string) {
+    setAddingTaskId(taskId);
+    setAddEmployee("");
+    setAddMode("duration");
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    setAddDate(now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate()));
+    setAddHours("");
+    setAddMinutes("");
+    setAddStart("");
+    setAddEnd("");
+  }
+
+  async function saveAdd(taskId: string) {
+    if (!companyId) { alert("Couldn't determine your company. Refresh and try again."); return; }
+    if (!addEmployee) { alert("Pick an employee."); return; }
+
+    let startIso: string;
+    let endIso: string;
+
+    if (addMode === "duration") {
+      if (!addDate) { alert("Pick a date."); return; }
+      const h = parseInt(addHours || "0", 10);
+      const m = parseInt(addMinutes || "0", 10);
+      const totalMin = (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+      if (totalMin <= 0) { alert("Enter how long they worked (hours and/or minutes)."); return; }
+      const start = new Date(addDate + "T08:00");
+      if (isNaN(start.getTime())) { alert("That date isn't valid."); return; }
+      startIso = start.toISOString();
+      endIso = new Date(start.getTime() + totalMin * 60000).toISOString();
+    } else {
+      if (!addStart) { alert("Enter a start time."); return; }
+      if (!addEnd) { alert("Enter an end time."); return; }
+      const s = new Date(addStart);
+      const e = new Date(addEnd);
+      if (e.getTime() <= s.getTime()) { alert("End time must be after start time."); return; }
+      startIso = s.toISOString();
+      endIso = e.toISOString();
+    }
+
+    setAddSaving(true);
+    const { error } = await supabase.from("time_entries").insert({
+      company_id: companyId,
+      job_id: jobId,
+      job_task_id: taskId,
+      employee_id: addEmployee,
+      started_at: startIso,
+      ended_at: endIso,
+    });
+    setAddSaving(false);
+    if (error) { alert("Failed to add time: " + error.message); return; }
+    setAddingTaskId(null);
+    load();
+  }
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
   const jobTotal = entries.reduce((s, e) => s + entrySeconds(e), 0);
+  const employeeList = Object.values(profiles).sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
 
   return (
     <div className="space-y-4">
@@ -143,8 +215,65 @@ export default function TimeTab({ jobId }: { jobId: string }) {
             <div key={t.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
                 <h3 className="font-semibold text-gray-900">{t.name}</h3>
-                <span className="font-mono text-sm font-semibold text-gray-900">{fmt(taskTotal)}</span>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-sm font-semibold text-gray-900">{fmt(taskTotal)}</span>
+                  <button onClick={() => (addingTaskId === t.id ? setAddingTaskId(null) : openAdd(t.id))} className="text-sm text-blue-600 hover:text-blue-800 font-medium">{addingTaskId === t.id ? "Cancel" : "+ Add time"}</button>
+                </div>
               </div>
+              {addingTaskId === t.id && (
+                <div className="px-4 py-3 border-b border-gray-200 bg-blue-50 space-y-3">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div>
+                      <label className="block text-xs text-gray-600 mb-1">Employee</label>
+                      <select value={addEmployee} onChange={(e) => setAddEmployee(e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm text-gray-900 bg-white">
+                        <option value="">-- Select --</option>
+                        {employeeList.map((p) => (
+                          <option key={p.id} value={p.id}>{p.full_name || p.email}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-600 mb-1">Entry type</label>
+                      <select value={addMode} onChange={(e) => setAddMode(e.target.value as "duration" | "range")} className="px-2 py-1 border border-gray-300 rounded text-sm text-gray-900 bg-white">
+                        <option value="duration">Date + duration</option>
+                        <option value="range">Start &amp; end time</option>
+                      </select>
+                    </div>
+                  </div>
+                  {addMode === "duration" ? (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Date</label>
+                        <input type="date" value={addDate} onChange={(e) => setAddDate(e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm text-gray-900" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Hours</label>
+                        <input type="number" min="0" step="1" value={addHours} onChange={(e) => setAddHours(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-gray-900" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Minutes</label>
+                        <input type="number" min="0" max="59" step="1" value={addMinutes} onChange={(e) => setAddMinutes(e.target.value)} placeholder="0" className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-gray-900" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Start</label>
+                        <input type="datetime-local" value={addStart} onChange={(e) => setAddStart(e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm text-gray-900" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">End</label>
+                        <input type="datetime-local" value={addEnd} onChange={(e) => setAddEnd(e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm text-gray-900" />
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => saveAdd(t.id)} disabled={addSaving} className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50">{addSaving ? "Adding..." : "Add time"}</button>
+                    <button onClick={() => setAddingTaskId(null)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
+                    {addMode === "duration" && <span className="text-xs text-gray-500">Logged starting 8:00 AM on the chosen date.</span>}
+                  </div>
+                </div>
+              )}
               {taskEntries.length === 0 ? (
                 <p className="px-4 py-3 text-sm text-gray-400">No time logged</p>
               ) : (
