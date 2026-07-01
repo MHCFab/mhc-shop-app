@@ -55,6 +55,13 @@ type Allocation = {
   jobs: { id: string; job_number: string; status: string } | null;
 };
 
+type NestEntry = {
+  job_id: string | null;
+  entry_type: string | null;
+  length_feet: number;
+  quantity: number;
+};
+
 type LengthGroup = {
   length: number;
   sticks: number;
@@ -86,6 +93,7 @@ export default function MaterialDetailPage() {
   const [material, setMaterial] = useState<RawMaterial | null>(null);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [nestEntries, setNestEntries] = useState<NestEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -133,7 +141,7 @@ export default function MaterialDetailPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [matRes, batchRes, allocRes] = await Promise.all([
+    const [matRes, batchRes, allocRes, nestRes] = await Promise.all([
       supabase.from("raw_materials").select("id, shape, size, wall_thickness, grade, current_cost_per_foot, is_active").eq("id", id).single(),
       supabase
         .from("raw_material_inventory")
@@ -143,6 +151,12 @@ export default function MaterialDetailPage() {
       supabase
         .from("inventory_allocations")
         .select("id, allocated_quantity, basis, jobs(id, job_number, status)")
+        .eq("raw_material_id", id),
+      // Cutting-nest pulls/drops for this material so each job's reservation can be netted
+      // against what it has already physically pulled (finalized/cut jobs stop reserving).
+      supabase
+        .from("cutting_nest_entries")
+        .select("job_id, entry_type, length_feet, quantity")
         .eq("raw_material_id", id),
     ]);
 
@@ -154,6 +168,7 @@ export default function MaterialDetailPage() {
     setMaterial(matRes.data as RawMaterial);
     setBatches((batchRes.data || []) as unknown as Batch[]);
     setAllocations((allocRes.data || []) as unknown as Allocation[]);
+    setNestEntries((nestRes.data || []) as unknown as NestEntry[]);
     setLoading(false);
   }, [supabase, id]);
 
@@ -176,7 +191,26 @@ export default function MaterialDetailPage() {
   })();
 
   const totalInStock = batches.reduce((sum, b) => sum + Number(b.stick_length_feet) * Number(b.quantity_sticks), 0);
-  const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
+
+  // Net feet each job has pulled for this material (pulls minus drops returned).
+  const netPulledByJob = new Map<string, number>();
+  for (const e of nestEntries) {
+    if (!e.job_id) continue;
+    const feet = Number(e.length_feet) * Number(e.quantity);
+    if (e.entry_type === "pull") netPulledByJob.set(e.job_id, (netPulledByJob.get(e.job_id) || 0) + feet);
+    else if (e.entry_type === "drop") netPulledByJob.set(e.job_id, (netPulledByJob.get(e.job_id) || 0) - feet);
+  }
+
+  // A reservation only holds the stock a job hasn't pulled yet: effective = max(0, reserved
+  // − already pulled). Once a job has pulled its material (e.g. after finalizing its cutting
+  // nest), it stops competing for this material. Fully-satisfied jobs drop off the list.
+  const effectiveAllocations = allocations
+    .map((a) => {
+      const pulled = a.jobs ? netPulledByJob.get(a.jobs.id) || 0 : 0;
+      return { ...a, effective: Math.max(0, Number(a.allocated_quantity) - pulled) };
+    })
+    .filter((a) => a.effective > 0.001);
+  const totalAllocated = effectiveAllocations.reduce((sum, a) => sum + a.effective, 0);
   const available = totalInStock - totalAllocated;
 
   // Cost on hand: highest cost among purchase/opening layers still in stock.
@@ -484,7 +518,7 @@ export default function MaterialDetailPage() {
             )}
           </section>
 
-          {allocations.length > 0 && (
+          {effectiveAllocations.length > 0 && (
             <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
                 <h3 className="text-base font-semibold text-gray-900">Allocated to jobs</h3>
@@ -498,7 +532,7 @@ export default function MaterialDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allocations.map((a) => (
+                  {effectiveAllocations.map((a) => (
                     <tr key={a.id} className="border-b border-gray-100 last:border-0">
                       <td className="px-4 py-3 text-sm">
                         {a.jobs ? (
@@ -506,7 +540,7 @@ export default function MaterialDetailPage() {
                         ) : "Unknown job"}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-700 capitalize">{a.basis}</td>
-                      <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(a.allocated_quantity).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{a.effective.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>
