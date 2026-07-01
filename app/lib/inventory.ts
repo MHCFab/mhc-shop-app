@@ -80,7 +80,7 @@ export type AvailablePurchasedPart = {
 export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]> {
   const supabase = createClient();
 
-  const [matsRes, invRes, allocRes] = await Promise.all([
+  const [matsRes, invRes, allocRes, nestRes] = await Promise.all([
     supabase
       .from("raw_materials")
       .select("id, shape, size, wall_thickness, grade, current_cost_per_foot, is_active")
@@ -91,13 +91,45 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
       .select("raw_material_id, stick_length_feet, quantity_sticks, cost_per_foot, purchase_date, entry_type"),
     supabase
       .from("inventory_allocations")
-      .select("raw_material_id, allocated_quantity")
+      .select("job_id, raw_material_id, allocated_quantity")
       .eq("item_type", "raw_material"),
+    // Cutting-nest pulls/drops so each reservation can be netted against material the job
+    // has already physically pulled (a finalized/cut job stops reserving stock it took).
+    supabase
+      .from("cutting_nest_entries")
+      .select("job_id, raw_material_id, entry_type, length_feet, quantity"),
   ]);
 
   const mats = matsRes.data || [];
   const inv = invRes.data || [];
   const allocs = allocRes.data || [];
+  const nest = nestRes.data || [];
+
+  // Net feet each job has pulled per material (pulls minus drops), keyed job_id|material.
+  const netPulledByJobMat = new Map<string, number>();
+  for (const e of nest) {
+    if (!e.job_id || !e.raw_material_id) continue;
+    const feet = Number(e.length_feet) * Number(e.quantity);
+    const key = e.job_id + "|" + e.raw_material_id;
+    if (e.entry_type === "pull") netPulledByJobMat.set(key, (netPulledByJobMat.get(key) || 0) + feet);
+    else if (e.entry_type === "drop") netPulledByJobMat.set(key, (netPulledByJobMat.get(key) || 0) - feet);
+  }
+
+  // Effective reservation per material = sum over jobs of max(0, reserved − already pulled).
+  const effectiveAllocByMat = new Map<string, number>();
+  {
+    const rawAllocByJobMat = new Map<string, number>();
+    for (const a of allocs) {
+      if (!a.raw_material_id) continue;
+      const key = (a.job_id || "") + "|" + a.raw_material_id;
+      rawAllocByJobMat.set(key, (rawAllocByJobMat.get(key) || 0) + Number(a.allocated_quantity));
+    }
+    for (const [key, reserved] of rawAllocByJobMat) {
+      const mid = key.slice(key.indexOf("|") + 1);
+      const pulled = netPulledByJobMat.get(key) || 0;
+      effectiveAllocByMat.set(mid, (effectiveAllocByMat.get(mid) || 0) + Math.max(0, reserved - pulled));
+    }
+  }
 
   return mats.map((m) => {
     const batches = inv.filter((b) => b.raw_material_id === m.id);
@@ -105,9 +137,7 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
       (sum, b) => sum + Number(b.stick_length_feet) * Number(b.quantity_sticks),
       0
     );
-    const allocated = allocs
-      .filter((a) => a.raw_material_id === m.id)
-      .reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
+    const allocated = effectiveAllocByMat.get(m.id) || 0;
 
     // Cost layers: feet added by purchases/opening stock; feet removed by pulls
     // and negative adjustments deplete them oldest-first.
@@ -308,13 +338,14 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
       .from("inventory_allocations")
       .select("job_id, item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity")
       .neq("job_id", jobId),
-    // This job's OWN cutting-nest pulls/drops. Material already pulled for the job has
-    // left free inventory, but it is covering this job's requirement, so it must count
-    // toward 'available' for this job — otherwise pulling sticks looks like a shortfall.
+    // Cutting-nest pulls/drops for ALL jobs. A job's actual pulls reduce the reservation
+    // it still needs: material this job pulled covers its own requirement, and material
+    // OTHER jobs have pulled means their reservation is already satisfied from stock, so it
+    // must stop blocking this job. Reading every job lets us net each reservation against
+    // what that job has physically pulled.
     supabase
       .from("cutting_nest_entries")
-      .select("raw_material_id, entry_type, length_feet, quantity")
-      .eq("job_id", jobId),
+      .select("job_id, raw_material_id, entry_type, length_feet, quantity"),
     // Jobs that are already complete keep their allocation rows until the job is invoiced
     // and archived. A finished job is no longer competing for free stock, so we must NOT
     // count its reservations against other jobs — otherwise buying more material or parts
@@ -340,7 +371,7 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
   type PpInvRow = { purchased_part_id: string; quantity: number };
   type FabInvRow = { product_template_id: string; quantity: number };
   type AllocRow = { job_id: string; item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null; allocated_quantity: number };
-  type NestRow = { raw_material_id: string; entry_type: string; length_feet: number; quantity: number };
+  type NestRow = { job_id: string; raw_material_id: string; entry_type: string; length_feet: number; quantity: number };
   type CompleteJobRow = { id: string };
 
   const pick = (pickRes.data || []) as unknown as PickRow[];
@@ -353,17 +384,25 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     ((completeJobsRes.data || []) as unknown as CompleteJobRow[]).map((j) => j.id)
   );
 
-  // Net feet this job has already pulled for itself (pulls minus drops returned), per
-  // raw material. Only raw materials flow through the cutting nest.
-  const thisJobPulled = new Map<string, number>();
+  // Net feet each job has pulled per material (pulls minus drops returned), keyed by
+  // job_id + "|" + raw_material_id. Only raw materials flow through the cutting nest.
+  const netPulledByJobMat = new Map<string, number>();
   for (const e of nest) {
-    if (!e.raw_material_id) continue;
+    if (!e.job_id || !e.raw_material_id) continue;
     const feet = Number(e.length_feet) * Number(e.quantity);
+    const key = e.job_id + "|" + e.raw_material_id;
     if (e.entry_type === "pull") {
-      thisJobPulled.set(e.raw_material_id, (thisJobPulled.get(e.raw_material_id) || 0) + feet);
+      netPulledByJobMat.set(key, (netPulledByJobMat.get(key) || 0) + feet);
     } else if (e.entry_type === "drop") {
-      thisJobPulled.set(e.raw_material_id, (thisJobPulled.get(e.raw_material_id) || 0) - feet);
+      netPulledByJobMat.set(key, (netPulledByJobMat.get(key) || 0) - feet);
     }
+  }
+  // This job's own net pull per material — covers its own requirement.
+  const thisJobPulled = new Map<string, number>();
+  for (const [key, feet] of netPulledByJobMat) {
+    const jid = key.slice(0, key.indexOf("|"));
+    const mid = key.slice(key.indexOf("|") + 1);
+    if (jid === jobId) thisJobPulled.set(mid, feet);
   }
 
   // Total stock on hand per material / part / fabricated item
@@ -383,21 +422,35 @@ export async function getJobStockShortfall(jobId: string): Promise<JobStockShort
     fabStock.set(b.product_template_id, (fabStock.get(b.product_template_id) || 0) + Number(b.quantity));
   }
 
-  // What OTHER jobs have already claimed
+  // What OTHER jobs have already claimed. Parts and fabricated units are reserved at full
+  // planned quantity (they never flow through the cutting nest). Raw materials are reserved
+  // net of what each job has already pulled (handled after this loop), so a finalized/cut
+  // job stops holding stock it has physically taken.
   const rmAlloc = new Map<string, number>();
   const ppAlloc = new Map<string, number>();
   const fabAlloc = new Map<string, number>();
+  const rawAllocByJobMat = new Map<string, number>();
   for (const a of allocs) {
     // Skip reservations held by jobs that are already complete (see query above) — a
     // finished job should not block another job's stock from showing as available.
     if (completeJobIds.has(a.job_id)) continue;
     if (a.item_type === "raw_material" && a.raw_material_id) {
-      rmAlloc.set(a.raw_material_id, (rmAlloc.get(a.raw_material_id) || 0) + Number(a.allocated_quantity));
+      // Aggregate raw reservations per job+material; netted against pulls after the loop.
+      const key = a.job_id + "|" + a.raw_material_id;
+      rawAllocByJobMat.set(key, (rawAllocByJobMat.get(key) || 0) + Number(a.allocated_quantity));
     } else if (a.item_type === "purchased_part" && a.purchased_part_id) {
       ppAlloc.set(a.purchased_part_id, (ppAlloc.get(a.purchased_part_id) || 0) + Number(a.allocated_quantity));
     } else if (a.item_type === "fabricated" && a.product_template_id) {
       fabAlloc.set(a.product_template_id, (fabAlloc.get(a.product_template_id) || 0) + Number(a.allocated_quantity));
     }
+  }
+  // A raw-material reservation only holds the stock a job hasn't pulled yet: effective claim
+  // = max(0, reserved − already pulled). Once a job has pulled its material (e.g. after
+  // finalizing its cutting nest), it stops competing for that material.
+  for (const [key, reserved] of rawAllocByJobMat) {
+    const mid = key.slice(key.indexOf("|") + 1);
+    const pulled = netPulledByJobMat.get(key) || 0;
+    rmAlloc.set(mid, (rmAlloc.get(mid) || 0) + Math.max(0, reserved - pulled));
   }
 
   function describeMaterial(m: { shape: string; size: string; wall_thickness: string | null; grade: string }) {
@@ -584,21 +637,25 @@ export async function pullSticks(params: {
   const { companyId, jobId, rawMaterialId, length, quantity, costPerFoot } = params;
 
   // Deplete inventory with a negative batch at this length
-  await supabase.from("raw_material_inventory").insert({
-    company_id: companyId,
-    raw_material_id: rawMaterialId,
-    supplier_id: null,
-    stick_length_feet: length,
-    quantity_sticks: -quantity,
-    cost_per_foot: costPerFoot,
-    purchase_date: new Date().toISOString().slice(0, 10),
-    source_note: "Pulled for cutting nest",
-    source_job_id: jobId,
-    notes: "Sticks pulled for job cutting nest",
-    entry_type: "pull",
-  });
+  const { data: pullInv } = await supabase
+    .from("raw_material_inventory")
+    .insert({
+      company_id: companyId,
+      raw_material_id: rawMaterialId,
+      supplier_id: null,
+      stick_length_feet: length,
+      quantity_sticks: -quantity,
+      cost_per_foot: costPerFoot,
+      purchase_date: new Date().toISOString().slice(0, 10),
+      source_note: "Pulled for cutting nest",
+      source_job_id: jobId,
+      notes: "Sticks pulled for job cutting nest",
+      entry_type: "pull",
+    })
+    .select("id")
+    .single();
 
-  // Log the pull entry
+  // Log the pull entry, linked to the inventory row it created so an undo can delete it
   await supabase.from("cutting_nest_entries").insert({
     company_id: companyId,
     job_id: jobId,
@@ -607,6 +664,7 @@ export async function pullSticks(params: {
     length_feet: length,
     quantity,
     cost_per_foot: costPerFoot,
+    created_inventory_id: pullInv?.id || null,
   });
 }
 
@@ -670,20 +728,42 @@ export async function reverseCuttingNestEntry(entry: {
   const supabase = createClient();
 
   if (entry.entry_type === "pull") {
-    // Reverse a pull by adding the sticks back
-    await supabase.from("raw_material_inventory").insert({
-      company_id: entry.company_id,
-      raw_material_id: entry.raw_material_id,
-      supplier_id: null,
-      stick_length_feet: entry.length_feet,
-      quantity_sticks: entry.quantity,
-      cost_per_foot: entry.cost_per_foot,
-      purchase_date: new Date().toISOString().slice(0, 10),
-      source_note: "Reversed pull",
-      source_job_id: entry.job_id,
-      notes: "Reversed a cutting nest stick pull",
-      entry_type: "reversal",
-    });
+    // Undo a pull by DELETING the negative inventory row it created, so the transaction
+    // disappears entirely rather than leaving a compensating "reversal" row in history.
+    if (entry.created_inventory_id) {
+      await supabase.from("raw_material_inventory").delete().eq("id", entry.created_inventory_id);
+    } else {
+      // Legacy pulls logged before we linked the inventory row: find the matching
+      // negative pull batch for this job/material/length and delete one of them.
+      const { data: match } = await supabase
+        .from("raw_material_inventory")
+        .select("id")
+        .eq("source_job_id", entry.job_id)
+        .eq("raw_material_id", entry.raw_material_id)
+        .eq("stick_length_feet", entry.length_feet)
+        .eq("quantity_sticks", -entry.quantity)
+        .eq("entry_type", "pull")
+        .limit(1)
+        .maybeSingle();
+      if (match?.id) {
+        await supabase.from("raw_material_inventory").delete().eq("id", (match as { id: string }).id);
+      } else {
+        // Last resort (original row not found): add the sticks back so stock is never lost.
+        await supabase.from("raw_material_inventory").insert({
+          company_id: entry.company_id,
+          raw_material_id: entry.raw_material_id,
+          supplier_id: null,
+          stick_length_feet: entry.length_feet,
+          quantity_sticks: entry.quantity,
+          cost_per_foot: entry.cost_per_foot,
+          purchase_date: new Date().toISOString().slice(0, 10),
+          source_note: "Reversed pull",
+          source_job_id: entry.job_id,
+          notes: "Reversed a cutting nest stick pull",
+          entry_type: "reversal",
+        });
+      }
+    }
   } else if (entry.entry_type === "drop") {
     // Reverse a saved drop by removing the inventory it created (if still present)
     if (entry.created_inventory_id) {

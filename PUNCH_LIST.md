@@ -66,6 +66,15 @@ job_pick_list_items + inventory_allocations, item_type CHECKs widened to include
 - Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
 
 ## Done (deployed)
+- **Reservation double-count → negative available / false shortage (fixed, pending deploy 2026-07-01).**
+  Finalizing a cutting nest set each job's raw-material reservation to its *net consumed*, but that material
+  had already left stock via the pulls — so it was subtracted twice (e.g. 1.25x.095 ERW showed -32.25 ft).
+  Fix (Option 1, read-only): a raw-material reservation now = max(0, reserved − already pulled), applied in
+  `getAvailableRawMaterials` and `getJobStockShortfall`. Finalized/cut jobs stop reserving stock they took;
+  fixes current stuck numbers live, no schema/SQL. Also handles partially-cut jobs.
+- **Undo a pull now deletes the transaction (pending deploy 2026-07-01).** `reverseCuttingNestEntry` used to
+  insert a compensating 'reversal' +row and leave the original pull; now it deletes the pull's inventory row
+  (via `created_inventory_id`, now stored by `pullSticks`; legacy pulls matched by job/material/length).
 - **Stock alert didn't clear after purchases (fixed, pending deploy 2026-07-01).** `getJobStockShortfall`
   subtracted reservations from ALL other jobs, including already-**complete** jobs that keep their
   `inventory_allocations` rows until they're invoiced/archived. So finished jobs phantom-held stock and
