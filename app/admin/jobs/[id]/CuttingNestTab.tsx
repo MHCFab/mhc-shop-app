@@ -292,8 +292,6 @@ export default function CuttingNestTab({
 
     await syncPickListActuals();
     await supabase.from("jobs").update({ cutting_nest_finalized_at: new Date().toISOString() }).eq("id", jobId);
-
-    await supabase.from("jobs").update({ cutting_nest_finalized_at: new Date().toISOString() }).eq("id", jobId);
     setBusy(false);
     await loadData();
     if (onChanged) onChanged();
@@ -310,16 +308,6 @@ export default function CuttingNestTab({
 
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
-  if (jobStatus === "ordered") {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-6">
-        <p className="text-sm text-amber-800">
-          This job is still in Ordered status. Mark it Ready first to reserve material, then pull sticks for your cutting nest here.
-        </p>
-      </div>
-    );
-  }
-
   if (items.length === 0) {
     return (
       <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
@@ -333,6 +321,14 @@ export default function CuttingNestTab({
   return (
     <div className="space-y-4">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
+
+      {jobStatus === "ordered" && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <p className="text-sm text-amber-800">
+            This job is still in Ordered status &mdash; you can build your cutting nest now. Sticks you pull come straight out of stock, and marking the job Ready will only reserve the estimated material you haven&apos;t already pulled.
+          </p>
+        </div>
+      )}
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-start justify-between flex-wrap gap-3">
         <div>
