@@ -104,13 +104,39 @@ export default function ResetPasswordPage() {
     setSaving(true);
     const { error } = await supabase.auth.updateUser({ password });
     if (error) {
-      setError(error.message);
+      const friendly = error.message.toLowerCase().includes("sub claim")
+        ? "This sign-in session is no longer valid. Close this window, open the newest reset email, and click its link again — or ask for a fresh one."
+        : error.message;
+      setError(friendly);
       setSaving(false);
       return;
     }
 
+    // If this account was invited and finished its password here instead of
+    // on the accept-invite page, mark the invitation accepted so the admin
+    // view stops showing "Awaiting password". (One of these will match
+    // depending on the account type; the other is a harmless no-op.)
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.email) {
+      const acceptedAt = new Date().toISOString();
+      const email = user.email.toLowerCase();
+      await supabase
+        .from("employee_invitations")
+        .update({ status: "accepted", accepted_at: acceptedAt })
+        .eq("email", email)
+        .eq("status", "pending");
+      await supabase
+        .from("customer_invitations")
+        .update({ status: "accepted", accepted_at: acceptedAt })
+        .eq("email", email)
+        .eq("status", "pending");
+    }
+
     setSaving(false);
-    router.push("/floor");
+    // The home page routes everyone to the right place for their role
+    // (admin -> /admin, employee -> /floor, customer -> /portal).
+    router.push("/");
+    router.refresh();
   }
 
   return (
