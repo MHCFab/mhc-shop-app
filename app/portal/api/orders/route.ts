@@ -7,9 +7,15 @@ import { cookies } from "next/headers";
 // after verifying the caller is an active customer login acting on their
 // own records — customer logins have NO insert/update rights of their own.
 //
-//   action: "create"  -> new job with status 'pending' + one line item
-//   action: "update"  -> edit qty / PO / date / notes while still 'pending'
-//   action: "cancel"  -> 'pending' or 'ordered' job -> status 'cancelled'
+//   action: "create"           -> new job with status 'pending' + one line item
+//   action: "update"           -> edit qty / PO / date / notes while still 'pending'
+//   action: "cancel"           -> 'pending' or 'ordered' job -> status 'cancelled'
+//   action: "request_change"   -> ask for a quantity change (ordered/ready/in_progress)
+//                                 or a cancellation (ready/in_progress). One open
+//                                 request per job; Erik approves or declines it.
+//   action: "withdraw_request" -> take back your own open change request
+//   action: "reorder"          -> set the priority order of your open jobs
+//                                 (in-production jobs can't be moved)
 
 const OPEN_STATUSES = ["pending", "ordered", "ready", "in_progress"];
 
@@ -22,7 +28,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const action = body.action as string;
 
-    if (!["create", "update", "cancel"].includes(action)) {
+    if (!["create", "update", "cancel", "request_change", "withdraw_request", "reorder"].includes(action)) {
       return bad("Unknown action.");
     }
 
@@ -173,7 +179,57 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, jobId: job.id, jobNumber });
     }
 
-    // ---- update/cancel both need the job, verified as this customer's ----
+    // ================= REORDER (priority drag) =================
+    if (action === "reorder") {
+      const jobIds = body.jobIds;
+      if (!Array.isArray(jobIds) || jobIds.length === 0 || !jobIds.every((x) => typeof x === "string")) {
+        return bad("Missing job order.");
+      }
+
+      // The customer's open jobs, in the same order the portal shows them
+      const { data: openJobs, error: ojError } = await admin
+        .from("jobs")
+        .select("id, status")
+        .eq("company_id", companyId)
+        .eq("customer_id", customerId)
+        .in("status", OPEN_STATUSES)
+        .order("board_order", { ascending: true })
+        .order("created_at", { ascending: false });
+      if (ojError) return bad(ojError.message, 500);
+
+      const current = (openJobs || []) as { id: string; status: string }[];
+      if (current.length !== jobIds.length) {
+        return bad("Your job list just changed — refresh and try again.");
+      }
+      const currentIds = new Set(current.map((j) => j.id));
+      for (const jid of jobIds as string[]) {
+        if (!currentIds.has(jid)) {
+          return bad("Your job list just changed — refresh and try again.");
+        }
+      }
+      if (new Set(jobIds as string[]).size !== jobIds.length) {
+        return bad("Invalid job order.");
+      }
+
+      // In-production jobs are locked: their relative order can't change.
+      const statusById = new Map(current.map((j) => [j.id, j.status]));
+      const currentInProgress = current.filter((j) => j.status === "in_progress").map((j) => j.id);
+      const newInProgress = (jobIds as string[]).filter((jid) => statusById.get(jid) === "in_progress");
+      if (currentInProgress.join(",") !== newInProgress.join(",")) {
+        return bad("Jobs already in production can't be reprioritized online.");
+      }
+
+      const updates = (jobIds as string[]).map((jid, i) =>
+        admin.from("jobs").update({ board_order: i }).eq("id", jid).eq("customer_id", customerId)
+      );
+      const results = await Promise.all(updates);
+      const failed = results.find((r) => r.error);
+      if (failed?.error) return bad("Could not save the new order: " + failed.error.message, 500);
+
+      return NextResponse.json({ success: true });
+    }
+
+    // ---- everything below needs the job, verified as this customer's ----
     const jobId = body.jobId;
     if (!jobId || typeof jobId !== "string") return bad("Missing job.");
 
@@ -224,7 +280,7 @@ export async function POST(req: NextRequest) {
     // ================= CANCEL (pending or ordered) =================
     if (action === "cancel") {
       if (job.status !== "pending" && job.status !== "ordered") {
-        return bad("This job has been released to the shop and can't be cancelled online. Give us a call instead.");
+        return bad("This job has been released to the shop and can't be cancelled online. You can send us a cancellation request from your Jobs page instead.");
       }
 
       const { data: cancelled, error: cancelError } = await admin
@@ -245,6 +301,91 @@ export async function POST(req: NextRequest) {
 
       // Free up any inventory reservations it may have had (safe if none)
       await admin.from("inventory_allocations").delete().eq("job_id", job.id);
+
+      // An open change request on a cancelled job is moot
+      await admin.from("job_change_requests").delete().eq("job_id", job.id).eq("status", "open");
+
+      return NextResponse.json({ success: true });
+    }
+
+    // ================= REQUEST A CHANGE =================
+    if (action === "request_change") {
+      const requestType = body.requestType as string;
+      if (requestType !== "quantity" && requestType !== "cancel") {
+        return bad("Unknown request type.");
+      }
+      const note = cleanText(body.note, 2000);
+
+      let requestedQuantity: number | null = null;
+
+      if (requestType === "quantity") {
+        if (!["ordered", "ready", "in_progress"].includes(job.status)) {
+          return bad(
+            job.status === "pending"
+              ? "This order hasn't been approved yet — you can edit its quantity directly."
+              : "This job isn't open anymore."
+          );
+        }
+        requestedQuantity = cleanQuantity(body.requestedQuantity);
+        if (requestedQuantity === null) return bad("Quantity must be a whole number of at least 1.");
+
+        // Pointless request if it's already the quantity on the job
+        const { data: liData } = await admin
+          .from("job_line_items")
+          .select("quantity")
+          .eq("job_id", job.id)
+          .order("sort_order")
+          .limit(1);
+        const currentQty = liData && liData.length > 0 ? Number(liData[0].quantity) : null;
+        if (currentQty !== null && currentQty === requestedQuantity) {
+          return bad("This job's quantity is already " + currentQty + ".");
+        }
+      } else {
+        // cancellation request — only for jobs already released to the shop
+        if (job.status === "pending" || job.status === "ordered") {
+          return bad("This order can still be cancelled directly — use the Cancel button on your Jobs page.");
+        }
+        if (!["ready", "in_progress"].includes(job.status)) {
+          return bad("This job isn't open anymore.");
+        }
+      }
+
+      const { error: insError } = await admin.from("job_change_requests").insert({
+        company_id: companyId,
+        job_id: job.id,
+        customer_id: customerId,
+        request_type: requestType,
+        requested_quantity: requestedQuantity,
+        customer_note: note,
+        status: "open",
+        created_by: user.id,
+      });
+
+      if (insError) {
+        // 23505 = the one-open-request-per-job rule
+        if (insError.code === "23505") {
+          return bad("There's already an open request on this job. Withdraw it first if you need to send a different one.");
+        }
+        return bad("Could not send the request: " + insError.message, 500);
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    // ================= WITHDRAW A REQUEST =================
+    if (action === "withdraw_request") {
+      const { data: removed, error: delError } = await admin
+        .from("job_change_requests")
+        .delete()
+        .eq("job_id", job.id)
+        .eq("customer_id", customerId)
+        .eq("status", "open")
+        .select("id");
+
+      if (delError) return bad(delError.message, 500);
+      if (!removed || removed.length === 0) {
+        return bad("That request was already handled — refresh to see the latest.");
+      }
 
       return NextResponse.json({ success: true });
     }

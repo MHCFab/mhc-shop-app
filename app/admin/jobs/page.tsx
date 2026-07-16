@@ -28,6 +28,12 @@ type Job = {
   job_line_items: { id: string; quantity: number; product_template_id: string | null }[];
 };
 
+type OpenRequest = {
+  job_id: string;
+  request_type: "quantity" | "cancel";
+  requested_quantity: number | null;
+};
+
 type CustomerGroup = {
   customerId: string;
   customerName: string;
@@ -44,6 +50,7 @@ function statusBadge(status: Status) {
 export default function JobsPage() {
   const supabase = createClient();
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [openRequests, setOpenRequests] = useState<Map<string, OpenRequest>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -124,6 +131,18 @@ export default function JobsPage() {
       .order("created_at", { ascending: false });
     if (error) setError(error.message);
     else setJobs((data || []) as unknown as Job[]);
+
+    // Open customer change requests -> orange badge on the job's row
+    const { data: crData } = await supabase
+      .from("job_change_requests")
+      .select("job_id, request_type, requested_quantity")
+      .eq("status", "open");
+    const map = new Map<string, OpenRequest>();
+    for (const r of (crData || []) as unknown as OpenRequest[]) {
+      map.set(r.job_id, r);
+    }
+    setOpenRequests(map);
+
     setLoading(false);
   }
 
@@ -252,6 +271,7 @@ export default function JobsPage() {
                   <tbody>
                     {group.jobs.map((j, idx) => {
                       const totalUnits = j.job_line_items.reduce((sum, li) => sum + Number(li.quantity), 0);
+                      const openRequest = openRequests.get(j.id) || null;
                       return (
                         <tr
                           key={j.id}
@@ -260,7 +280,7 @@ export default function JobsPage() {
                           onDragOver={(e) => onDragOver(e, group.customerId, idx)}
                           onDrop={() => onDrop(group.customerId)}
                           onDragEnd={() => { setDragCustomer(null); setDragIndex(null); }}
-                          className={"border-b border-gray-100 last:border-0 hover:bg-gray-50 " + (dragCustomer === group.customerId && dragIndex === idx ? "bg-blue-50" : j.status === "pending" ? "bg-yellow-50" : "")}
+                          className={"border-b border-gray-100 last:border-0 hover:bg-gray-50 " + (dragCustomer === group.customerId && dragIndex === idx ? "bg-blue-50" : j.status === "pending" ? "bg-yellow-50" : openRequest ? "bg-orange-50" : "")}
                         >
                           {canReorder && (
                             <td className="px-2 py-3 text-center text-gray-400 cursor-grab active:cursor-grabbing select-none" title="Drag to reorder">⠿</td>
@@ -273,7 +293,23 @@ export default function JobsPage() {
                           <td className="px-4 py-3 text-sm text-gray-700">{j.customer_po || "-"}</td>
                           <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{j.job_line_items.length}</td>
                           <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{totalUnits}</td>
-                          <td className="px-4 py-3 text-sm">{statusBadge(j.status)}</td>
+                          <td className="px-4 py-3 text-sm">
+                            {statusBadge(j.status)}
+                            {openRequest && (
+                              <div className="mt-1">
+                                <span
+                                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"
+                                  title={openRequest.request_type === "quantity"
+                                    ? "Customer requests quantity change to " + openRequest.requested_quantity
+                                    : "Customer requests cancellation"}
+                                >
+                                  {openRequest.request_type === "quantity"
+                                    ? "Qty change requested: " + openRequest.requested_quantity
+                                    : "Cancellation requested"}
+                                </span>
+                              </div>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-sm text-gray-700">{j.due_date || "-"}</td>
                           <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
                             {j.status === "pending" && (
@@ -299,4 +335,4 @@ export default function JobsPage() {
       )}
     </div>
   );
-}
+}

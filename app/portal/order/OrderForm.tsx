@@ -23,19 +23,34 @@ type EditJob = {
   job_line_items: { id: string; quantity: number; product_template_id: string | null }[];
 };
 
-export default function OrderForm({ editJobId }: { editJobId?: string }) {
+type OpenJob = {
+  id: string;
+  job_number: string;
+  status: string;
+  job_line_items: { product_template_id: string | null }[];
+};
+
+const OPEN_STATUS_LABEL: Record<string, string> = {
+  pending: "awaiting approval",
+  ordered: "ordered",
+  ready: "released to the shop",
+  in_progress: "in production",
+};
+
+export default function OrderForm({ editJobId, initialProductId }: { editJobId?: string; initialProductId?: string }) {
   const supabase = createClient();
   const router = useRouter();
   const isEdit = !!editJobId;
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [openJobs, setOpenJobs] = useState<OpenJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notEditable, setNotEditable] = useState(false);
   const [editJobNumber, setEditJobNumber] = useState("");
 
-  const [productTemplateId, setProductTemplateId] = useState("");
+  const [productTemplateId, setProductTemplateId] = useState(initialProductId || "");
   const [quantity, setQuantity] = useState("1");
   const [customerPo, setCustomerPo] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -57,6 +72,14 @@ export default function OrderForm({ editJobId }: { editJobId?: string }) {
       // Sub-assemblies are internal components, not orderable products
       const rows = ((data || []) as unknown as Product[]).filter((p) => !p.is_sub_assembly);
       setProducts(rows);
+
+      // Open jobs, so we can point out "you already have an order for this"
+      // when the same product is picked again. Never blocks — just steers.
+      const { data: ojData } = await supabase
+        .from("jobs")
+        .select("id, job_number, status, job_line_items(product_template_id)")
+        .in("status", ["pending", "ordered", "ready", "in_progress"]);
+      setOpenJobs((ojData || []) as unknown as OpenJob[]);
 
       if (editJobId) {
         const { data: jobData, error: jobError } = await supabase
@@ -89,6 +112,13 @@ export default function OrderForm({ editJobId }: { editJobId?: string }) {
   }, [editJobId]);
 
   const selectedProduct = products.find((p) => p.id === productTemplateId);
+
+  // Existing open jobs for the picked product (new orders only)
+  const duplicateJobs = !isEdit && productTemplateId
+    ? openJobs.filter((oj) => oj.job_line_items.some((li) => li.product_template_id === productTemplateId))
+    : [];
+  const duplicatePending = duplicateJobs.find((oj) => oj.status === "pending");
+  const duplicateActive = duplicateJobs.find((oj) => oj.status !== "pending");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -196,6 +226,33 @@ export default function OrderForm({ editJobId }: { editJobId?: string }) {
               <p className="text-xs text-gray-500 mt-1">{selectedProduct.description}</p>
             )}
           </div>
+
+          {duplicatePending && (
+            <div className="text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded-md p-3">
+              <p className="font-medium">You already have an order for this product awaiting approval.</p>
+              <p className="mt-1">
+                <Link href={"/portal/order/" + duplicatePending.id} className="text-blue-600 hover:text-blue-800 font-medium underline">
+                  Edit that order instead
+                </Link>
+                {" "}if you just need a different quantity or date — or keep going if you really want a separate order.
+              </p>
+            </div>
+          )}
+
+          {!duplicatePending && duplicateActive && (
+            <div className="text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded-md p-3">
+              <p className="font-medium">
+                We&apos;re already working on this product for you ({OPEN_STATUS_LABEL[duplicateActive.status] || duplicateActive.status}).
+              </p>
+              <p className="mt-1">
+                If you just need more or fewer,{" "}
+                <Link href="/portal" className="text-blue-600 hover:text-blue-800 font-medium underline">
+                  request a quantity change on that job
+                </Link>
+                {" "}instead — or keep going if this is really a new, separate order.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

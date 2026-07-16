@@ -37,6 +37,15 @@ type Job = {
   customers: { id: string; name: string } | null;
 };
 
+type ChangeRequest = {
+  id: string;
+  request_type: "quantity" | "cancel";
+  requested_quantity: number | null;
+  customer_note: string | null;
+  status: string;
+  created_at: string;
+};
+
 function money(n: number) {
   return "$" + n.toFixed(2);
 }
@@ -110,6 +119,11 @@ export default function JobDetailPage() {
   // Stockout alert
   const [shortfall, setShortfall] = useState<JobStockShortfallItem[]>([]);
 
+  // Open customer change request (quantity change / cancellation), if any
+  const [changeRequest, setChangeRequest] = useState<ChangeRequest | null>(null);
+  const [resolvingRequest, setResolvingRequest] = useState(false);
+  const [responseNote, setResponseNote] = useState("");
+
   const loadJob = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -146,6 +160,16 @@ export default function JobDetailPage() {
       console.error("Stock shortfall check failed:", e);
       setShortfall([]);
     }
+
+    // Open customer change request on this job (at most one, by DB rule)
+    const { data: crData } = await supabase
+      .from("job_change_requests")
+      .select("id, request_type, requested_quantity, customer_note, status, created_at")
+      .eq("job_id", id)
+      .eq("status", "open")
+      .limit(1);
+    const crRows = (crData || []) as unknown as ChangeRequest[];
+    setChangeRequest(crRows.length > 0 ? crRows[0] : null);
 
     // Build-order extras: the items this build produces, and whether it's already
     // been received into fabricated stock.
@@ -324,6 +348,38 @@ export default function JobDetailPage() {
     setEditing(true);
   }
 
+  // Rescale the pick list targets, task batch quantities / time estimates,
+  // and the line item itself from one quantity to another. Used by the Edit
+  // dialog and by approving a customer's quantity-change request.
+  async function rescaleJobQuantity(lineItemId: string, oldQty: number, newQty: number) {
+    if (!job || !(oldQty > 0)) return;
+    const ratio = newQty / oldQty;
+
+    const { data: pliData } = await supabase
+      .from("job_pick_list_items")
+      .select("id, planned_quantity")
+      .eq("job_id", job.id);
+    const pickItems = (pliData || []) as unknown as { id: string; planned_quantity: number }[];
+    for (const row of pickItems) {
+      const scaled = Math.round(Number(row.planned_quantity) * ratio * 10000) / 10000;
+      await supabase.from("job_pick_list_items").update({ planned_quantity: scaled }).eq("id", row.id);
+    }
+
+    const { data: taskData } = await supabase
+      .from("job_tasks")
+      .select("id, batch_quantity, estimated_minutes_total")
+      .eq("job_id", job.id);
+    const taskRows = (taskData || []) as unknown as { id: string; batch_quantity: number; estimated_minutes_total: number }[];
+    for (const row of taskRows) {
+      const newBatch = Math.round(Number(row.batch_quantity) * ratio);
+      const newMins = Math.round(Number(row.estimated_minutes_total) * ratio * 100) / 100;
+      await supabase.from("job_tasks").update({ batch_quantity: newBatch, estimated_minutes_total: newMins }).eq("id", row.id);
+    }
+
+    const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItemId);
+    if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+  }
+
   async function saveEdit() {
     if (!job) return;
     const newName = nameDraft.trim();
@@ -359,7 +415,7 @@ export default function JobDetailPage() {
       const ok = confirm(
         "Change quantity from " + lineItem.quantity + " to " + newQty + "?\n\n" +
         "Your pick list targets and task time estimates will be updated for the new quantity. " +
-        "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved \u2014 nothing is deleted.\n\n" +
+        "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved — nothing is deleted.\n\n" +
         "If you increased the quantity you may need to cut or pull more material, and if this job is already \"Ready\" or further, set it back to \"Ordered\" and then \"Ready\" again to re-reserve inventory for the new amount.\n\n" +
         "Continue?"
       );
@@ -380,31 +436,7 @@ export default function JobDetailPage() {
 
       // 2) Rescale pick list, tasks, and the line item quantity (if changed)
       if (qtyChanged && lineItem) {
-        const ratio = newQty / lineItem.quantity;
-
-        const { data: pliData } = await supabase
-          .from("job_pick_list_items")
-          .select("id, planned_quantity")
-          .eq("job_id", job.id);
-        const pickItems = (pliData || []) as unknown as { id: string; planned_quantity: number }[];
-        for (const row of pickItems) {
-          const scaled = Math.round(Number(row.planned_quantity) * ratio * 10000) / 10000;
-          await supabase.from("job_pick_list_items").update({ planned_quantity: scaled }).eq("id", row.id);
-        }
-
-        const { data: taskData } = await supabase
-          .from("job_tasks")
-          .select("id, batch_quantity, estimated_minutes_total")
-          .eq("job_id", job.id);
-        const taskRows = (taskData || []) as unknown as { id: string; batch_quantity: number; estimated_minutes_total: number }[];
-        for (const row of taskRows) {
-          const newBatch = Math.round(Number(row.batch_quantity) * ratio);
-          const newMins = Math.round(Number(row.estimated_minutes_total) * ratio * 100) / 100;
-          await supabase.from("job_tasks").update({ batch_quantity: newBatch, estimated_minutes_total: newMins }).eq("id", row.id);
-        }
-
-        const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItem.id);
-        if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+        await rescaleJobQuantity(lineItem.id, lineItem.quantity, newQty);
       }
 
       // 3) Update the per-unit price on a custom job's line item
@@ -425,6 +457,97 @@ export default function JobDetailPage() {
     }
   }
 
+  // ---- Customer change requests: approve / decline ----
+
+  async function approveChangeRequest() {
+    if (!job || !changeRequest) return;
+
+    if (changeRequest.request_type === "quantity") {
+      const newQty = Number(changeRequest.requested_quantity);
+      if (!lineItem || multipleLineItems) {
+        alert("This job doesn't have a single product line, so the quantity can't be changed automatically. Adjust it manually, then decline the request with a note.");
+        return;
+      }
+      if (!Number.isInteger(newQty) || newQty < 1) {
+        alert("The requested quantity isn't valid.");
+        return;
+      }
+      if (newQty !== lineItem.quantity) {
+        const ok = confirm(
+          "Approve quantity change from " + lineItem.quantity + " to " + newQty + "?\n\n" +
+          "Your pick list targets and task time estimates will be updated for the new quantity. " +
+          "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved — nothing is deleted.\n\n" +
+          "If the quantity went up you may need to cut or pull more material, and if this job is already \"Ready\" or further, set it back to \"Ordered\" and then \"Ready\" again to re-reserve inventory for the new amount.\n\n" +
+          "Continue?"
+        );
+        if (!ok) return;
+      }
+    } else {
+      const ok = confirm(
+        "Approve this cancellation request?\n\n" +
+        "This only tells the customer the cancellation is approved — it does NOT cancel or change the job. " +
+        "Handle the job itself afterwards (for example with Delete job, or by talking to the customer about work already done)."
+      );
+      if (!ok) return;
+    }
+
+    setResolvingRequest(true);
+    try {
+      if (changeRequest.request_type === "quantity" && lineItem && Number(changeRequest.requested_quantity) !== lineItem.quantity) {
+        await rescaleJobQuantity(lineItem.id, lineItem.quantity, Number(changeRequest.requested_quantity));
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error: reqErr } = await supabase
+        .from("job_change_requests")
+        .update({
+          status: "approved",
+          resolved_at: new Date().toISOString(),
+          resolved_by: user?.id || null,
+          response_note: responseNote.trim() ? responseNote.trim() : null,
+        })
+        .eq("id", changeRequest.id)
+        .eq("status", "open");
+      if (reqErr) throw new Error("The change went through, but marking the request approved failed: " + reqErr.message);
+
+      setResponseNote("");
+      await loadJob();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to approve the request.");
+    } finally {
+      setResolvingRequest(false);
+    }
+  }
+
+  async function declineChangeRequest() {
+    if (!changeRequest) return;
+    const ok = confirm("Decline this request? The customer will see it was declined" + (responseNote.trim() ? " along with your note." : ". You can add a note first to tell them why."));
+    if (!ok) return;
+
+    setResolvingRequest(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error: reqErr } = await supabase
+        .from("job_change_requests")
+        .update({
+          status: "declined",
+          resolved_at: new Date().toISOString(),
+          resolved_by: user?.id || null,
+          response_note: responseNote.trim() ? responseNote.trim() : null,
+        })
+        .eq("id", changeRequest.id)
+        .eq("status", "open");
+      if (reqErr) throw new Error(reqErr.message);
+
+      setResponseNote("");
+      await loadJob();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to decline the request.");
+    } finally {
+      setResolvingRequest(false);
+    }
+  }
+
   async function receiveBuild() {
     if (!job || !job.is_build_order) return;
     if (buildOutputs.length === 0) {
@@ -436,7 +559,7 @@ export default function JobDetailPage() {
       alert("This build order has no quantity set, so there's nothing to receive.");
       return;
     }
-    const summary = buildOutputs.map((o) => o.quantity + " \u00d7 " + o.name).join(", ");
+    const summary = buildOutputs.map((o) => o.quantity + " × " + o.name).join(", ");
     const ok = confirm(
       "Receive into fabricated stock?\n\n" + summary +
       "\n\nThe build's actual material, parts, and labor are split across these items in proportion to their estimated bill-of-materials cost, and each is stocked at its own cost per unit. The raw material and parts this build consumed were already taken out of inventory as you worked the job."
@@ -816,6 +939,57 @@ export default function JobDetailPage() {
           )}
         </div>
       </div>
+
+      {!isComplete && changeRequest && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
+          <h2 className="text-sm font-semibold text-orange-900">
+            {changeRequest.request_type === "quantity"
+              ? "Customer requests a quantity change" +
+                (lineItem ? ": " + lineItem.quantity + " → " + changeRequest.requested_quantity : " to " + changeRequest.requested_quantity)
+              : "Customer requests cancellation of this job"}
+          </h2>
+          <p className="text-sm text-orange-800 mt-0.5">
+            Sent {changeRequest.created_at.slice(0, 10)}.{" "}
+            {changeRequest.request_type === "quantity"
+              ? "Approving applies the new quantity the same way the Edit dialog does (pick list targets and task estimates rescale; picked amounts and logged time are kept)."
+              : "Approving only tells the customer it's approved — the job itself stays put until you handle it."}
+          </p>
+          {changeRequest.customer_note && (
+            <p className="text-sm text-orange-900 mt-2 bg-orange-100 rounded-md px-3 py-2">
+              &ldquo;{changeRequest.customer_note}&rdquo;
+            </p>
+          )}
+          <div className="mt-3">
+            <input
+              type="text"
+              value={responseNote}
+              onChange={(e) => setResponseNote(e.target.value)}
+              placeholder="Optional note back to the customer"
+              className="w-full max-w-md px-3 py-2 border border-orange-200 rounded-md text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-400"
+            />
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={approveChangeRequest}
+              disabled={resolvingRequest}
+              className="bg-green-600 text-white px-4 py-1.5 rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+            >
+              {resolvingRequest
+                ? "Working..."
+                : changeRequest.request_type === "quantity"
+                  ? "Approve & apply"
+                  : "Approve request"}
+            </button>
+            <button
+              onClick={declineChangeRequest}
+              disabled={resolvingRequest}
+              className="bg-white border border-orange-300 text-orange-800 px-4 py-1.5 rounded-md text-sm font-medium hover:bg-orange-100 disabled:opacity-50"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
 
       {!isComplete && shortfall.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
