@@ -13,13 +13,29 @@ export default async function PortalLayout({ children }: { children: React.React
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("full_name, role, customer_id")
+    .select("full_name, role, customer_id, is_active")
     .eq("id", user.id)
     .single();
 
   // Only customer logins belong here (middleware also enforces this)
   if (profile?.role !== "customer") {
     redirect("/");
+  }
+
+  // Disabled portal accounts get a clear message instead of empty pages
+  if (!profile?.is_active) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm max-w-md w-full p-8 text-center">
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Portal access disabled</h1>
+          <p className="text-gray-600 mb-6">
+            This account&apos;s portal access has been turned off. If you think this is a
+            mistake, contact us and we can turn it back on.
+          </p>
+          <PortalSignOut />
+        </div>
+      </div>
+    );
   }
 
   let customerName = "";

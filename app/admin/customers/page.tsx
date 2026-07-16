@@ -15,6 +15,14 @@ type Customer = {
   labor_rate_per_hour: number | null;
 };
 
+type PortalUser = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  is_active: boolean;
+  created_at: string;
+};
+
 type Form = {
   name: string;
   contact_name: string;
@@ -49,8 +57,13 @@ export default function CustomersPage() {
   const [search, setSearch] = useState("");
   const [companyId, setCompanyId] = useState<string | null>(null);
 
-  // Portal invite modal state
-  const [inviteFor, setInviteFor] = useState<Customer | null>(null);
+  // Portal access modal state
+  const [portalFor, setPortalFor] = useState<Customer | null>(null);
+  const [portalUsers, setPortalUsers] = useState<PortalUser[]>([]);
+  const [pendingEmails, setPendingEmails] = useState<Set<string>>(new Set());
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalBusyId, setPortalBusyId] = useState<string | null>(null);
+  const [portalError, setPortalError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteSending, setInviteSending] = useState(false);
@@ -116,25 +129,89 @@ export default function CustomersPage() {
     setError(null);
   }
 
-  function openInvite(c: Customer) {
-    setInviteFor(c);
+  async function loadPortalUsers(customerId: string) {
+    setPortalLoading(true);
+    setPortalError(null);
+    const [usersRes, invitesRes] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, email, full_name, is_active, created_at")
+        .eq("role", "customer")
+        .eq("customer_id", customerId)
+        .order("created_at"),
+      supabase
+        .from("customer_invitations")
+        .select("email, status")
+        .eq("customer_id", customerId)
+        .eq("status", "pending"),
+    ]);
+    if (usersRes.error) setPortalError(usersRes.error.message);
+    setPortalUsers((usersRes.data || []) as unknown as PortalUser[]);
+    const pending = new Set<string>();
+    for (const inv of invitesRes.data || []) pending.add(String(inv.email).toLowerCase());
+    setPendingEmails(pending);
+    setPortalLoading(false);
+  }
+
+  function openPortal(c: Customer) {
+    setPortalFor(c);
+    setPortalUsers([]);
+    setPendingEmails(new Set());
     setInviteEmail(c.email || "");
     setInviteName(c.contact_name || "");
     setInviteError(null);
     setInviteSuccess(null);
+    setPortalError(null);
+    loadPortalUsers(c.id);
   }
 
-  function closeInvite() {
-    setInviteFor(null);
+  function closePortal() {
+    setPortalFor(null);
+    setPortalUsers([]);
+    setPendingEmails(new Set());
     setInviteEmail("");
     setInviteName("");
     setInviteError(null);
     setInviteSuccess(null);
+    setPortalError(null);
+  }
+
+  async function toggleUserActive(u: PortalUser) {
+    if (!portalFor) return;
+    setPortalBusyId(u.id);
+    setPortalError(null);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ is_active: !u.is_active })
+      .eq("id", u.id);
+    if (error) setPortalError(error.message);
+    await loadPortalUsers(portalFor.id);
+    setPortalBusyId(null);
+  }
+
+  async function removeUser(u: PortalUser) {
+    if (!portalFor) return;
+    if (!confirm("Remove portal access for " + (u.full_name || u.email) + "? Their login is deleted entirely. You can re-invite the same email later.")) return;
+    setPortalBusyId(u.id);
+    setPortalError(null);
+    try {
+      const res = await fetch("/api/delete-portal-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profileId: u.id }),
+      });
+      const body = await res.json();
+      if (!res.ok) setPortalError(body.error || "Failed to remove the portal user.");
+    } catch {
+      setPortalError("Failed to remove the portal user. Check your connection and try again.");
+    }
+    await loadPortalUsers(portalFor.id);
+    setPortalBusyId(null);
   }
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
-    if (!inviteFor) return;
+    if (!portalFor) return;
     setInviteError(null);
     setInviteSuccess(null);
 
@@ -150,19 +227,26 @@ export default function CustomersPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          customerId: inviteFor.id,
+          customerId: portalFor.id,
           email,
           fullName: inviteName.trim() || null,
         }),
       });
       const body = await res.json();
       if (!res.ok) {
-        setInviteError(body.error || "Failed to send the invite.");
+        let msg = body.error || "Failed to send the invite.";
+        if (typeof msg === "string" && msg.toLowerCase().includes("already")) {
+          msg += " If this person is listed above, remove them first, then re-invite.";
+        }
+        setInviteError(msg);
       } else {
         setInviteSuccess(
           "Invite sent to " + email + ". They'll get an email with a link to set their password." +
           (body.warning ? " (" + body.warning + ")" : "")
         );
+        setInviteEmail("");
+        setInviteName("");
+        await loadPortalUsers(portalFor.id);
       }
     } catch {
       setInviteError("Failed to send the invite. Check your connection and try again.");
@@ -293,7 +377,7 @@ export default function CustomersPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                    <button onClick={() => openInvite(c)} className="text-green-700 hover:text-green-900 font-medium mr-3">Portal invite</button>
+                    <button onClick={() => openPortal(c)} className="text-green-700 hover:text-green-900 font-medium mr-3">Portal access</button>
                     <button onClick={() => openEdit(c)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
                     <button onClick={() => handleDelete(c)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
                   </td>
@@ -415,56 +499,105 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {inviteFor && (
+      {portalFor && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <form onSubmit={handleInvite} className="p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-1">Invite to customer portal</h2>
+            <div className="p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-1">Portal access &mdash; {portalFor.name}</h2>
               <p className="text-sm text-gray-600 mb-4">
-                Send {inviteFor.name} a login for the customer portal. They&apos;ll be able to see
-                their own jobs and products &mdash; nothing else.
+                People who can sign in to the customer portal for this company. They see their
+                own jobs and products &mdash; nothing else.
               </p>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email <span className="text-red-600">*</span>
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+              {portalError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-3">{portalError}</div>}
+
+              {portalLoading ? (
+                <p className="text-sm text-gray-600 mb-4">Loading...</p>
+              ) : portalUsers.length === 0 ? (
+                <div className="border border-gray-200 rounded-md p-4 text-center mb-4">
+                  <p className="text-sm text-gray-600">No portal logins yet. Send an invite below.</p>
+                </div>
+              ) : (
+                <div className="border border-gray-200 rounded-md divide-y divide-gray-100 mb-4">
+                  {portalUsers.map((u) => {
+                    const busy = portalBusyId === u.id;
+                    const awaiting = pendingEmails.has(u.email.toLowerCase());
+                    return (
+                      <div key={u.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{u.full_name || u.email}</p>
+                          <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {awaiting ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Awaiting password</span>
+                          ) : u.is_active ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Disabled</span>
+                          )}
+                          <button
+                            onClick={() => toggleUserActive(u)}
+                            disabled={busy}
+                            className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                          >
+                            {u.is_active ? "Disable" : "Enable"}
+                          </button>
+                          <button
+                            onClick={() => removeUser(u)}
+                            disabled={busy}
+                            className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <form onSubmit={handleInvite} className="border-t border-gray-200 pt-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Send a new invite</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Email <span className="text-red-600">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={inviteName}
+                      onChange={(e) => setInviteName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">The person&apos;s name, shown in the portal header.</p>
+                  </div>
+
+                  {inviteError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{inviteError}</div>}
+                  {inviteSuccess && <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">{inviteSuccess}</div>}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                  <input
-                    type="text"
-                    value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">The person&apos;s name, shown in the portal header.</p>
-                </div>
-
-                {inviteError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{inviteError}</div>}
-                {inviteSuccess && <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">{inviteSuccess}</div>}
-              </div>
-
-              <div className="flex justify-end gap-2 mt-6">
-                <button type="button" onClick={closeInvite} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors">
-                  {inviteSuccess ? "Close" : "Cancel"}
-                </button>
-                {!inviteSuccess && (
+                <div className="flex justify-end gap-2 mt-5">
+                  <button type="button" onClick={closePortal} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors">
+                    Close
+                  </button>
                   <button type="submit" disabled={inviteSending} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
                     {inviteSending ? "Sending..." : "Send invite"}
                   </button>
-                )}
-              </div>
-            </form>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}
