@@ -114,20 +114,10 @@ export async function POST(req: NextRequest) {
 
       if (!template) return bad("That product isn't available to order.");
 
-      // Job number defaults to the product name; add (2), (3)... if taken
-      const baseNumber = (template.name as string).trim().slice(0, 80);
-      const { data: existingNumbers } = await admin
-        .from("jobs")
-        .select("job_number")
-        .eq("company_id", companyId)
-        .ilike("job_number", baseNumber + "%");
-      const taken = new Set((existingNumbers || []).map((r) => (r.job_number as string).toLowerCase()));
-      let jobNumber = baseNumber;
-      let n = 2;
-      while (taken.has(jobNumber.toLowerCase())) {
-        jobNumber = baseNumber + " (" + n + ")";
-        n++;
-      }
+      // Job number is simply the product name. Duplicate names are allowed —
+      // the DB unique rule on (company_id, job_number) was dropped 2026-07-16;
+      // jobs are tracked by id everywhere in the app.
+      const jobNumber = (template.name as string).trim().slice(0, 80);
 
       // New orders go to the bottom of this customer's board
       const { data: openJobs } = await admin
