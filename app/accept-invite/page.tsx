@@ -116,15 +116,28 @@ export default function AcceptInvitePage() {
 
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.email) {
+      const acceptedAt = new Date().toISOString();
+      const email = user.email.toLowerCase();
+      // Mark the matching invitation accepted (one of these will match
+      // depending on whether this was an employee or customer invite;
+      // the other is a harmless no-op).
       await supabase
         .from("employee_invitations")
-        .update({ status: "accepted", accepted_at: new Date().toISOString() })
-        .eq("email", user.email.toLowerCase())
+        .update({ status: "accepted", accepted_at: acceptedAt })
+        .eq("email", email)
+        .eq("status", "pending");
+      await supabase
+        .from("customer_invitations")
+        .update({ status: "accepted", accepted_at: acceptedAt })
+        .eq("email", email)
         .eq("status", "pending");
     }
 
     setSaving(false);
-    router.push("/floor");
+    // The home page routes everyone to the right place for their role
+    // (admin -> /admin, employee -> /floor, customer -> /portal).
+    router.push("/");
+    router.refresh();
   }
 
   return (

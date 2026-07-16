@@ -48,18 +48,34 @@ export async function middleware(request: NextRequest) {
       .single();
 
     const role = profile?.role || "employee";
+    const home = role === "admin" ? "/admin" : role === "customer" ? "/portal" : "/floor";
 
     // Logged-in user on /login -> send to their home
     if (path === "/login") {
       const url = request.nextUrl.clone();
-      url.pathname = role === "admin" ? "/admin" : "/floor";
+      url.pathname = home;
+      return NextResponse.redirect(url);
+    }
+
+    // Customers can only use the portal (public paths like accept-invite
+    // and reset-password stay reachable so those flows keep working)
+    if (role === "customer" && !isPublic && !path.startsWith("/portal")) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/portal";
+      return NextResponse.redirect(url);
+    }
+
+    // Only customers can use the portal
+    if (role !== "customer" && path.startsWith("/portal")) {
+      const url = request.nextUrl.clone();
+      url.pathname = home;
       return NextResponse.redirect(url);
     }
 
     // Employees cannot access /admin
     if (role !== "admin" && path.startsWith("/admin")) {
       const url = request.nextUrl.clone();
-      url.pathname = "/floor";
+      url.pathname = home;
       return NextResponse.redirect(url);
     }
   }

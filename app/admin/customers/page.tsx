@@ -49,6 +49,14 @@ export default function CustomersPage() {
   const [search, setSearch] = useState("");
   const [companyId, setCompanyId] = useState<string | null>(null);
 
+  // Portal invite modal state
+  const [inviteFor, setInviteFor] = useState<Customer | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+
   async function loadCompanyId() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -67,6 +75,7 @@ export default function CustomersPage() {
   useEffect(() => {
     loadCompanyId();
     loadCustomers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = useMemo(() => {
@@ -105,6 +114,60 @@ export default function CustomersPage() {
     setEditingId(null);
     setForm(emptyForm);
     setError(null);
+  }
+
+  function openInvite(c: Customer) {
+    setInviteFor(c);
+    setInviteEmail(c.email || "");
+    setInviteName(c.contact_name || "");
+    setInviteError(null);
+    setInviteSuccess(null);
+  }
+
+  function closeInvite() {
+    setInviteFor(null);
+    setInviteEmail("");
+    setInviteName("");
+    setInviteError(null);
+    setInviteSuccess(null);
+  }
+
+  async function handleInvite(e: React.FormEvent) {
+    e.preventDefault();
+    if (!inviteFor) return;
+    setInviteError(null);
+    setInviteSuccess(null);
+
+    const email = inviteEmail.trim();
+    if (!email) {
+      setInviteError("Email is required.");
+      return;
+    }
+
+    setInviteSending(true);
+    try {
+      const res = await fetch("/api/invite-customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: inviteFor.id,
+          email,
+          fullName: inviteName.trim() || null,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setInviteError(body.error || "Failed to send the invite.");
+      } else {
+        setInviteSuccess(
+          "Invite sent to " + email + ". They'll get an email with a link to set their password." +
+          (body.warning ? " (" + body.warning + ")" : "")
+        );
+      }
+    } catch {
+      setInviteError("Failed to send the invite. Check your connection and try again.");
+    }
+    setInviteSending(false);
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -229,7 +292,8 @@ export default function CustomersPage() {
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-sm text-right">
+                  <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                    <button onClick={() => openInvite(c)} className="text-green-700 hover:text-green-900 font-medium mr-3">Portal invite</button>
                     <button onClick={() => openEdit(c)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
                     <button onClick={() => handleDelete(c)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
                   </td>
@@ -345,6 +409,60 @@ export default function CustomersPage() {
                 <button type="submit" disabled={saving} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
                   {saving ? "Saving..." : "Save"}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {inviteFor && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <form onSubmit={handleInvite} className="p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-1">Invite to customer portal</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Send {inviteFor.name} a login for the customer portal. They&apos;ll be able to see
+                their own jobs and products &mdash; nothing else.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <input
+                    type="text"
+                    value={inviteName}
+                    onChange={(e) => setInviteName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">The person&apos;s name, shown in the portal header.</p>
+                </div>
+
+                {inviteError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{inviteError}</div>}
+                {inviteSuccess && <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">{inviteSuccess}</div>}
+              </div>
+
+              <div className="flex justify-end gap-2 mt-6">
+                <button type="button" onClick={closeInvite} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium transition-colors">
+                  {inviteSuccess ? "Close" : "Cancel"}
+                </button>
+                {!inviteSuccess && (
+                  <button type="submit" disabled={inviteSending} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                    {inviteSending ? "Sending..." : "Send invite"}
+                  </button>
+                )}
               </div>
             </form>
           </div>

@@ -17,6 +17,8 @@ export default async function HomePage() {
 
   if (profile?.role === "admin") {
     redirect("/admin");
+  } else if (profile?.role === "customer") {
+    redirect("/portal");
   } else {
     redirect("/floor");
   }
