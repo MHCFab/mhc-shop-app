@@ -41,7 +41,7 @@ export default function PortalProductsPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Your products</h1>
-        <p className="text-gray-600 mt-1">The products we build for you. Ordering from this list is coming soon.</p>
+        <p className="text-gray-600 mt-1">The products we build for you. Use the Place order button on your Jobs page to order.</p>
       </div>
 
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-4">{error}</div>}

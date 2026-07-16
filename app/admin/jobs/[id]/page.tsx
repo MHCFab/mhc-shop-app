@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
 import { allocateJobInventory, releaseJobInventory, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
+import { generateJobPickListAndTasks } from "../../../lib/job-generation";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import CuttingNestTab from "./CuttingNestTab";
@@ -19,7 +20,7 @@ const STATUSES = [
   { value: "complete", label: "Complete", color: "bg-green-100 text-green-800" },
 ] as const;
 
-type Status = (typeof STATUSES)[number]["value"];
+type Status = (typeof STATUSES)[number]["value"] | "pending" | "cancelled";
 
 type Job = {
   id: string;
@@ -57,8 +58,13 @@ function describeMaterial(m: { shape: string; size: string; wall_thickness: stri
   return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
 }
 
+const EXTRA_BADGES: Record<string, { label: string; color: string }> = {
+  pending: { label: "Pending approval", color: "bg-yellow-100 text-yellow-800" },
+  cancelled: { label: "Cancelled", color: "bg-red-100 text-red-800" },
+};
+
 function statusBadge(status: Status) {
-  const s = STATUSES.find((x) => x.value === status);
+  const s = STATUSES.find((x) => x.value === status) || EXTRA_BADGES[status];
   return s
     ? <span className={"inline-flex items-center px-3 py-1 rounded-full text-sm font-medium " + s.color}>{s.label}</span>
     : <span className="text-sm text-gray-500">{status}</span>;
@@ -195,6 +201,62 @@ export default function JobDetailPage() {
       setTab((prev) => (prev === "overview" || prev === "cuttingnest" || prev === "tasks" ? "picklist" : prev));
     }
   }, [job?.status]);
+
+  // Approve a customer portal order: flip pending -> ordered, then generate
+  // its pick list and tasks (same generation the New Job page uses). The
+  // status dropdown is hidden while pending so this is the only path forward.
+  async function approveJob() {
+    if (!job) return;
+    setChangingStatus(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    let companyId: string | null = null;
+    if (user) {
+      const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+      companyId = profile?.company_id || null;
+    }
+    if (!companyId) {
+      setChangingStatus(false);
+      alert("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+
+    // Guarded: only approves if still pending, so it can't run twice.
+    const { data: updated, error: updError } = await supabase
+      .from("jobs")
+      .update({ status: "ordered" })
+      .eq("id", job.id)
+      .eq("status", "pending")
+      .select("id");
+
+    if (updError) {
+      setChangingStatus(false);
+      alert("Failed to approve: " + updError.message);
+      return;
+    }
+
+    if (updated && updated.length > 0) {
+      try {
+        const { data: liData } = await supabase
+          .from("job_line_items")
+          .select("id, quantity, product_template_id")
+          .eq("job_id", job.id)
+          .order("sort_order");
+        const items = ((liData || []) as unknown as { id: string; quantity: number; product_template_id: string | null }[])
+          .filter((li) => li.product_template_id)
+          .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
+        if (items.length > 0) {
+          await generateJobPickListAndTasks(supabase, companyId, job.id, items);
+        }
+      } catch (e) {
+        console.error("Pick list/task generation failed:", e);
+        alert("Order approved, but generating its pick list or tasks failed. Use Regenerate on the tasks tab, or contact support.");
+      }
+    }
+
+    setChangingStatus(false);
+    loadJob();
+  }
 
   async function changeStatus(newStatus: Status) {
     if (!job) return;
@@ -727,6 +789,15 @@ export default function JobDetailPage() {
         </div>
         <div className="flex flex-col items-end gap-2">
           {statusBadge(job.status)}
+          {job.status === "pending" ? (
+            <button
+              onClick={approveJob}
+              disabled={changingStatus}
+              className="bg-green-600 text-white px-4 py-1.5 rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+            >
+              {changingStatus ? "Approving..." : "Approve order"}
+            </button>
+          ) : job.status === "cancelled" ? null : (
           <select
             value={job.status}
             onChange={(e) => changeStatus(e.target.value as Status)}
@@ -737,6 +808,7 @@ export default function JobDetailPage() {
               <option key={s.value} value={s.value}>Change to {s.label}</option>
             ))}
           </select>
+          )}
           {!isComplete && (
             <button onClick={deleteJob} disabled={deleting} className="text-sm text-red-600 hover:text-red-800 font-medium disabled:opacity-50">
               {deleting ? "Deleting..." : "Delete job"}

@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "../../lib/supabase";
+import { generateJobPickListAndTasks } from "../../lib/job-generation";
 
 const STATUSES = [
+  { value: "pending", label: "Pending approval", color: "bg-yellow-100 text-yellow-800" },
   { value: "ordered", label: "Ordered", color: "bg-gray-100 text-gray-800" },
   { value: "ready", label: "Ready", color: "bg-blue-100 text-blue-800" },
   { value: "in_progress", label: "In Progress", color: "bg-amber-100 text-amber-800" },
@@ -23,7 +25,7 @@ type Job = {
   created_at: string;
   customer_id: string;
   customers: { id: string; name: string } | null;
-  job_line_items: { id: string; quantity: number }[];
+  job_line_items: { id: string; quantity: number; product_template_id: string | null }[];
 };
 
 type CustomerGroup = {
@@ -46,6 +48,67 @@ export default function JobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [savingOrder, setSavingOrder] = useState(false);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadCompanyId() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+      if (data) setCompanyId(data.company_id);
+    }
+    loadCompanyId();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Approve a customer order: flip pending -> ordered, then generate its
+  // pick list and tasks (same generation the New Job page uses).
+  async function approveJob(job: Job) {
+    if (!companyId) {
+      setError("Could not determine your company. Try refreshing the page.");
+      return;
+    }
+    setApprovingId(job.id);
+    setError(null);
+
+    // Guarded update: only approves if the job is still pending, so a
+    // double-click (or a customer cancelling at the same moment) can't
+    // generate the pick list twice.
+    const { data: updated, error: updError } = await supabase
+      .from("jobs")
+      .update({ status: "ordered" })
+      .eq("id", job.id)
+      .eq("status", "pending")
+      .select("id");
+
+    if (updError) {
+      setError("Failed to approve: " + updError.message);
+      setApprovingId(null);
+      return;
+    }
+    if (!updated || updated.length === 0) {
+      // Someone else changed it in the meantime; just refresh.
+      setApprovingId(null);
+      loadJobs();
+      return;
+    }
+
+    try {
+      const items = job.job_line_items
+        .filter((li) => li.product_template_id)
+        .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
+      if (items.length > 0) {
+        await generateJobPickListAndTasks(supabase, companyId, job.id, items);
+      }
+    } catch (e) {
+      console.error("Pick list/task generation failed:", e);
+      setError("Order approved, but generating its pick list or tasks failed. Open the job and regenerate them from the job page.");
+    }
+
+    setApprovingId(null);
+    loadJobs();
+  }
 
   // Drag state scoped to a customer
   const [dragCustomer, setDragCustomer] = useState<string | null>(null);
@@ -55,8 +118,8 @@ export default function JobsPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from("jobs")
-      .select("*, customers(id, name), job_line_items(id, quantity)")
-      .in("status", ["ordered", "ready", "in_progress"])
+      .select("*, customers(id, name), job_line_items(id, quantity, product_template_id)")
+      .in("status", ["pending", "ordered", "ready", "in_progress"])
       .order("board_order", { ascending: true })
       .order("created_at", { ascending: false });
     if (error) setError(error.message);
@@ -197,7 +260,7 @@ export default function JobsPage() {
                           onDragOver={(e) => onDragOver(e, group.customerId, idx)}
                           onDrop={() => onDrop(group.customerId)}
                           onDragEnd={() => { setDragCustomer(null); setDragIndex(null); }}
-                          className={"border-b border-gray-100 last:border-0 hover:bg-gray-50 " + (dragCustomer === group.customerId && dragIndex === idx ? "bg-blue-50" : "")}
+                          className={"border-b border-gray-100 last:border-0 hover:bg-gray-50 " + (dragCustomer === group.customerId && dragIndex === idx ? "bg-blue-50" : j.status === "pending" ? "bg-yellow-50" : "")}
                         >
                           {canReorder && (
                             <td className="px-2 py-3 text-center text-gray-400 cursor-grab active:cursor-grabbing select-none" title="Drag to reorder">⠿</td>
@@ -212,7 +275,16 @@ export default function JobsPage() {
                           <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{totalUnits}</td>
                           <td className="px-4 py-3 text-sm">{statusBadge(j.status)}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{j.due_date || "-"}</td>
-                          <td className="px-4 py-3 text-sm text-right">
+                          <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                            {j.status === "pending" && (
+                              <button
+                                onClick={() => approveJob(j)}
+                                disabled={approvingId === j.id}
+                                className="bg-green-600 text-white px-3 py-1 rounded-md text-xs font-medium hover:bg-green-700 disabled:opacity-50 mr-3"
+                              >
+                                {approvingId === j.id ? "Approving..." : "Approve"}
+                              </button>
+                            )}
                             <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800 font-medium">Open</Link>
                           </td>
                         </tr>
@@ -227,4 +299,4 @@ export default function JobsPage() {
       )}
     </div>
   );
-}
+}
