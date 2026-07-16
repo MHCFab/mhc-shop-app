@@ -18,14 +18,30 @@ export default function AcceptInvitePage() {
     let cancelled = false;
 
     async function establishSession() {
-      // 1. Existing session already?
+      const url = new URL(window.location.href);
+      const hasInviteToken =
+        !!url.searchParams.get("token_hash") ||
+        !!url.searchParams.get("code") ||
+        window.location.hash.includes("access_token");
+
+      // 1. Existing session already? A fresh invite link in the URL always
+      // wins over a stored session — otherwise a leftover login (possibly a
+      // since-deleted user) hijacks the invite and setting the password
+      // fails with "User from sub claim in JWT does not exist".
       const { data: { session: existing } } = await supabase.auth.getSession();
       if (existing) {
-        if (!cancelled) { setReady(true); setChecking(false); }
-        return;
+        if (!hasInviteToken) {
+          // No invite token in the URL: trust the stored session only if its
+          // user still exists on the server.
+          const { data: { user: liveUser }, error: liveError } = await supabase.auth.getUser();
+          if (liveUser && !liveError) {
+            if (!cancelled) { setReady(true); setChecking(false); }
+            return;
+          }
+        }
+        // Stale, or outranked by the invite link — clear it and continue.
+        await supabase.auth.signOut({ scope: "local" });
       }
-
-      const url = new URL(window.location.href);
 
       // 2. token_hash flow (our custom invite template)
       const token_hash = url.searchParams.get("token_hash");
@@ -109,7 +125,10 @@ export default function AcceptInvitePage() {
     setSaving(true);
     const { error } = await supabase.auth.updateUser({ password });
     if (error) {
-      setError(error.message);
+      const friendly = error.message.toLowerCase().includes("sub claim")
+        ? "This sign-in session is no longer valid. Close this window, open the newest invite email, and click its link again — or ask for a fresh invite."
+        : error.message;
+      setError(friendly);
       setSaving(false);
       return;
     }
