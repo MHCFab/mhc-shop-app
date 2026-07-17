@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
-import { allocateJobInventory, releaseJobInventory, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
+import { allocateJobInventory, releaseJobInventory, consumeJobInventoryOnInvoice, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
 import { generateJobPickListAndTasks } from "../../../lib/job-generation";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
@@ -330,6 +330,8 @@ export default function JobDetailPage() {
     if (!ok) return;
     setDeleting(true);
     await supabase.from("raw_material_inventory").delete().eq("source_job_id", job.id);
+    // Keep any fabricated stock this build order already received -- just unlink it.
+    await supabase.from("fabricated_inventory").update({ source_job_id: null }).eq("source_job_id", job.id);
     const { error } = await supabase.from("jobs").delete().eq("id", job.id);
     setDeleting(false);
     if (error) {
@@ -828,8 +830,17 @@ export default function JobDetailPage() {
         }
       }
 
-      // Delete the job and its inventory-created rows
-      await supabase.from("raw_material_inventory").delete().eq("source_job_id", job.id);
+      // Deduct the parts and fabricated stock this job actually used. Its soft
+      // reservations vanish when the job row is deleted below, so without this
+      // real deduction the stock would bounce back into inventory.
+      await consumeJobInventoryOnInvoice(job.id, companyId, job.job_number);
+
+      // Keep the job's material transaction history: pulls stay consumed and
+      // saved drops stay in stock. Just unlink the rows, then delete the job.
+      // (Deleting them here -- as the cancel path does -- would put every stick
+      // this job pulled back into inventory.)
+      await supabase.from("raw_material_inventory").update({ source_job_id: null }).eq("source_job_id", job.id);
+      await supabase.from("fabricated_inventory").update({ source_job_id: null }).eq("source_job_id", job.id);
       const { error: delErr } = await supabase.from("jobs").delete().eq("id", job.id);
       if (delErr) {
         alert("Archived, but failed to delete the job: " + delErr.message);

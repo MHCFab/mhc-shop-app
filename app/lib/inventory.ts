@@ -635,6 +635,84 @@ export async function releaseJobInventory(jobId: string): Promise<void> {
   const supabase = createClient();
   await supabase.from("inventory_allocations").delete().eq("job_id", jobId);
 }
+
+// Consume a job's purchased parts and fabricated stock when it is invoiced.
+// Parts and fabricated units are only soft-reserved while a job is active
+// (nothing decrements their ledgers), so without this step the stock would
+// "come back" the moment the job and its allocations are deleted. Raw material
+// is NOT touched here: cutting-nest pulls already wrote real ledger rows.
+export async function consumeJobInventoryOnInvoice(jobId: string, companyId: string, jobNumber: string): Promise<void> {
+  const supabase = createClient();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: pickData } = await supabase
+    .from("job_pick_list_items")
+    .select("item_type, purchased_part_id, product_template_id, actual_quantity, planned_quantity, purchased_parts(current_cost_each)")
+    .eq("job_id", jobId);
+  type PickRow = {
+    item_type: string;
+    purchased_part_id: string | null;
+    product_template_id: string | null;
+    actual_quantity: number;
+    planned_quantity: number;
+    purchased_parts: { current_cost_each: number } | null;
+  };
+  const pick = (pickData || []) as unknown as PickRow[];
+
+  // Purchased parts: deduct the actual picked quantity (the same number the
+  // frozen cost report bills), priced at the part's current cost.
+  const partRows = pick
+    .filter((p) => p.item_type === "purchased_part" && p.purchased_part_id && Number(p.actual_quantity) > 0)
+    .map((p) => ({
+      company_id: companyId,
+      purchased_part_id: p.purchased_part_id,
+      supplier_id: null,
+      quantity: -Number(p.actual_quantity),
+      cost_each: Number(p.purchased_parts?.current_cost_each || 0),
+      purchase_date: today,
+      notes: "Used on job " + jobNumber,
+      entry_type: "pull",
+    }));
+  if (partRows.length > 0) {
+    const { error } = await supabase.from("purchased_parts_inventory").insert(partRows);
+    if (error) throw new Error("Failed to deduct parts stock: " + error.message);
+  }
+
+  // Fabricated sub-assemblies: deduct at the planned quantity (they are pulled
+  // at release; no cutting-nest actual applies -- matches the cost report),
+  // priced at the current highest-cost-still-on-hand for each template.
+  const fabPick = pick.filter((p) => p.item_type === "fabricated" && p.product_template_id && Number(p.planned_quantity) > 0);
+  if (fabPick.length > 0) {
+    const { data: ledgerData } = await supabase
+      .from("fabricated_inventory")
+      .select("product_template_id, quantity, cost_per_unit, source, created_at")
+      .in("product_template_id", fabPick.map((p) => p.product_template_id as string));
+    type LedgerRow = { product_template_id: string; quantity: number; cost_per_unit: number; source: string; created_at: string };
+    const ledger = (ledgerData || []) as unknown as LedgerRow[];
+
+    const fabRows = fabPick.map((p) => {
+      const rows = ledger.filter((l) => l.product_template_id === p.product_template_id);
+      const layers: CostLayer[] = rows
+        .filter((r) => (r.source === "build" || r.source === "opening") && Number(r.quantity) > 0)
+        .map((r) => ({ date: r.created_at, qty: Number(r.quantity), cost: Number(r.cost_per_unit) }));
+      const totalOut = rows.reduce((s, r) => {
+        const q = Number(r.quantity);
+        return q < 0 ? s + -q : s;
+      }, 0);
+      return {
+        company_id: companyId,
+        product_template_id: p.product_template_id,
+        quantity: -Number(p.planned_quantity),
+        cost_per_unit: highestCostOnHand(layers, totalOut, 0),
+        source: "consumption",
+        source_job_id: null,
+        notes: "Used on job " + jobNumber,
+      };
+    });
+    const { error } = await supabase.from("fabricated_inventory").insert(fabRows);
+    if (error) throw new Error("Failed to deduct fabricated stock: " + error.message);
+  }
+}
 // ============================================
 // Cutting nest stick pulls and drops
 // ============================================
