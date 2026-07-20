@@ -6,11 +6,14 @@ import { createClient } from "../../lib/supabase";
 
 type Entry = {
   id: string;
-  job_id: string;
-  job_task_id: string;
+  job_id: string | null;
+  job_task_id: string | null;
   employee_id: string;
   started_at: string;
   ended_at: string | null;
+  archived_job_number: string | null;
+  archived_task_name: string | null;
+  invoiced_on: string | null;
 };
 
 type Profile = { id: string; full_name: string | null; email: string };
@@ -60,9 +63,13 @@ export default function TimeReportPage() {
     const startIso = weekStart.toISOString();
     const endIso = weekEnd.toISOString();
 
+    // Auto-cleanup: drop entries whose job was invoiced more than 30 days ago.
+    const purgeCutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    await supabase.from("time_entries").delete().not("invoiced_on", "is", null).lt("invoiced_on", purgeCutoff);
+
     const { data: entryData } = await supabase
       .from("time_entries")
-      .select("id, job_id, job_task_id, employee_id, started_at, ended_at")
+      .select("id, job_id, job_task_id, employee_id, started_at, ended_at, archived_job_number, archived_task_name, invoiced_on")
       .gte("started_at", startIso)
       .lt("started_at", endIso)
       .order("started_at");
@@ -70,8 +77,8 @@ export default function TimeReportPage() {
     setEntries(entryList);
 
     const empIds = Array.from(new Set(entryList.map((e) => e.employee_id)));
-    const jobIds = Array.from(new Set(entryList.map((e) => e.job_id)));
-    const taskIds = Array.from(new Set(entryList.map((e) => e.job_task_id)));
+    const jobIds = Array.from(new Set(entryList.map((e) => e.job_id).filter((x): x is string => !!x)));
+    const taskIds = Array.from(new Set(entryList.map((e) => e.job_task_id).filter((x): x is string => !!x)));
 
     if (empIds.length > 0) {
       const { data: profData } = await supabase
@@ -149,25 +156,36 @@ export default function TimeReportPage() {
     .map(([empId, empEntries]) => {
       const total = empEntries.reduce((s, e) => s + entrySeconds(e), 0);
 
+      // Live entries group by job id; archived (invoiced) entries group by
+      // their stamped job number so a job's time stays together after the
+      // job row itself is gone.
       const byJob = new Map<string, Entry[]>();
       for (const e of empEntries) {
-        if (!byJob.has(e.job_id)) byJob.set(e.job_id, []);
-        byJob.get(e.job_id)!.push(e);
+        const key = e.job_id || "archived|" + (e.archived_job_number || "Job");
+        if (!byJob.has(key)) byJob.set(key, []);
+        byJob.get(key)!.push(e);
       }
 
       const jobRows = Array.from(byJob.entries())
         .map(([jobId, jobEntries]) => {
           const jobTotal = jobEntries.reduce((s, e) => s + entrySeconds(e), 0);
 
-          const taskSecs = new Map<string, number>();
+          const taskAgg = new Map<string, { secs: number; label: string }>();
           for (const e of jobEntries) {
-            taskSecs.set(e.job_task_id, (taskSecs.get(e.job_task_id) || 0) + entrySeconds(e));
+            const tKey = e.job_task_id || "archived|" + (e.archived_task_name || "Task");
+            const prev = taskAgg.get(tKey);
+            taskAgg.set(tKey, {
+              secs: (prev?.secs || 0) + entrySeconds(e),
+              label: e.job_task_id ? "" : (e.archived_task_name || "Task"),
+            });
           }
-          const taskRows = Array.from(taskSecs.entries())
-            .map(([taskId, secs]) => ({ taskId, secs }))
+          const taskRows = Array.from(taskAgg.entries())
+            .map(([taskId, t]) => ({ taskId, secs: t.secs, label: t.label }))
             .sort((a, b) => b.secs - a.secs);
 
-          return { jobId, jobTotal, taskRows };
+          const live = !jobId.startsWith("archived|");
+          const archivedLabel = jobEntries[0].archived_job_number || "Job";
+          return { jobId, live, archivedLabel, jobTotal, taskRows };
         })
         .sort((a, b) => b.jobTotal - a.jobTotal);
 
@@ -248,7 +266,12 @@ export default function TimeReportPage() {
                               {job.job_number}
                             </Link>
                           ) : (
-                            <span className="font-medium text-gray-900">Job</span>
+                            <span className="font-medium text-gray-900">
+                              {jr.live ? "Job" : jr.archivedLabel}
+                              {!jr.live && (
+                                <span className="ml-2 text-xs font-normal text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">Invoiced</span>
+                              )}
+                            </span>
                           )}
                           {job?.customers?.name && <span className="text-gray-600 ml-2">{job.customers.name}</span>}
                         </div>
@@ -257,7 +280,7 @@ export default function TimeReportPage() {
                       <div className="mt-1.5 space-y-1">
                         {jr.taskRows.map((tr) => (
                           <div key={tr.taskId} className="flex items-center justify-between text-sm text-gray-600 pl-3">
-                            <span>{taskNames[tr.taskId] || "Task"}</span>
+                            <span>{taskNames[tr.taskId] || tr.label || "Task"}</span>
                             <span className="font-mono text-gray-500">{fmtHM(tr.secs)}</span>
                           </div>
                         ))}
@@ -272,8 +295,8 @@ export default function TimeReportPage() {
       )}
 
       <p className="text-xs text-gray-500 mt-6">
-        This report reads time from jobs currently in the system. Once a job is invoiced and archived, its detailed time
-        entries are removed, so a past week may read low if its jobs have since been archived.
+        Time from invoiced jobs stays on this report for 30 days after invoicing (marked &quot;Invoiced&quot;), then its
+        detailed entries are removed automatically. The labor totals live on in each job&apos;s archived cost summary.
       </p>
     </div>
   );

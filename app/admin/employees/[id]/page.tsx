@@ -9,10 +9,13 @@ type Profile = { id: string; full_name: string | null; email: string; role: stri
 
 type Entry = {
   id: string;
-  job_id: string;
-  job_task_id: string;
+  job_id: string | null;
+  job_task_id: string | null;
   started_at: string;
   ended_at: string | null;
+  archived_job_number: string | null;
+  archived_task_name: string | null;
+  invoiced_on: string | null;
 };
 
 type JobInfo = { id: string; job_number: string; customers: { name: string } | null };
@@ -47,17 +50,21 @@ export default function EmployeeDetailPage() {
       .single();
     setProfile((prof || null) as Profile | null);
 
+    // Auto-cleanup: drop entries whose job was invoiced more than 30 days ago.
+    const purgeCutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    await supabase.from("time_entries").delete().not("invoiced_on", "is", null).lt("invoiced_on", purgeCutoff);
+
     const { data: entryData } = await supabase
       .from("time_entries")
-      .select("id, job_id, job_task_id, started_at, ended_at")
+      .select("id, job_id, job_task_id, started_at, ended_at, archived_job_number, archived_task_name, invoiced_on")
       .eq("employee_id", employeeId)
       .order("started_at", { ascending: false });
     const entryList = (entryData || []) as unknown as Entry[];
     setEntries(entryList);
 
     // Load job and task info for the entries
-    const jobIds = Array.from(new Set(entryList.map((e) => e.job_id)));
-    const taskIds = Array.from(new Set(entryList.map((e) => e.job_task_id)));
+    const jobIds = Array.from(new Set(entryList.map((e) => e.job_id).filter((x): x is string => !!x)));
+    const taskIds = Array.from(new Set(entryList.map((e) => e.job_task_id).filter((x): x is string => !!x)));
 
     if (jobIds.length > 0) {
       const { data: jobData } = await supabase
@@ -110,11 +117,12 @@ export default function EmployeeDetailPage() {
 
   const totalSeconds = entries.reduce((s, e) => s + entrySeconds(e), 0);
 
-  // Group entries by job
+  // Group entries by job (invoiced jobs group by their stamped job number)
   const byJob = new Map<string, Entry[]>();
   for (const e of entries) {
-    if (!byJob.has(e.job_id)) byJob.set(e.job_id, []);
-    byJob.get(e.job_id)!.push(e);
+    const key = e.job_id || "archived|" + (e.archived_job_number || "Job");
+    if (!byJob.has(key)) byJob.set(key, []);
+    byJob.get(key)!.push(e);
   }
 
   return (
@@ -127,15 +135,15 @@ export default function EmployeeDetailPage() {
       </div>
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">Total time logged (active jobs)</span>
+        <span className="text-sm font-medium text-gray-700">Total time logged</span>
         <span className="text-2xl font-bold font-mono text-gray-900">{fmt(totalSeconds)}</span>
       </div>
 
-      <p className="text-xs text-gray-500 mb-4">Time logs reflect jobs currently in the system. Once a job is invoiced and archived, its detailed time entries are removed, though the labor is captured in the job&apos;s archived cost summary.</p>
+      <p className="text-xs text-gray-500 mb-4">Time from invoiced jobs stays here for 30 days after invoicing (marked &quot;Invoiced&quot;), then its detailed entries are removed automatically. The labor totals live on in each job&apos;s archived cost summary.</p>
 
       {entries.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
-          <p className="text-gray-600">No time logged on any active jobs.</p>
+          <p className="text-gray-600">No time logged yet.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -149,7 +157,12 @@ export default function EmployeeDetailPage() {
                     {job ? (
                       <Link href={"/admin/jobs/" + jobId} className="font-semibold text-blue-600 hover:text-blue-800">{job.job_number}</Link>
                     ) : (
-                      <span className="font-semibold text-gray-900">Job</span>
+                      <span className="font-semibold text-gray-900">
+                        {jobEntries[0].archived_job_number || "Job"}
+                        {jobEntries[0].invoiced_on && (
+                          <span className="ml-2 text-xs font-normal text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">Invoiced</span>
+                        )}
+                      </span>
                     )}
                     {job?.customers?.name && <span className="text-sm text-gray-600 ml-2">{job.customers.name}</span>}
                   </div>
@@ -159,7 +172,7 @@ export default function EmployeeDetailPage() {
                   <tbody>
                     {jobEntries.map((e) => (
                       <tr key={e.id} className="border-b border-gray-100 last:border-0">
-                        <td className="px-4 py-3 text-sm text-gray-900">{taskNames[e.job_task_id] || "Task"}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900">{(e.job_task_id && taskNames[e.job_task_id]) || e.archived_task_name || "Task"}</td>
                         <td className="px-4 py-3 text-sm text-gray-600">
                           {new Date(e.started_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                           {" - "}

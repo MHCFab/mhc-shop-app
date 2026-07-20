@@ -723,6 +723,24 @@ export default function JobDetailPage() {
         await supabase.from("task_time_history").insert(historyRows);
       }
 
+      // Keep this job's raw time entries on the time reports for 30 days:
+      // stamp them with the job number and task names so they can still be
+      // labeled after the job row is deleted (job_id / job_task_id null out
+      // automatically when the job goes).
+      const invoicedOnStr = new Date().toISOString().slice(0, 10);
+      await supabase
+        .from("time_entries")
+        .update({ archived_job_number: job.job_number, invoiced_on: invoicedOnStr })
+        .eq("job_id", job.id);
+      for (const t of tasksArr) {
+        await supabase.from("time_entries").update({ archived_task_name: t.name }).eq("job_task_id", t.id);
+      }
+
+      // Sweep entries whose job was invoiced more than 30 days ago (the
+      // time report pages run this same sweep on load).
+      const purgeCutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      await supabase.from("time_entries").delete().not("invoiced_on", "is", null).lt("invoiced_on", purgeCutoff);
+
       // ---- Phase 2: snapshot a CUSTOM job's recipe so it can be reproduced later ----
       // A job is "custom" if any of its line items has no product template. Templated
       // jobs can already be rebuilt from their template, so we only snapshot custom ones.
