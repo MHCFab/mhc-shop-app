@@ -359,12 +359,19 @@ export default function JobDetailPage() {
 
     const { data: pliData } = await supabase
       .from("job_pick_list_items")
-      .select("id, planned_quantity")
+      .select("id, item_type, planned_quantity, actual_quantity")
       .eq("job_id", job.id);
-    const pickItems = (pliData || []) as unknown as { id: string; planned_quantity: number }[];
+    const pickItems = (pliData || []) as unknown as { id: string; item_type: string; planned_quantity: number; actual_quantity: number }[];
     for (const row of pickItems) {
       const scaled = Math.round(Number(row.planned_quantity) * ratio * 10000) / 10000;
-      await supabase.from("job_pick_list_items").update({ planned_quantity: scaled }).eq("id", row.id);
+      // Parts/fabricated/custom items default to "all used" (actual = planned).
+      // If the actual still matches the old planned it was never hand-edited, so
+      // keep it in step with the new planned. A hand-edited actual is left alone,
+      // and raw material actuals always come from the cutting nest.
+      const followPlanned = row.item_type !== "raw_material" && Number(row.actual_quantity) === Number(row.planned_quantity);
+      const updates: { planned_quantity: number; actual_quantity?: number } = { planned_quantity: scaled };
+      if (followPlanned) updates.actual_quantity = scaled;
+      await supabase.from("job_pick_list_items").update(updates).eq("id", row.id);
     }
 
     const { data: taskData } = await supabase

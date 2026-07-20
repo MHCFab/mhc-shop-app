@@ -182,7 +182,9 @@ export async function generateJobPickListAndTasks(
       purchased_part_id: partId,
       product_template_id: null,
       planned_quantity: info.quantity,
-      actual_quantity: 0,
+      // Parts default to "all used" -- the normal case. Edit the pick list
+      // actual (or remove the line) only when parts were NOT used.
+      actual_quantity: info.quantity,
       unit: "ea",
       notes: null,
     })),
@@ -195,7 +197,9 @@ export async function generateJobPickListAndTasks(
       purchased_part_id: null,
       product_template_id: templateId,
       planned_quantity: qty,
-      actual_quantity: 0,
+      // Fabricated units are pulled at the planned quantity, so they default
+      // to "all used" as well.
+      actual_quantity: qty,
       unit: "ea",
       notes: null,
     })),

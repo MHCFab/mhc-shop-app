@@ -287,7 +287,9 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       raw_material_id: isRaw ? addForm.item_id : null,
       purchased_part_id: isRaw ? null : addForm.item_id,
       planned_quantity: qty,
-      actual_quantity: 0,
+      // Materials get their actual from the cutting nest; added parts default
+      // to "all used".
+      actual_quantity: isRaw ? 0 : qty,
       unit: isRaw ? "ft" : "ea",
       notes: addForm.notes.trim() || null,
     });
@@ -465,7 +467,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
         purchased_part_id: ppId,
         product_template_id: null,
         planned_quantity: qty,
-        actual_quantity: 0,
+        actual_quantity: qty,
         unit: "ea",
         notes: null,
       })),
@@ -477,7 +479,7 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
         purchased_part_id: null,
         product_template_id: templateId,
         planned_quantity: qty,
-        actual_quantity: 0,
+        actual_quantity: qty,
         unit: "ea",
         notes: null,
       })),

@@ -194,17 +194,21 @@ export default function ReproduceModal({
       // 3) Pick list — only items that still point at a live catalog item.
       const pickRows = items
         .filter((i) => i.raw_material_id || i.purchased_part_id)
-        .map((i) => ({
-          company_id: companyId,
-          job_id: job.id,
-          item_type: i.item_type,
-          raw_material_id: i.item_type === "raw_material" ? i.raw_material_id : null,
-          purchased_part_id: i.item_type === "purchased_part" ? i.purchased_part_id : null,
-          planned_quantity: Math.round(Number(i.planned_quantity) * ratio * 10000) / 10000,
-          actual_quantity: 0,
-          unit: i.unit || (i.item_type === "raw_material" ? "ft" : "ea"),
-          notes: i.notes,
-        }));
+        .map((i) => {
+          const scaledQty = Math.round(Number(i.planned_quantity) * ratio * 10000) / 10000;
+          return {
+            company_id: companyId,
+            job_id: job.id,
+            item_type: i.item_type,
+            raw_material_id: i.item_type === "raw_material" ? i.raw_material_id : null,
+            purchased_part_id: i.item_type === "purchased_part" ? i.purchased_part_id : null,
+            planned_quantity: scaledQty,
+            // Parts default to "all used"; material actuals come from the cutting nest.
+            actual_quantity: i.item_type === "purchased_part" ? scaledQty : 0,
+            unit: i.unit || (i.item_type === "raw_material" ? "ft" : "ea"),
+            notes: i.notes,
+          };
+        });
       if (pickRows.length > 0) {
         const { error: pickErr } = await supabase.from("job_pick_list_items").insert(pickRows);
         if (pickErr) throw new Error("Job created, but pick list failed: " + pickErr.message);
