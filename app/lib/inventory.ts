@@ -13,12 +13,21 @@ const SHAPES_MAP: Record<string, string> = {
 // ============================================
 // Cost layers — "highest cost still on hand"
 // ============================================
-// Cost is driven only by purchase/opening layers. Stock leaving (pulls and
-// negative adjustments) depletes layers oldest-first; among same-day layers the
-// cheaper is consumed first so the higher-cost stock stays longest. Drops and
+// Cost is driven by stock-in layers that carry a price: purchases, opening stock,
+// and manual adjustments that record a cost. Stock leaving (pulls and negative
+// adjustments) depletes layers oldest-first; among same-day layers the cheaper is
+// consumed first so the higher-cost stock stays longest. Drops and zero-cost
 // positive adjustments add quantity but never set price. The reported cost is the
 // highest cost among layers that still have quantity on hand.
 export type CostLayer = { date: string; qty: number; cost: number };
+
+// A ledger row counts as a price layer if it added stock via a purchase or
+// opening entry, or via a manual adjustment that recorded a real cost.
+export function isPriceLayer(entryType: string | null, qty: number, cost: number): boolean {
+  if (qty <= 0) return false;
+  if (entryType === "purchase" || entryType === "opening") return true;
+  return entryType === "adjustment" && cost > 0;
+}
 
 export function highestCostOnHand(layers: CostLayer[], totalOut: number, fallback: number): number {
   if (layers.length === 0) return fallback;
@@ -142,7 +151,7 @@ export async function getAvailableRawMaterials(): Promise<AvailableRawMaterial[]
     // Cost layers: feet added by purchases/opening stock; feet removed by pulls
     // and negative adjustments deplete them oldest-first.
     const layers: CostLayer[] = batches
-      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity_sticks) > 0)
+      .filter((b) => isPriceLayer(b.entry_type, Number(b.stick_length_feet) * Number(b.quantity_sticks), Number(b.cost_per_foot)))
       .map((b) => ({
         date: b.purchase_date,
         qty: Number(b.stick_length_feet) * Number(b.quantity_sticks),
@@ -189,7 +198,7 @@ export async function recalcMaterialCost(rawMaterialId: string): Promise<void> {
   ]);
   const rows = invRes.data || [];
   const layers: CostLayer[] = rows
-    .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity_sticks) > 0)
+    .filter((b) => isPriceLayer(b.entry_type, Number(b.stick_length_feet) * Number(b.quantity_sticks), Number(b.cost_per_foot)))
     .map((b) => ({
       date: b.purchase_date,
       qty: Number(b.stick_length_feet) * Number(b.quantity_sticks),
@@ -202,6 +211,36 @@ export async function recalcMaterialCost(rawMaterialId: string): Promise<void> {
   const fallback = matRes.data ? Number((matRes.data as { current_cost_per_foot: number }).current_cost_per_foot) : 0;
   const cost = highestCostOnHand(layers, totalOut, fallback);
   await supabase.from("raw_materials").update({ current_cost_per_foot: cost }).eq("id", rawMaterialId);
+}
+
+// Recompute a purchased part's stored catalog cost (current_cost_each) to the current
+// "highest cost still on hand" after any purchase / opening-stock / adjustment change,
+// so it never goes stale. Mirrors recalcMaterialCost: costing computes this live; the
+// stored field feeds the pick list display, BOM previews, and cost fallbacks.
+export async function recalcPartCost(purchasedPartId: string): Promise<void> {
+  const supabase = createClient();
+  const [invRes, partRes] = await Promise.all([
+    supabase
+      .from("purchased_parts_inventory")
+      .select("quantity, cost_each, purchase_date, entry_type")
+      .eq("purchased_part_id", purchasedPartId),
+    supabase
+      .from("purchased_parts")
+      .select("current_cost_each")
+      .eq("id", purchasedPartId)
+      .single(),
+  ]);
+  const rows = invRes.data || [];
+  const layers: CostLayer[] = rows
+    .filter((b) => isPriceLayer(b.entry_type, Number(b.quantity), Number(b.cost_each)))
+    .map((b) => ({ date: b.purchase_date, qty: Number(b.quantity), cost: Number(b.cost_each) }));
+  const totalOut = rows.reduce((sum, b) => {
+    const q = Number(b.quantity);
+    return q < 0 ? sum + -q : sum;
+  }, 0);
+  const fallback = partRes.data ? Number((partRes.data as { current_cost_each: number }).current_cost_each) : 0;
+  const cost = highestCostOnHand(layers, totalOut, fallback);
+  await supabase.from("purchased_parts").update({ current_cost_each: cost }).eq("id", purchasedPartId);
 }
 
 export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPart[]> {
@@ -237,7 +276,7 @@ export async function getAvailablePurchasedParts(): Promise<AvailablePurchasedPa
 
     // Cost layers: purchases/opening add stock; pulls and negative adjustments deplete oldest-first.
     const layers: CostLayer[] = batches
-      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity) > 0)
+      .filter((b) => isPriceLayer(b.entry_type, Number(b.quantity), Number(b.cost_each)))
       .map((b) => ({ date: b.purchase_date, qty: Number(b.quantity), cost: Number(b.cost_each) }));
     const totalOut = batches.reduce((sum, b) => {
       const q = Number(b.quantity);
@@ -660,22 +699,44 @@ export async function consumeJobInventoryOnInvoice(jobId: string, companyId: str
   const pick = (pickData || []) as unknown as PickRow[];
 
   // Purchased parts: deduct the actual picked quantity (the same number the
-  // frozen cost report bills), priced at the part's current cost.
-  const partRows = pick
-    .filter((p) => p.item_type === "purchased_part" && p.purchased_part_id && Number(p.actual_quantity) > 0)
-    .map((p) => ({
-      company_id: companyId,
-      purchased_part_id: p.purchased_part_id,
-      supplier_id: null,
-      quantity: -Number(p.actual_quantity),
-      cost_each: Number(p.purchased_parts?.current_cost_each || 0),
-      purchase_date: today,
-      notes: "Used on job " + jobNumber,
-      entry_type: "pull",
-    }));
-  if (partRows.length > 0) {
+  // frozen cost report bills), priced at the live highest-cost-still-on-hand
+  // (same rule the cost report uses; the stored catalog cost could lag behind).
+  const partPick = pick.filter((p) => p.item_type === "purchased_part" && p.purchased_part_id && Number(p.actual_quantity) > 0);
+  if (partPick.length > 0) {
+    const partIds = [...new Set(partPick.map((p) => p.purchased_part_id as string))];
+    const { data: partLedgerData } = await supabase
+      .from("purchased_parts_inventory")
+      .select("purchased_part_id, quantity, cost_each, purchase_date, entry_type")
+      .in("purchased_part_id", partIds);
+    type PartLedgerRow = { purchased_part_id: string; quantity: number; cost_each: number; purchase_date: string; entry_type: string | null };
+    const partLedger = (partLedgerData || []) as unknown as PartLedgerRow[];
+
+    const partRows = partPick.map((p) => {
+      const rows = partLedger.filter((r) => r.purchased_part_id === p.purchased_part_id);
+      const layers: CostLayer[] = rows
+        .filter((r) => isPriceLayer(r.entry_type, Number(r.quantity), Number(r.cost_each)))
+        .map((r) => ({ date: r.purchase_date, qty: Number(r.quantity), cost: Number(r.cost_each) }));
+      const totalOut = rows.reduce((s, r) => {
+        const q = Number(r.quantity);
+        return q < 0 ? s + -q : s;
+      }, 0);
+      return {
+        company_id: companyId,
+        purchased_part_id: p.purchased_part_id,
+        supplier_id: null,
+        quantity: -Number(p.actual_quantity),
+        cost_each: highestCostOnHand(layers, totalOut, Number(p.purchased_parts?.current_cost_each || 0)),
+        purchase_date: today,
+        notes: "Used on job " + jobNumber,
+        entry_type: "pull",
+      };
+    });
     const { error } = await supabase.from("purchased_parts_inventory").insert(partRows);
     if (error) throw new Error("Failed to deduct parts stock: " + error.message);
+    // The pulls changed what's on hand, so refresh each part's stored catalog cost.
+    for (const pid of partIds) {
+      await recalcPartCost(pid);
+    }
   }
 
   // Fabricated sub-assemblies: deduct at the planned quantity (they are pulled
@@ -1034,7 +1095,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     const rows = rmInv.filter((r) => r.raw_material_id === rawMaterialId);
     if (rows.length === 0) return fallback;
     const layers: CostLayer[] = rows
-      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.stick_length_feet) * Number(r.quantity_sticks) > 0)
+      .filter((r) => isPriceLayer(r.entry_type, Number(r.stick_length_feet) * Number(r.quantity_sticks), Number(r.cost_per_foot)))
       .map((r) => ({ date: r.purchase_date, qty: Number(r.stick_length_feet) * Number(r.quantity_sticks), cost: Number(r.cost_per_foot) }));
     const out = rows.reduce((s, r) => {
       const f = Number(r.stick_length_feet) * Number(r.quantity_sticks);
@@ -1047,7 +1108,7 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
     const rows = ppInv.filter((r) => r.purchased_part_id === purchasedPartId);
     if (rows.length === 0) return fallback;
     const layers: CostLayer[] = rows
-      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.quantity) > 0)
+      .filter((r) => isPriceLayer(r.entry_type, Number(r.quantity), Number(r.cost_each)))
       .map((r) => ({ date: r.purchase_date, qty: Number(r.quantity), cost: Number(r.cost_each) }));
     const out = rows.reduce((s, r) => {
       const q = Number(r.quantity);
@@ -1305,7 +1366,7 @@ export async function getBuildOutputsCostSplit(jobId: string): Promise<BuildOutp
     const rows = rmInv.filter((r) => r.raw_material_id === rawMaterialId);
     if (rows.length === 0) return fallback;
     const layers: CostLayer[] = rows
-      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.stick_length_feet) * Number(r.quantity_sticks) > 0)
+      .filter((r) => isPriceLayer(r.entry_type, Number(r.stick_length_feet) * Number(r.quantity_sticks), Number(r.cost_per_foot)))
       .map((r) => ({ date: r.purchase_date, qty: Number(r.stick_length_feet) * Number(r.quantity_sticks), cost: Number(r.cost_per_foot) }));
     const out = rows.reduce((s, r) => {
       const f = Number(r.stick_length_feet) * Number(r.quantity_sticks);
@@ -1317,7 +1378,7 @@ export async function getBuildOutputsCostSplit(jobId: string): Promise<BuildOutp
     const rows = ppInv.filter((r) => r.purchased_part_id === purchasedPartId);
     if (rows.length === 0) return fallback;
     const layers: CostLayer[] = rows
-      .filter((r) => (r.entry_type === "purchase" || r.entry_type === "opening") && Number(r.quantity) > 0)
+      .filter((r) => isPriceLayer(r.entry_type, Number(r.quantity), Number(r.cost_each)))
       .map((r) => ({ date: r.purchase_date, qty: Number(r.quantity), cost: Number(r.cost_each) }));
     const out = rows.reduce((s, r) => {
       const q = Number(r.quantity);

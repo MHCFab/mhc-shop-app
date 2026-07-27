@@ -8,6 +8,7 @@ import {
   getAvailablePurchasedParts,
   getFabricatedStock,
   recalcMaterialCost,
+  recalcPartCost,
   type AvailableRawMaterial,
   type AvailablePurchasedPart,
   type FabricatedStockItem,
@@ -493,6 +494,7 @@ export default function InventoryPage() {
         setNewItemError("Part was created, but saving the quantity on hand failed: " + invErr.message);
         return;
       }
+      await recalcPartCost(newPart.id);
     }
 
     setSavingNewItem(false);
@@ -565,6 +567,7 @@ export default function InventoryPage() {
       setPurchaseError(error.message);
       return;
     }
+    await recalcPartCost(ppForm.purchased_part_id);
     setShowPurchase(false);
     loadData();
   }

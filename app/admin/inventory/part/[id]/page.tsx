@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase";
-import { highestCostOnHand, type CostLayer } from "../../../../lib/inventory";
+import { highestCostOnHand, isPriceLayer, recalcPartCost, type CostLayer } from "../../../../lib/inventory";
 
 const CATEGORIES = [
   { value: "laser_part", label: "Laser Part" },
@@ -131,11 +131,11 @@ export default function PartDetailPage() {
   const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.allocated_quantity), 0);
   const available = totalInStock - totalAllocated;
 
-  // Cost on hand: highest cost among purchase/opening layers still in stock.
+  // Cost on hand: highest cost among priced stock-in layers still in stock.
   const costEach = (() => {
     if (!part) return 0;
     const layers: CostLayer[] = batches
-      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.quantity) > 0)
+      .filter((b) => isPriceLayer(b.entry_type, Number(b.quantity), Number(b.cost_each)))
       .map((b) => ({ date: b.purchase_date, qty: Number(b.quantity), cost: Number(b.cost_each) }));
     const totalOut = batches.reduce((s, b) => {
       const q = Number(b.quantity);
@@ -173,6 +173,7 @@ export default function PartDetailPage() {
       setAdjustError(error.message);
       return;
     }
+    await recalcPartCost(id);
     setShowAdjust(false);
     setAdjustForm({ quantity: "", cost_each: "", note: "" });
     loadData();

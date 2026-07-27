@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../../lib/supabase";
-import { highestCostOnHand, recalcMaterialCost, type CostLayer } from "../../../../lib/inventory";
+import { highestCostOnHand, isPriceLayer, recalcMaterialCost, type CostLayer } from "../../../../lib/inventory";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -213,11 +213,11 @@ export default function MaterialDetailPage() {
   const totalAllocated = effectiveAllocations.reduce((sum, a) => sum + a.effective, 0);
   const available = totalInStock - totalAllocated;
 
-  // Cost on hand: highest cost among purchase/opening layers still in stock.
+  // Cost on hand: highest cost among priced stock-in layers still in stock.
   const costOnHand = (() => {
     if (!material) return 0;
     const layers: CostLayer[] = batches
-      .filter((b) => (b.entry_type === "purchase" || b.entry_type === "opening") && Number(b.stick_length_feet) * Number(b.quantity_sticks) > 0)
+      .filter((b) => isPriceLayer(b.entry_type, Number(b.stick_length_feet) * Number(b.quantity_sticks), Number(b.cost_per_foot)))
       .map((b) => ({ date: b.purchase_date, qty: Number(b.stick_length_feet) * Number(b.quantity_sticks), cost: Number(b.cost_per_foot) }));
     const totalOut = batches.reduce((s, b) => {
       const f = Number(b.stick_length_feet) * Number(b.quantity_sticks);

@@ -66,6 +66,13 @@ job_pick_list_items + inventory_allocations, item_type CHECKs widened to include
 - Material and part detail headers show the computed "highest cost on hand" instead of the seed catalog cost.
 
 ## Done (deployed)
+- **Parts catalog cost auto-updates + costed adjustments set price (pending deploy 2026-07-27).** Completes
+  the parts half of costing item #1: new `recalcPartCost()` keeps `purchased_parts.current_cost_each` =
+  highest-cost-on-hand after part purchases, part-page adjustments, and invoice consumption (which now
+  stamps pulls at live cost instead of the stored catalog cost). Manual adjustments that record a cost now
+  count as price layers for BOTH parts and materials (new `isPriceLayer` helper in lib/inventory.ts). Fixes
+  stale part pricing on the job pick list, BOM previews, and invoice deductions. One-time catch-up SQL
+  synced existing stored part costs to the latest stock-in cost.
 - **Round-tube list grouped by grade (pending deploy 2026-07-01).** On the raw-material inventory page,
   the Round Tube section now nests a second level by grade (ERW, DOM, solid, 'No grade' last), mirroring the
   purchased-parts category->customer pattern (renderMaterialRow helper + gradeGroups on the round_tube
