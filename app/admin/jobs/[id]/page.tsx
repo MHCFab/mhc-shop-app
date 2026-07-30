@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
-import { allocateJobInventory, releaseJobInventory, consumeJobInventoryOnInvoice, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
+import { allocateJobInventory, releaseJobInventory, syncEstimatedJobAllocations, consumeJobInventoryOnInvoice, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
 import { generateJobPickListAndTasks } from "../../../lib/job-generation";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
@@ -387,6 +387,10 @@ export default function JobDetailPage() {
 
     const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItemId);
     if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+
+    // Keep inventory reservations in step with the new plan. Only 'estimated'
+    // rows move; actual amounts from the nest or floor logs are preserved.
+    await syncEstimatedJobAllocations(job.id);
   }
 
   async function saveEdit() {
@@ -425,7 +429,7 @@ export default function JobDetailPage() {
         "Change quantity from " + lineItem.quantity + " to " + newQty + "?\n\n" +
         "Your pick list targets and task time estimates will be updated for the new quantity. " +
         "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved — nothing is deleted.\n\n" +
-        "If you increased the quantity you may need to cut or pull more material, and if this job is already \"Ready\" or further, set it back to \"Ordered\" and then \"Ready\" again to re-reserve inventory for the new amount.\n\n" +
+        "Inventory reserved for this job will be updated to match the new quantity (material already cut and usage already logged keep their actual amounts). If you increased the quantity you may need to cut or pull more material.\n\n" +
         "Continue?"
       );
       if (!ok) return;

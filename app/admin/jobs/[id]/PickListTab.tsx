@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
+import { syncEstimatedJobAllocations } from "../../../lib/inventory";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -199,6 +200,8 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       alert("Failed to save: " + error.message);
       return;
     }
+    // A released job's reservations follow the plan (estimated rows only).
+    await syncEstimatedJobAllocations(jobId);
     setEditingId(null);
     loadItems();
   }
@@ -210,6 +213,8 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       alert("Failed to delete: " + error.message);
       return;
     }
+    // Drop/adjust the reservation for the removed line (estimated rows only).
+    await syncEstimatedJobAllocations(jobId);
     loadItems();
   }
 
@@ -299,6 +304,8 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       return;
     }
     setAdding(false);
+    // Reserve the new line if the job is already released.
+    await syncEstimatedJobAllocations(jobId);
     loadItems();
   }
 
@@ -494,6 +501,8 @@ export default function PickListTab({ jobId, readOnly = false }: { jobId: string
       }
     }
 
+    // Rebuild reservations to match the regenerated plan (estimated rows only).
+    await syncEstimatedJobAllocations(jobId);
     setRegenerating(false);
     loadItems();
   }

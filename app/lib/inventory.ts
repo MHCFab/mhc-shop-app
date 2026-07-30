@@ -675,6 +675,93 @@ export async function releaseJobInventory(jobId: string): Promise<void> {
   await supabase.from("inventory_allocations").delete().eq("job_id", jobId);
 }
 
+// Re-sync a job's ESTIMATED reservations with its current pick list (called after
+// the pick list changes: a quantity rescale, or a line edited/added/removed).
+// Rules:
+//  - Rows at basis 'estimated' follow the pick list's planned quantities.
+//  - Rows at basis 'actual' (finalized nest consumption, floor-logged extra parts)
+//    are never touched -- they reflect what physically happened.
+//  - Pick items with no reservation row yet (lines added after release) get a
+//    fresh 'estimated' row; estimated rows whose pick line is gone are deleted.
+// No-op unless the job is in a status that holds reservations (ready or later);
+// the release/consume flows own creation and deletion everywhere else.
+export async function syncEstimatedJobAllocations(jobId: string): Promise<void> {
+  const supabase = createClient();
+
+  const { data: jobData } = await supabase.from("jobs").select("company_id, status").eq("id", jobId).single();
+  const job = jobData as { company_id: string; status: string } | null;
+  if (!job || !["ready", "in_progress", "complete"].includes(job.status)) return;
+
+  const [pickRes, allocRes] = await Promise.all([
+    supabase
+      .from("job_pick_list_items")
+      .select("item_type, raw_material_id, purchased_part_id, product_template_id, planned_quantity, unit")
+      .eq("job_id", jobId),
+    supabase
+      .from("inventory_allocations")
+      .select("id, item_type, raw_material_id, purchased_part_id, product_template_id, allocated_quantity, basis")
+      .eq("job_id", jobId),
+  ]);
+
+  type ItemKeyFields = { item_type: string; raw_material_id: string | null; purchased_part_id: string | null; product_template_id: string | null };
+  type PickRow = ItemKeyFields & { planned_quantity: number; unit: string };
+  type AllocRow = ItemKeyFields & { id: string; allocated_quantity: number; basis: string };
+  const pick = (pickRes.data || []) as unknown as PickRow[];
+  const allocs = (allocRes.data || []) as unknown as AllocRow[];
+
+  const keyOf = (r: ItemKeyFields) => r.item_type + "|" + (r.raw_material_id || r.purchased_part_id || r.product_template_id || "");
+
+  // Planned totals per item (summed in case the same item is on multiple lines).
+  // Custom one-offs never reserve inventory.
+  const planned = new Map<string, { qty: number; unit: string }>();
+  for (const row of pick) {
+    if (row.item_type === "custom") continue;
+    const qty = Number(row.planned_quantity);
+    if (!(qty > 0)) continue;
+    const key = keyOf(row);
+    const prev = planned.get(key);
+    planned.set(key, { qty: (prev ? prev.qty : 0) + qty, unit: row.unit });
+  }
+
+  // Items that already have a reservation row at any basis -- never insert a duplicate.
+  const existingKeys = new Set<string>(allocs.map(keyOf));
+
+  // Estimated rows follow the plan; duplicates and orphans are removed.
+  const syncedKeys = new Set<string>();
+  for (const alloc of allocs) {
+    if (alloc.basis !== "estimated") continue;
+    const key = keyOf(alloc);
+    const target = planned.get(key);
+    if (!target || syncedKeys.has(key)) {
+      await supabase.from("inventory_allocations").delete().eq("id", alloc.id);
+      continue;
+    }
+    syncedKeys.add(key);
+    if (Number(alloc.allocated_quantity) !== target.qty) {
+      await supabase.from("inventory_allocations").update({ allocated_quantity: target.qty }).eq("id", alloc.id);
+    }
+  }
+
+  // Pick items with no reservation at all (lines added after release) get one.
+  for (const [key, target] of planned.entries()) {
+    if (existingKeys.has(key)) continue;
+    const sep = key.indexOf("|");
+    const itemType = key.slice(0, sep);
+    const itemId = key.slice(sep + 1);
+    await supabase.from("inventory_allocations").insert({
+      company_id: job.company_id,
+      job_id: jobId,
+      item_type: itemType,
+      raw_material_id: itemType === "raw_material" ? itemId : null,
+      purchased_part_id: itemType === "purchased_part" ? itemId : null,
+      product_template_id: itemType === "fabricated" ? itemId : null,
+      allocated_quantity: target.qty,
+      unit: target.unit,
+      basis: "estimated",
+    });
+  }
+}
+
 // Consume a job's purchased parts and fabricated stock when it is invoiced.
 // Parts and fabricated units are only soft-reserved while a job is active
 // (nothing decrements their ledgers), so without this step the stock would
