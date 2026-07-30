@@ -25,6 +25,7 @@ type Job = {
   created_at: string;
   customer_id: string;
   customers: { id: string; name: string } | null;
+  is_build_order: boolean | null;
   job_line_items: { id: string; quantity: number; product_template_id: string | null }[];
 };
 
@@ -106,7 +107,9 @@ export default function JobsPage() {
         .filter((li) => li.product_template_id)
         .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
       if (items.length > 0) {
-        await generateJobPickListAndTasks(supabase, companyId, job.id, items);
+        await generateJobPickListAndTasks(supabase, companyId, job.id, items, {
+          mergeTasks: !job.is_build_order && items.length > 1,
+        });
       }
     } catch (e) {
       console.error("Pick list/task generation failed:", e);

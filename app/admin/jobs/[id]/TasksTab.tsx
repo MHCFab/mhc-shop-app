@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
+import { computeJobPlan } from "../../../lib/job-generation";
 
 const STATUSES = [
   { value: "not_started", label: "Not started", color: "bg-gray-100 text-gray-800" },
@@ -211,6 +212,10 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       return;
     }
 
+    const templateLines = (lineItems as unknown as { id: string; product_template_id: string | null; quantity: number }[])
+      .filter((li) => li.product_template_id)
+      .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
+
     // Delete existing tasks
     const { error: delError } = await supabase.from("job_tasks").delete().eq("job_id", jobId);
     if (delError) {
@@ -219,121 +224,25 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       return;
     }
 
-    // Recursively expand template ids (top-level + sub-assemblies)
-    const allTemplateIds = new Set<string>();
-    const queue = [...new Set(lineItems.map((li) => li.product_template_id).filter((id): id is string => id !== null))];
-    while (queue.length > 0) {
-      const tid = queue.shift()!;
-      if (allTemplateIds.has(tid)) continue;
-      allTemplateIds.add(tid);
-      const { data: subData } = await supabase
-        .from("product_template_sub_assemblies")
-        .select("child_template_id")
-        .eq("parent_template_id", tid);
-      if (subData) {
-        for (const row of subData) {
-          if (!allTemplateIds.has(row.child_template_id)) {
-            queue.push(row.child_template_id);
-          }
-        }
-      }
-    }
-
-    const templateIdArr = Array.from(allTemplateIds);
-
-    // Fetch tasks, sub-links, and template names
-    const [tasksRes, subLinksRes, templatesRes] = await Promise.all([
-      supabase
-        .from("product_template_tasks")
-        .select("*")
-        .in("product_template_id", templateIdArr)
-        .order("sort_order"),
-      supabase
-        .from("product_template_sub_assemblies")
-        .select("parent_template_id, child_template_id, quantity_per_unit")
-        .in("parent_template_id", templateIdArr),
-      supabase
-        .from("product_templates")
-        .select("id, name")
-        .in("id", templateIdArr),
-    ]);
-
-    type TplTaskRow = {
-      id: string;
-      product_template_id: string;
-      name: string;
-      description: string | null;
-      estimated_minutes_per_unit: number;
-      sort_order: number;
-    };
-    type SubLinkRow = {
-      parent_template_id: string;
-      child_template_id: string;
-      quantity_per_unit: number;
-    };
-
-    const tplTasks = (tasksRes.data || []) as unknown as TplTaskRow[];
-    const tplSubs = (subLinksRes.data || []) as unknown as SubLinkRow[];
-    const templateNames = new Map<string, string>(
-      (templatesRes.data || []).map((t: { id: string; name: string }) => [t.id, t.name])
-    );
-
-    function expandForLine(templateId: string, multiplier: number, accumulator: Map<string, number>) {
-      accumulator.set(templateId, (accumulator.get(templateId) || 0) + multiplier);
-      const childLinks = tplSubs.filter((s) => s.parent_template_id === templateId);
-      for (const link of childLinks) {
-        expandForLine(link.child_template_id, multiplier * Number(link.quantity_per_unit), accumulator);
-      }
-    }
-
-    const taskRows: Array<{
-      company_id: string;
-      job_id: string;
-      job_line_item_id: string;
-      source_task_id: string;
-      name: string;
-      description: string | null;
-      batch_quantity: number;
-      estimated_minutes_total: number;
-      sort_order: number;
-    }> = [];
-
-    for (const li of lineItems) {
-      if (!li.product_template_id) continue;
-      const perLineMap = new Map<string, number>();
-      expandForLine(li.product_template_id, Number(li.quantity), perLineMap);
-
-      const orderedEntries = Array.from(perLineMap.entries()).sort((a, b) => {
-        if (a[0] === li.product_template_id) return -1;
-        if (b[0] === li.product_template_id) return 1;
-        return 0;
-      });
-
-      let runningSortOrder = 0;
-      for (const [tid, totalQty] of orderedEntries) {
-        const tasksForTpl = tplTasks
-          .filter((t) => t.product_template_id === tid)
-          .sort((a, b) => a.sort_order - b.sort_order);
-
-        const isSubAssembly = tid !== li.product_template_id;
-        const tplName = templateNames.get(tid) || "Sub-assembly";
-
-        for (const t of tasksForTpl) {
-          const labeledName = isSubAssembly ? t.name + " (" + tplName + ")" : t.name;
-          taskRows.push({
-            company_id: companyId,
-            job_id: jobId,
-            job_line_item_id: li.id,
-            source_task_id: t.id,
-            name: labeledName,
-            description: t.description,
-            batch_quantity: totalQty,
-            estimated_minutes_total: Number(t.estimated_minutes_per_unit) * totalQty,
-            sort_order: runningSortOrder++,
-          });
-        }
-      }
-    }
+    // Same planner the New Job screen uses: sub-assemblies expand, stockable ones
+    // are pulled finished from stock, and a job carrying several products merges
+    // tasks that share a name into one job-wide task.
+    const { data: jobRow } = await supabase.from("jobs").select("is_build_order").eq("id", jobId).single();
+    const isBuildOrder = !!(jobRow as { is_build_order: boolean | null } | null)?.is_build_order;
+    const plan = await computeJobPlan(supabase, templateLines, {
+      mergeTasks: !isBuildOrder && templateLines.length > 1,
+    });
+    const taskRows = plan.tasks.map((t) => ({
+      company_id: companyId,
+      job_id: jobId,
+      job_line_item_id: t.lineItemId,
+      source_task_id: t.sourceTaskId,
+      name: t.name,
+      description: t.description,
+      batch_quantity: t.batchQuantity,
+      estimated_minutes_total: t.minutes,
+      sort_order: t.sortOrder,
+    }));
 
     if (taskRows.length > 0) {
       const { error: insError } = await supabase.from("job_tasks").insert(taskRows);
@@ -348,12 +257,20 @@ export default function TasksTab({ jobId }: { jobId: string }) {
     loadTasks();
   }
 
-  // Group tasks by line item
+  // Group tasks by line item. Tasks with no line item are job-wide: on a job
+  // carrying several product variations they get built together, so they show as
+  // one shared list instead of being repeated under every product.
   const groupedTasks = tasks.reduce((groups, task) => {
-    const lineItemId = task.job_line_items?.id || task.job_line_item_id || "unknown";
+    const lineItemId = task.job_line_items?.id || task.job_line_item_id || "job-wide";
     if (!groups[lineItemId]) {
       groups[lineItemId] = {
-        productName: task.job_line_items?.product_templates?.name || (isCustomJob ? (customLineItem?.name || "Custom job") : "Unknown product"),
+        productName:
+          task.job_line_items?.product_templates?.name ||
+          (isCustomJob
+            ? (customLineItem?.name || "Custom job")
+            : lineItemId === "job-wide"
+              ? "All products on this job"
+              : "Unknown product"),
         productNumber: task.job_line_items?.product_templates?.product_number || null,
         tasks: [],
       };

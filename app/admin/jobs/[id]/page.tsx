@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
 import { allocateJobInventory, releaseJobInventory, syncEstimatedJobAllocations, consumeJobInventoryOnInvoice, getJobCostReport, getJobStockShortfall, getBuildOutputsCostSplit, type JobStockShortfallItem } from "../../../lib/inventory";
-import { generateJobPickListAndTasks } from "../../../lib/job-generation";
+import { generateJobPickListAndTasks, recomputeJobPlan } from "../../../lib/job-generation";
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import CuttingNestTab from "./CuttingNestTab";
@@ -21,6 +21,14 @@ const STATUSES = [
 ] as const;
 
 type Status = (typeof STATUSES)[number]["value"] | "pending" | "cancelled";
+
+type JobLineItem = {
+  id: string;
+  quantity: number;
+  unit_price: number | null;
+  product_template_id: string | null;
+  label: string;
+};
 
 type Job = {
   id: string;
@@ -106,7 +114,8 @@ export default function JobDetailPage() {
   const [buildOutputs, setBuildOutputs] = useState<{ templateId: string; name: string; quantity: number }[]>([]);
   const [received, setReceived] = useState<{ at: string; lines: { name: string; qty: number; costPerUnit: number }[] } | null>(null);
 
-  // Edit job (name + quantity + due date + custom price)
+  // Edit job (name + due date + per-product quantity and price)
+  const [lineItems, setLineItems] = useState<JobLineItem[]>([]);
   const [lineItem, setLineItem] = useState<{ id: string; quantity: number; unit_price: number | null; isCustom: boolean } | null>(null);
   const [multipleLineItems, setMultipleLineItems] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -114,6 +123,8 @@ export default function JobDetailPage() {
   const [qtyDraft, setQtyDraft] = useState("");
   const [dueDateDraft, setDueDateDraft] = useState("");
   const [priceDraft, setPriceDraft] = useState("");
+  // One draft row per product line on a templated job.
+  const [lineDrafts, setLineDrafts] = useState<{ id: string; label: string; quantity: string; unitPrice: string }[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Stockout alert
@@ -136,18 +147,36 @@ export default function JobDetailPage() {
 
     const { data: liData } = await supabase
       .from("job_line_items")
-      .select("id, quantity, unit_price, product_template_id")
+      .select("id, quantity, unit_price, product_template_id, name, product_templates(name, product_number)")
       .eq("job_id", id)
       .order("sort_order");
-    const items = (liData || []) as unknown as { id: string; quantity: number; unit_price: number | null; product_template_id: string | null }[];
-    if (items.length > 0) {
+    type LiRow = {
+      id: string;
+      quantity: number;
+      unit_price: number | null;
+      product_template_id: string | null;
+      name: string | null;
+      product_templates: { name: string; product_number: string | null } | null;
+    };
+    const items = (liData || []) as unknown as LiRow[];
+    const lines: JobLineItem[] = items.map((li) => ({
+      id: li.id,
+      quantity: Number(li.quantity),
+      unit_price: li.unit_price != null ? Number(li.unit_price) : null,
+      product_template_id: li.product_template_id,
+      label: li.product_templates
+        ? li.product_templates.name + (li.product_templates.product_number ? " (" + li.product_templates.product_number + ")" : "")
+        : li.name || "Custom item",
+    }));
+    setLineItems(lines);
+    if (lines.length > 0) {
       setLineItem({
-        id: items[0].id,
-        quantity: Number(items[0].quantity),
-        unit_price: items[0].unit_price != null ? Number(items[0].unit_price) : null,
-        isCustom: items[0].product_template_id === null,
+        id: lines[0].id,
+        quantity: lines[0].quantity,
+        unit_price: lines[0].unit_price,
+        isCustom: lines[0].product_template_id === null,
       });
-      setMultipleLineItems(items.length > 1);
+      setMultipleLineItems(lines.length > 1);
     } else {
       setLineItem(null);
       setMultipleLineItems(false);
@@ -270,7 +299,9 @@ export default function JobDetailPage() {
           .filter((li) => li.product_template_id)
           .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
         if (items.length > 0) {
-          await generateJobPickListAndTasks(supabase, companyId, job.id, items);
+          await generateJobPickListAndTasks(supabase, companyId, job.id, items, {
+            mergeTasks: !job.is_build_order && items.length > 1,
+          });
         }
       } catch (e) {
         console.error("Pick list/task generation failed:", e);
@@ -347,13 +378,31 @@ export default function JobDetailPage() {
     setQtyDraft(lineItem ? String(lineItem.quantity) : "");
     setDueDateDraft(job.due_date || "");
     setPriceDraft(lineItem?.unit_price != null ? String(lineItem.unit_price) : "");
+    setLineDrafts(
+      lineItems.map((li) => ({
+        id: li.id,
+        label: li.label,
+        quantity: String(li.quantity),
+        unitPrice: li.unit_price != null ? String(li.unit_price) : "",
+      }))
+    );
     setEditing(true);
   }
 
-  // Rescale the pick list targets, task batch quantities / time estimates,
-  // and the line item itself from one quantity to another. Used by the Edit
-  // dialog and by approving a customer's quantity-change request.
-  async function rescaleJobQuantity(lineItemId: string, oldQty: number, newQty: number) {
+  function setLineDraftField(lineId: string, field: "quantity" | "unitPrice", value: string) {
+    setLineDrafts((prev) => prev.map((l) => (l.id === lineId ? { ...l, [field]: value } : l)));
+  }
+
+  async function fetchCompanyId(): Promise<string | null> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+    return (profile as { company_id: string } | null)?.company_id || null;
+  }
+
+  // A CUSTOM job has no product template to recalculate from, so its hand-built
+  // pick list and tasks are scaled by the ratio between old and new quantity.
+  async function rescaleCustomJobQuantity(lineItemId: string, oldQty: number, newQty: number) {
     if (!job || !(oldQty > 0)) return;
     const ratio = newQty / oldQty;
 
@@ -387,10 +436,40 @@ export default function JobDetailPage() {
 
     const { error: liErr } = await supabase.from("job_line_items").update({ quantity: newQty }).eq("id", lineItemId);
     if (liErr) throw new Error("Quantity update failed: " + liErr.message);
+  }
 
-    // Keep inventory reservations in step with the new plan. Only 'estimated'
-    // rows move; actual amounts from the nest or floor logs are preserved.
-    await syncEstimatedJobAllocations(job.id);
+  // Writes new quantities onto templated product lines, then re-plans the job.
+  // The pick list is shared by every product on the job, so one line can't simply
+  // be scaled by a ratio -- that would drag the other products' material along
+  // with it. recomputeJobPlan works the material, parts and task estimates out
+  // again from all the lines, leaving actuals, custom items, hand-added pick
+  // lines and logged time untouched.
+  async function applyLineQuantityChanges(updates: { id: string; quantity: number }[]) {
+    if (!job) return;
+    for (const u of updates) {
+      const { error } = await supabase.from("job_line_items").update({ quantity: u.quantity }).eq("id", u.id);
+      if (error) throw new Error("Quantity update failed: " + error.message);
+    }
+    const companyId = await fetchCompanyId();
+    if (!companyId) throw new Error("Could not determine your company, so the pick list and tasks were not updated. Refresh and try again.");
+    await recomputeJobPlan(supabase, companyId, job.id);
+
+    // A build order also records what it produces in build_outputs -- that drives
+    // receiving into stock and the cost split, so it has to follow the new quantity.
+    if (job.is_build_order) {
+      for (const u of updates) {
+        const line = lineItems.find((li) => li.id === u.id);
+        if (!line?.product_template_id) continue;
+        await supabase
+          .from("build_outputs")
+          .update({ quantity: u.quantity })
+          .eq("job_id", job.id)
+          .eq("product_template_id", line.product_template_id);
+      }
+      if (lineItems.length === 1) {
+        await supabase.from("jobs").update({ build_quantity: updates[0].quantity }).eq("id", job.id);
+      }
+    }
   }
 
   async function saveEdit() {
@@ -401,20 +480,52 @@ export default function JobDetailPage() {
       return;
     }
 
+    // A custom job keeps its single job-level quantity. A templated job edits each
+    // product line on its own, so one variation's quantity never moves another's.
+    const isCustom = !!lineItem?.isCustom;
+
     let qtyChanged = false;
     let newQty = lineItem?.quantity ?? 0;
-    if (lineItem && !multipleLineItems) {
-      newQty = parseInt(qtyDraft, 10);
-      if (isNaN(newQty) || newQty < 1) {
-        alert("Quantity must be at least 1.");
-        return;
+    const qtyUpdates: { id: string; quantity: number }[] = [];
+    const priceUpdates: { id: string; unit_price: number | null }[] = [];
+
+    if (isCustom) {
+      if (lineItem) {
+        newQty = parseInt(qtyDraft, 10);
+        if (isNaN(newQty) || newQty < 1) {
+          alert("Quantity must be at least 1.");
+          return;
+        }
+        qtyChanged = newQty !== lineItem.quantity;
       }
-      qtyChanged = newQty !== lineItem.quantity;
+    } else {
+      for (const draft of lineDrafts) {
+        const current = lineItems.find((li) => li.id === draft.id);
+        if (!current) continue;
+
+        const q = parseInt(draft.quantity, 10);
+        if (isNaN(q) || q < 1) {
+          alert("Quantity must be at least 1 (" + draft.label + ").");
+          return;
+        }
+        if (q !== current.quantity) qtyUpdates.push({ id: draft.id, quantity: q });
+
+        let price: number | null = null;
+        if (draft.unitPrice.trim()) {
+          const up = parseFloat(draft.unitPrice);
+          if (isNaN(up) || up < 0) {
+            alert("Price per unit must be 0 or more, or blank to use the catalog price (" + draft.label + ").");
+            return;
+          }
+          price = up;
+        }
+        if (price !== current.unit_price) priceUpdates.push({ id: draft.id, unit_price: price });
+      }
+      qtyChanged = qtyUpdates.length > 0;
     }
 
     // Validate the per-unit price on a custom job (blank = clear it)
     let newUnitPrice: number | null = null;
-    const isCustom = !!lineItem?.isCustom;
     if (isCustom && priceDraft.trim()) {
       const up = parseFloat(priceDraft);
       if (isNaN(up) || up < 0) {
@@ -424,12 +535,21 @@ export default function JobDetailPage() {
       newUnitPrice = up;
     }
 
-    if (qtyChanged && lineItem) {
+    if (qtyChanged) {
+      const summary = isCustom
+        ? "Change quantity from " + (lineItem?.quantity ?? 0) + " to " + newQty + "?"
+        : "Change " + (qtyUpdates.length === 1 ? "this quantity" : "these quantities") + "?\n\n" +
+          qtyUpdates
+            .map((u) => {
+              const li = lineItems.find((x) => x.id === u.id);
+              return "  " + (li ? li.label : "Product") + ": " + (li ? li.quantity : "?") + " -> " + u.quantity;
+            })
+            .join("\n");
       const ok = confirm(
-        "Change quantity from " + lineItem.quantity + " to " + newQty + "?\n\n" +
+        summary + "\n\n" +
         "Your pick list targets and task time estimates will be updated for the new quantity. " +
         "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved — nothing is deleted.\n\n" +
-        "Inventory reserved for this job will be updated to match the new quantity (material already cut and usage already logged keep their actual amounts). If you increased the quantity you may need to cut or pull more material.\n\n" +
+        "Inventory reserved for this job will be updated to match (material already cut and usage already logged keep their actual amounts). If you increased a quantity you may need to cut or pull more material.\n\n" +
         "Continue?"
       );
       if (!ok) return;
@@ -447,19 +567,33 @@ export default function JobDetailPage() {
         if (jobErr) throw new Error("Job update failed: " + jobErr.message);
       }
 
-      // 2) Rescale pick list, tasks, and the line item quantity (if changed)
-      if (qtyChanged && lineItem) {
-        await rescaleJobQuantity(lineItem.id, lineItem.quantity, newQty);
+      // 2) Quantities: ratio-scale a custom job, re-plan a templated one
+      if (isCustom && qtyChanged && lineItem) {
+        await rescaleCustomJobQuantity(lineItem.id, lineItem.quantity, newQty);
+      } else if (qtyUpdates.length > 0) {
+        await applyLineQuantityChanges(qtyUpdates);
       }
 
-      // 3) Update the per-unit price on a custom job's line item
+      // 3) Prices: one job-level price on a custom job, otherwise per product line
       if (isCustom && lineItem) {
         const { error: priceErr } = await supabase
           .from("job_line_items")
           .update({ unit_price: newUnitPrice })
           .eq("id", lineItem.id);
         if (priceErr) throw new Error("Price update failed: " + priceErr.message);
+      } else {
+        for (const u of priceUpdates) {
+          const { error: priceErr } = await supabase
+            .from("job_line_items")
+            .update({ unit_price: u.unit_price })
+            .eq("id", u.id);
+          if (priceErr) throw new Error("Price update failed: " + priceErr.message);
+        }
       }
+
+      // 4) Keep inventory reservations in step with the new plan. Only 'estimated'
+      //    rows move; actual amounts from the nest or floor logs are preserved.
+      if (qtyChanged) await syncEstimatedJobAllocations(job.id);
 
       setEditing(false);
       await loadJob();
@@ -490,7 +624,7 @@ export default function JobDetailPage() {
           "Approve quantity change from " + lineItem.quantity + " to " + newQty + "?\n\n" +
           "Your pick list targets and task time estimates will be updated for the new quantity. " +
           "Already-picked amounts, logged time, scrap, and cutting nest entries are preserved — nothing is deleted.\n\n" +
-          "If the quantity went up you may need to cut or pull more material, and if this job is already \"Ready\" or further, set it back to \"Ordered\" and then \"Ready\" again to re-reserve inventory for the new amount.\n\n" +
+          "Inventory reserved for this job will be updated to match (material already cut and usage already logged keep their actual amounts). If the quantity went up you may need to cut or pull more material.\n\n" +
           "Continue?"
         );
         if (!ok) return;
@@ -507,7 +641,14 @@ export default function JobDetailPage() {
     setResolvingRequest(true);
     try {
       if (changeRequest.request_type === "quantity" && lineItem && Number(changeRequest.requested_quantity) !== lineItem.quantity) {
-        await rescaleJobQuantity(lineItem.id, lineItem.quantity, Number(changeRequest.requested_quantity));
+        // Portal orders are always a single product line (customers can't order
+        // multi-product jobs), so this is either a custom one-off or one template.
+        if (lineItem.isCustom) {
+          await rescaleCustomJobQuantity(lineItem.id, lineItem.quantity, Number(changeRequest.requested_quantity));
+        } else {
+          await applyLineQuantityChanges([{ id: lineItem.id, quantity: Number(changeRequest.requested_quantity) }]);
+        }
+        await syncEstimatedJobAllocations(job.id);
       }
 
       const { data: { user } } = await supabase.auth.getUser();
@@ -701,6 +842,21 @@ export default function JobDetailPage() {
 
       type JT = { id: string; name: string; source_task_id: string | null; batch_quantity: number; job_line_items: { product_template_id: string } | null };
       const tasksArr = (jobTasks || []) as unknown as JT[];
+
+      // Tasks shared across a job's products aren't tied to one product line, so
+      // fall back to the template the task was copied from. Without this the
+      // learned "actual minutes per unit" history would silently stop building.
+      const sourceIds = Array.from(new Set(tasksArr.map((t) => t.source_task_id).filter((x): x is string => !!x)));
+      const templateBySourceTask = new Map<string, string>();
+      if (sourceIds.length > 0) {
+        const { data: srcData } = await supabase
+          .from("product_template_tasks")
+          .select("id, product_template_id")
+          .in("id", sourceIds);
+        for (const row of (srcData || []) as unknown as { id: string; product_template_id: string }[]) {
+          templateBySourceTask.set(row.id, row.product_template_id);
+        }
+      }
       const times = (timeRows || []) as unknown as { job_task_id: string; started_at: string; ended_at: string | null }[];
 
       const historyRows = tasksArr.map((t) => {
@@ -713,7 +869,9 @@ export default function JobDetailPage() {
         return {
           company_id: companyId,
           source_task_id: t.source_task_id,
-          product_template_id: t.job_line_items?.product_template_id || null,
+          product_template_id:
+            t.job_line_items?.product_template_id ||
+            (t.source_task_id ? templateBySourceTask.get(t.source_task_id) || null : null),
           task_name: t.name,
           job_number: job.job_number,
           batch_quantity: qty,
@@ -944,7 +1102,13 @@ export default function JobDetailPage() {
             {job.customers?.name || "Unknown customer"}
             {job.customer_po && <span className="text-gray-500"> &middot; PO {job.customer_po}</span>}
           </p>
-          {lineItem && !(job.is_build_order && buildOutputs.length > 1) && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>}
+          {lineItems.length > 1 && !job.is_build_order ? (
+            <p className="text-sm text-gray-500 mt-1">
+              {lineItems.map((li) => li.label + " x " + li.quantity).join("  \u00b7  ")}
+            </p>
+          ) : (
+            lineItem && !(job.is_build_order && buildOutputs.length > 1) && <p className="text-sm text-gray-500 mt-1">Quantity: {lineItem.quantity}</p>
+          )}
           {lineItem?.isCustom && lineItem.unit_price != null && (
             <p className="text-sm text-gray-500 mt-1">Price/unit: ${Number(lineItem.unit_price).toFixed(2)}</p>
           )}
@@ -1150,16 +1314,14 @@ export default function JobDetailPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
-                {multipleLineItems ? (
-                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                    This job has more than one product line, so quantity isn&apos;t editable here yet. You can still rename the job.
-                  </p>
-                ) : !lineItem ? (
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {lineItem?.isCustom ? "Quantity" : multipleLineItems ? "Products" : "Product"}
+                </label>
+                {!lineItem ? (
                   <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
                     No product line found for this job.
                   </p>
-                ) : (
+                ) : lineItem.isCustom ? (
                   <>
                     <input
                       type="number"
@@ -1171,6 +1333,43 @@ export default function JobDetailPage() {
                     />
                     <p className="text-xs text-gray-500 mt-1">
                       Changing quantity rescales the pick list and task time estimates. Picked amounts, logged time, scrap, and cutting nest entries are kept.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <div className="hidden sm:flex items-center gap-2 px-3 text-xs uppercase tracking-wide text-gray-500 font-medium">
+                        <span className="flex-1">Product</span>
+                        <span className="w-20 text-center">Qty</span>
+                        <span className="w-28 text-center">Price each</span>
+                      </div>
+                      {lineDrafts.map((l) => (
+                        <div key={l.id} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                          <span className="flex-1 text-sm text-gray-900">{l.label}</span>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={l.quantity}
+                            onChange={(e) => setLineDraftField(l.id, "quantity", e.target.value)}
+                            aria-label={"Quantity for " + l.label}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded-md text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={l.unitPrice}
+                            onChange={(e) => setLineDraftField(l.id, "unitPrice", e.target.value)}
+                            placeholder="Catalog"
+                            aria-label={"Price per unit for " + l.label}
+                            className="w-28 px-2 py-1 border border-gray-300 rounded-md text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Each product has its own quantity and price — changing one leaves the others alone. Material and task estimates are worked out again for the whole job. Picked amounts, logged time, scrap, and cutting nest entries are kept. Leave a price blank to use the product&apos;s catalog price.
                     </p>
                   </>
                 )}

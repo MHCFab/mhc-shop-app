@@ -134,7 +134,7 @@ type JobTask = {
   batch_quantity: number;
   status: string;
   sort_order: number;
-  job_line_item_id: string;
+  job_line_item_id: string | null;
   completed_at: string | null;
   job_line_items: { product_templates: { name: string } | null } | null;
 };
@@ -356,10 +356,17 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
     return <div className="bg-white border border-gray-200 rounded-lg p-6 text-center text-gray-600">No tasks on this job.</div>;
   }
 
+  // Tasks with no line item are job-wide: when a job carries several product
+  // variations they are built together, so they show as one shared list.
   const groups = tasks.reduce((acc, t) => {
-    const key = t.job_line_item_id;
+    const key = t.job_line_item_id || "job-wide";
     if (!acc[key]) {
-      acc[key] = { product: t.job_line_items?.product_templates?.name || "Product", tasks: [] };
+      acc[key] = {
+        product:
+          t.job_line_items?.product_templates?.name ||
+          (key === "job-wide" ? "All products on this job" : "Product"),
+        tasks: [],
+      };
     }
     acc[key].tasks.push(t);
     return acc;

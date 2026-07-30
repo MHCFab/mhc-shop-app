@@ -1294,11 +1294,13 @@ export async function getJobCostReport(jobId: string): Promise<JobCostReport> {
   const suggestedRetailPerUnit = units > 0 ? suggestedRetailTotal / units : 0;
 
   // Your retail (from product template, summed across line items)
-  // Retail per unit: template price if the line has a template, otherwise the custom job's unit_price
+  // Retail per unit: the price typed on this job's product line wins, so two
+  // variations on one job can be priced differently. Blank falls back to the
+  // product template's catalog price (and a custom job only ever has its own price).
   const retailTotal = lineItems.reduce((s, li) => {
-    const perUnit = li.product_templates?.retail_price_per_unit != null
-      ? Number(li.product_templates.retail_price_per_unit)
-      : Number(li.unit_price || 0);
+    const perUnit = li.unit_price != null
+      ? Number(li.unit_price)
+      : Number(li.product_templates?.retail_price_per_unit || 0);
     return s + perUnit * Number(li.quantity);
   }, 0);
   const retailPerUnit = units > 0 ? retailTotal / units : 0;
