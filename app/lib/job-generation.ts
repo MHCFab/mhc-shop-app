@@ -373,7 +373,8 @@ export async function recomputeJobPlan(
   const { data: liData } = await supabase
     .from("job_line_items")
     .select("id, product_template_id, quantity")
-    .eq("job_id", jobId);
+    .eq("job_id", jobId)
+    .order("sort_order");
   const lineItems = (liData || []) as unknown as { id: string; product_template_id: string | null; quantity: number }[];
   const templateLines: PlanLine[] = lineItems
     .filter((li) => li.product_template_id)
@@ -381,9 +382,8 @@ export async function recomputeJobPlan(
 
   if (templateLines.length === 0) return;
 
-  const plan = await computeJobPlan(supabase, templateLines, {
-    mergeTasks: !isBuildOrder && templateLines.length > 1,
-  });
+  const mergeTasks = !isBuildOrder && templateLines.length > 1;
+  const plan = await computeJobPlan(supabase, templateLines, { mergeTasks });
 
   // ---- Pick list ----
   const { data: pickData } = await supabase
@@ -431,7 +431,8 @@ export async function recomputeJobPlan(
     if (row.item_type !== "raw_material" && Number(row.actual_quantity) === Number(row.planned_quantity)) {
       updates.actual_quantity = rounded;
     }
-    await supabase.from("job_pick_list_items").update(updates).eq("id", row.id);
+    const { error: pickUpdErr } = await supabase.from("job_pick_list_items").update(updates).eq("id", row.id);
+    if (pickUpdErr) throw new Error("Failed to update the pick list: " + pickUpdErr.message);
   }
 
   const newPickRows: Record<string, unknown>[] = [];
@@ -483,26 +484,29 @@ export async function recomputeJobPlan(
     });
   }
   if (newPickRows.length > 0) {
-    await supabase.from("job_pick_list_items").insert(newPickRows);
+    const { error: pickInsErr } = await supabase.from("job_pick_list_items").insert(newPickRows);
+    if (pickInsErr) throw new Error("Failed to add to the pick list: " + pickInsErr.message);
   }
 
   // ---- Tasks (matched by name so logged time survives) ----
   const { data: taskData } = await supabase
     .from("job_tasks")
-    .select("id, name, batch_quantity, estimated_minutes_total")
+    .select("id, name, batch_quantity, estimated_minutes_total, job_line_item_id, status")
     .eq("job_id", jobId);
   const existingTasks = (taskData || []) as unknown as {
     id: string;
     name: string;
     batch_quantity: number;
     estimated_minutes_total: number;
+    job_line_item_id: string | null;
+    status: string;
   }[];
 
   // Several planned tasks can share a name (a build order whose outputs each have
   // a "Cut", or one template listing the same task twice). Queue the existing rows
   // per name and take one per planned task, so each row is written exactly once
   // and no real task is left holding a stale estimate.
-  const byName = new Map<string, { id: string; batch_quantity: number; estimated_minutes_total: number }[]>();
+  const byName = new Map<string, { id: string; batch_quantity: number; estimated_minutes_total: number; job_line_item_id: string | null; status: string }[]>();
   for (const t of existingTasks) {
     const queue = byName.get(t.name);
     if (queue) queue.push(t);
@@ -515,11 +519,29 @@ export async function recomputeJobPlan(
     const batch = Math.round(planned.batchQuantity * 10000) / 10000;
     const minutes = Math.round(planned.minutes * 100) / 100;
     if (match) {
-      if (Number(match.batch_quantity) !== batch || Number(match.estimated_minutes_total) !== minutes) {
-        await supabase
-          .from("job_tasks")
-          .update({ batch_quantity: batch, estimated_minutes_total: minutes })
-          .eq("id", match.id);
+      const updates: {
+        batch_quantity?: number;
+        estimated_minutes_total?: number;
+        job_line_item_id?: null;
+        status?: string;
+        completed_at?: null;
+      } = {};
+      if (Number(match.batch_quantity) !== batch) updates.batch_quantity = batch;
+      if (Number(match.estimated_minutes_total) !== minutes) updates.estimated_minutes_total = minutes;
+      // A job that has just gained a second product switches to shared, job-wide
+      // tasks. Tasks created back when it had one product still point at that
+      // line, so hand them over to the job or they would keep showing under the
+      // first product's name on the job page and the floor.
+      if (mergeTasks && match.job_line_item_id !== null) updates.job_line_item_id = null;
+      // There is more to do than when this task was ticked off, so reopen it --
+      // otherwise the floor sees "complete" and the extra units never get made.
+      if (batch > Number(match.batch_quantity) && match.status === "complete") {
+        updates.status = "not_started";
+        updates.completed_at = null;
+      }
+      if (Object.keys(updates).length > 0) {
+        const { error: taskUpdErr } = await supabase.from("job_tasks").update(updates).eq("id", match.id);
+        if (taskUpdErr) throw new Error("Failed to update tasks: " + taskUpdErr.message);
       }
     } else {
       newTaskRows.push({
@@ -536,6 +558,24 @@ export async function recomputeJobPlan(
     }
   }
   if (newTaskRows.length > 0) {
-    await supabase.from("job_tasks").insert(newTaskRows);
+    const { error: taskInsErr } = await supabase.from("job_tasks").insert(newTaskRows);
+    if (taskInsErr) throw new Error("Failed to add tasks: " + taskInsErr.message);
+  }
+
+  // Any existing task the new plan didn't claim (a duplicate name, or one whose
+  // template task was renamed or removed since) would otherwise keep pointing at
+  // a single product line and show as a stray group of its own. Hand those to the
+  // job too, so a merged job never displays a lone product heading.
+  if (mergeTasks) {
+    for (const queue of byName.values()) {
+      for (const leftover of queue) {
+        if (leftover.job_line_item_id === null) continue;
+        const { error: reparentErr } = await supabase
+          .from("job_tasks")
+          .update({ job_line_item_id: null })
+          .eq("id", leftover.id);
+        if (reparentErr) throw new Error("Failed to update tasks: " + reparentErr.message);
+      }
+    }
   }
 }

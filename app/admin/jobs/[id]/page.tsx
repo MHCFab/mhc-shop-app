@@ -1287,7 +1287,7 @@ export default function JobDetailPage() {
         </div>
       </div>
 
-      {tab === "overview" && !isComplete && <OverviewTab jobId={job.id} />}
+      {tab === "overview" && !isComplete && <OverviewTab jobId={job.id} jobStatus={job.status} isBuildOrder={job.is_build_order} onChanged={loadJob} />}
       {tab === "picklist" && <PickListTab jobId={job.id} readOnly={isComplete} />}
       {tab === "cuttingnest" && !isComplete && <CuttingNestTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
       {tab === "tasks" && !isComplete && <TasksTab jobId={job.id} />}
