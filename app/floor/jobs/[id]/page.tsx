@@ -118,7 +118,7 @@ export default function FloorJobDetail() {
         </div>
       </div>
 
-      {tab === "tasks" && <FloorTasks jobId={job.id} onChanged={loadData} />}
+      {tab === "tasks" && <FloorTasks jobId={job.id} lineItems={lineItems} onChanged={loadData} />}
       {tab === "info" && <FloorInfo lineItems={lineItems} />}
       {tab === "picklist" && <FloorPickList jobId={job.id} />}
     </div>
@@ -154,7 +154,7 @@ type TimeEntryFull = {
   employee_id: string;
 };
 
-function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void }) {
+function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems: LineItem[]; onChanged: () => void }) {
   const supabase = createClient();
   const [tasks, setTasks] = useState<JobTask[]>([]);
   const [openEntries, setOpenEntries] = useState<TimeEntry[]>([]);
@@ -350,10 +350,38 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
     return (h > 0 ? h + ":" : "") + pad(m) + ":" + pad(s);
   }
 
+  // Compact product summary shown at the top of the Tasks tab so the crew sees
+  // what/how many to build and can jump to build notes without leaving this page.
+  const productStrip = lineItems.length > 0 && (
+    <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
+      {lineItems.map((li) => (
+        <div key={li.id} className="px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-semibold text-gray-900 truncate">{li.product_templates?.name || "Product"}</span>
+            <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold">× {li.quantity}</span>
+          </div>
+          {li.product_templates && (
+            <Link
+              href={"/floor/products/" + li.product_templates.id}
+              className="shrink-0 text-sm text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
+            >
+              Build notes &amp; photos &rarr;
+            </Link>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
   if (loading) return <p className="text-gray-600">Loading tasks...</p>;
 
   if (tasks.length === 0) {
-    return <div className="bg-white border border-gray-200 rounded-lg p-6 text-center text-gray-600">No tasks on this job.</div>;
+    return (
+      <div className="space-y-4">
+        {productStrip}
+        <div className="bg-white border border-gray-200 rounded-lg p-6 text-center text-gray-600">No tasks on this job.</div>
+      </div>
+    );
   }
 
   // Tasks with no line item are job-wide: when a job carries several product
@@ -374,6 +402,8 @@ function FloorTasks({ jobId, onChanged }: { jobId: string; onChanged: () => void
 
   return (
     <div className="space-y-4">
+      {productStrip}
+
       <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
         <span className="text-sm font-medium text-gray-700">Total time logged on this job</span>
         <span className="text-xl font-bold font-mono text-gray-900">{formatHMS(jobTotalSeconds())}</span>
