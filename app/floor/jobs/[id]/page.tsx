@@ -22,6 +22,7 @@ type Job = {
   status: string;
   due_date: string | null;
   notes: string | null;
+  notes_require_ack: boolean | null;
   customers: { name: string } | null;
 };
 
@@ -48,7 +49,7 @@ export default function FloorJobDetail() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [jobRes, liRes] = await Promise.all([
-      supabase.from("jobs").select("id, job_number, status, due_date, notes, customers(name)").eq("id", id).single(),
+      supabase.from("jobs").select("id, job_number, status, due_date, notes, notes_require_ack, customers(name)").eq("id", id).single(),
       supabase
         .from("job_line_items")
         .select("id, quantity, notes, product_templates(id, name, product_number)")
@@ -96,8 +97,11 @@ export default function FloorJobDetail() {
         <p className="text-gray-700 mt-1">{job.customers?.name || "Unknown customer"}</p>
         {job.due_date && <p className="text-sm text-gray-500 mt-1">Due {job.due_date}</p>}
         {job.notes && (
-          <div className="mt-3 bg-amber-50 border border-amber-200 rounded-md p-3">
-            <p className="text-sm text-amber-900">{job.notes}</p>
+          <div className="mt-3 bg-amber-50 border-2 border-amber-400 rounded-md p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-amber-800 mb-1">
+              Job Notes — read before starting
+            </div>
+            <p className="text-lg font-bold text-amber-900 whitespace-pre-wrap leading-snug">{job.notes}</p>
           </div>
         )}
       </div>
@@ -118,7 +122,15 @@ export default function FloorJobDetail() {
         </div>
       </div>
 
-      {tab === "tasks" && <FloorTasks jobId={job.id} lineItems={lineItems} onChanged={loadData} />}
+      {tab === "tasks" && (
+        <FloorTasks
+          jobId={job.id}
+          lineItems={lineItems}
+          jobNotes={job.notes}
+          notesRequireAck={!!job.notes_require_ack}
+          onChanged={loadData}
+        />
+      )}
       {tab === "info" && <FloorInfo lineItems={lineItems} />}
       {tab === "picklist" && <FloorPickList jobId={job.id} />}
     </div>
@@ -154,7 +166,19 @@ type TimeEntryFull = {
   employee_id: string;
 };
 
-function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems: LineItem[]; onChanged: () => void }) {
+function FloorTasks({
+  jobId,
+  lineItems,
+  jobNotes,
+  notesRequireAck,
+  onChanged,
+}: {
+  jobId: string;
+  lineItems: LineItem[];
+  jobNotes: string | null;
+  notesRequireAck: boolean;
+  onChanged: () => void;
+}) {
   const supabase = createClient();
   const [tasks, setTasks] = useState<JobTask[]>([]);
   const [openEntries, setOpenEntries] = useState<TimeEntry[]>([]);
@@ -169,6 +193,13 @@ function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems:
   // Scrap modal
   const [scrapTask, setScrapTask] = useState<JobTask | null>(null);
 
+  // Job-notes acknowledgment gate. ackedNotes = the notes text this employee
+  // last acknowledged (null if never). ackGateTask = the clock-in waiting
+  // behind the gate until they confirm.
+  const [ackedNotes, setAckedNotes] = useState<string | null>(null);
+  const [ackGateTask, setAckGateTask] = useState<JobTask | null>(null);
+  const [savingAck, setSavingAck] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -178,6 +209,13 @@ function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems:
     if (user) {
       const { data: profile } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
       setCompanyId(profile?.company_id || null);
+      const { data: ackRow } = await supabase
+        .from("job_note_acknowledgments")
+        .select("acknowledged_notes")
+        .eq("job_id", jobId)
+        .eq("employee_id", user.id)
+        .maybeSingle();
+      setAckedNotes(ackRow?.acknowledged_notes ?? null);
     }
 
     const [taskRes, allEntriesRes] = await Promise.all([
@@ -258,7 +296,23 @@ function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems:
     }
   }
 
+  // True when this job requires acknowledgment, has notes, and the current
+  // notes text differs from what this employee last acknowledged.
+  function ackNeeded() {
+    return notesRequireAck && (jobNotes || "").trim() !== "" && (ackedNotes || "") !== (jobNotes || "");
+  }
+
   async function clockIn(task: JobTask) {
+    if (!companyId || !userId) return;
+    // Gate the very first clock-in on this job behind a notes acknowledgment.
+    if (ackNeeded()) {
+      setAckGateTask(task);
+      return;
+    }
+    await doClockIn(task);
+  }
+
+  async function doClockIn(task: JobTask) {
     if (!companyId || !userId) return;
     setBusyTask(task.id);
     await supabase.from("time_entries").insert({
@@ -276,6 +330,34 @@ function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems:
     setBusyTask(null);
     await load();
     onChanged();
+  }
+
+  // Record this employee's acknowledgment of the current notes, then let the
+  // pending clock-in through. Upsert keeps one row per (job, employee) and
+  // refreshes the snapshot when the notes have changed.
+  async function confirmAck() {
+    if (!companyId || !userId || !ackGateTask) return;
+    setSavingAck(true);
+    const notesSnapshot = jobNotes || "";
+    const { error } = await supabase.from("job_note_acknowledgments").upsert(
+      {
+        company_id: companyId,
+        job_id: jobId,
+        employee_id: userId,
+        acknowledged_notes: notesSnapshot,
+        acknowledged_at: new Date().toISOString(),
+      },
+      { onConflict: "job_id,employee_id" }
+    );
+    setSavingAck(false);
+    if (error) {
+      alert("Couldn't save your acknowledgment: " + error.message);
+      return;
+    }
+    setAckedNotes(notesSnapshot);
+    const task = ackGateTask;
+    setAckGateTask(null);
+    await doClockIn(task);
   }
 
   async function clockOut(task: JobTask) {
@@ -485,6 +567,38 @@ function FloorTasks({ jobId, lineItems, onChanged }: { jobId: string; lineItems:
             onChanged();
           }}
         />
+      )}
+
+      {ackGateTask && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-5 space-y-4">
+              <h2 className="text-xl font-bold text-gray-900">Read the job notes before you start</h2>
+              <div className="bg-amber-50 border-2 border-amber-400 rounded-md p-4">
+                <p className="text-base font-semibold text-amber-900 whitespace-pre-wrap leading-snug">{jobNotes}</p>
+              </div>
+              <p className="text-sm text-gray-600">Confirm you&apos;ve read and understand these notes to clock in.</p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAckGateTask(null)}
+                  disabled={savingAck}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmAck}
+                  disabled={savingAck}
+                  className="bg-green-600 text-white px-4 py-2 rounded-md font-medium hover:bg-green-700 disabled:opacity-50"
+                >
+                  {savingAck ? "Saving..." : "I've read & understand — clock in"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

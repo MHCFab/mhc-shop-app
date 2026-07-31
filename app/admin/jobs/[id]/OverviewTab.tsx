@@ -41,6 +41,7 @@ export default function OverviewTab({
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [notesMessage, setNotesMessage] = useState<string | null>(null);
+  const [notesRequireAck, setNotesRequireAck] = useState(false);
 
   // Adding another product to a job that already exists
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -62,12 +63,13 @@ export default function OverviewTab({
         .select("*, product_templates(id, name, product_number)")
         .eq("job_id", jobId)
         .order("sort_order"),
-      supabase.from("jobs").select("notes, status, customer_id, is_build_order").eq("id", jobId).single(),
+      supabase.from("jobs").select("notes, notes_require_ack, status, customer_id, is_build_order").eq("id", jobId).single(),
       supabase.auth.getUser(),
     ]);
     setLineItems((liRes.data || []) as unknown as LineItem[]);
-    const job = jobRes.data as unknown as (JobInfo & { notes: string | null }) | null;
+    const job = jobRes.data as unknown as (JobInfo & { notes: string | null; notes_require_ack: boolean | null }) | null;
     setNotes(job?.notes || "");
+    setNotesRequireAck(!!job?.notes_require_ack);
     setJobInfo(job ? { status: job.status, customer_id: job.customer_id, is_build_order: job.is_build_order } : null);
 
     const userId = userRes.data.user?.id;
@@ -195,7 +197,7 @@ export default function OverviewTab({
     setNotesMessage(null);
     const { error } = await supabase
       .from("jobs")
-      .update({ notes: notes.trim() || null })
+      .update({ notes: notes.trim() || null, notes_require_ack: notesRequireAck })
       .eq("id", jobId);
     setSavingNotes(false);
     if (error) {
@@ -383,6 +385,18 @@ export default function OverviewTab({
           placeholder="Add any notes about this job..."
           className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+        <label className="flex items-start gap-2 mt-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notesRequireAck}
+            onChange={(e) => setNotesRequireAck(e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="text-sm text-gray-700">
+            Require workers to acknowledge these notes before clocking in.
+            <span className="block text-xs text-gray-500">Each person confirms once. If you change the notes, they&apos;ll be asked to confirm again.</span>
+          </span>
+        </label>
         <div className="flex items-center justify-end gap-3 mt-3">
           {notesMessage && (
             <span className={notesMessage.startsWith("Failed") ? "text-sm text-red-600" : "text-sm text-green-700"}>
