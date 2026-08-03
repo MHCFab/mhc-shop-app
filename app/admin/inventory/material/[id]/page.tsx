@@ -191,33 +191,42 @@ export default function MaterialDetailPage() {
     .filter((g) => g.sticks > 0)
     .sort((a, b) => b.length - a.length);
 
-  // Per-length breakdown for the problem alert: net sticks, whether a drop was saved
-  // at this length, and whether a manual adjustment removed stock here.
-  const lengthDetail = new Map<number, { length: number; net: number; hasDrop: boolean; hasNegAdjust: boolean }>();
+  // Gather each length's rows so we can replay them in date order for the problem alert.
+  const rowsByLength = new Map<number, { date: string; qty: number; type: string | null }[]>();
   for (const b of batches) {
     const len = Number(b.stick_length_feet);
-    const qty = Number(b.quantity_sticks);
-    const d = lengthDetail.get(len) || { length: len, net: 0, hasDrop: false, hasNegAdjust: false };
-    d.net += qty;
-    if (b.entry_type === "drop" && qty > 0) d.hasDrop = true;
-    if (b.entry_type === "adjustment" && qty < 0) d.hasNegAdjust = true;
-    lengthDetail.set(len, d);
+    const arr = rowsByLength.get(len) || [];
+    arr.push({ date: b.purchase_date, qty: Number(b.quantity_sticks), type: b.entry_type });
+    rowsByLength.set(len, arr);
   }
 
   // Flag a length when either:
   //  - its net stick count is below zero (physically impossible), or
-  //  - a saved drop has been cancelled to zero (or below) by a manual adjustment —
-  //    i.e. you saved a drop but a negative adjustment was already sitting there.
-  // A drop cancelled by a job pull is normal (you saved it, then later cut it), so we
-  // deliberately don't flag that.
-  const flaggedLengths = Array.from(lengthDetail.values())
-    .filter((d) => d.net < 0 || (d.net <= 0 && d.hasDrop && d.hasNegAdjust))
+  //  - a saved drop landed while the running balance was already below zero — i.e. a
+  //    stock removal (a manual adjustment or an over-pull) happened BEFORE the drop
+  //    existed, so the drop is filling a pre-existing hole instead of adding real stock.
+  // A drop that's later removed because it got used is fine: at the moment the drop was
+  // saved the balance wasn't negative, so it isn't flagged. On same-day ties we apply
+  // additions before removals, which errs toward NOT flagging.
+  const flaggedLengths = Array.from(rowsByLength.entries())
+    .map(([length, rows]) => {
+      const net = rows.reduce((s, r) => s + r.qty, 0);
+      const ordered = [...rows].sort((a, b) => a.date.localeCompare(b.date) || b.qty - a.qty);
+      let running = 0;
+      let dropIntoNegative = false;
+      for (const r of ordered) {
+        if (r.type === "drop" && r.qty > 0 && running < 0) dropIntoNegative = true;
+        running += r.qty;
+      }
+      return { length, net, dropIntoNegative };
+    })
+    .filter((d) => d.net < 0 || (d.net <= 0 && d.dropIntoNegative))
     .map((d) => ({
       length: d.length,
       net: d.net,
       reason: d.net < 0
         ? "net stock is below zero"
-        : "a saved drop is cancelled out by a manual adjustment",
+        : "a saved drop was cancelled by a stock removal made before the drop existed",
     }))
     .sort((a, b) => a.net - b.net);
 
@@ -496,7 +505,7 @@ export default function MaterialDetailPage() {
                 Stock problem &mdash; something&apos;s off here
               </h3>
               <p className="text-sm text-red-700 mt-1">
-                {flaggedLengths.length === 1 ? "A length below has" : "The lengths below have"} a stock problem: either the net stick count has gone below zero, or a saved drop has been cancelled out by a manual adjustment. Open <span className="font-medium">Purchase &amp; price history</span> below to find and fix (or delete) the entry that&apos;s causing it.
+                {flaggedLengths.length === 1 ? "A length below has" : "The lengths below have"} a stock problem: either the net stick count has gone below zero, or a saved drop was swallowed by a stock removal that happened before the drop existed. Open <span className="font-medium">Purchase &amp; price history</span> below to find and fix (or delete) the entry that&apos;s causing it.
               </p>
               <ul className="mt-2 space-y-1">
                 {flaggedLengths.map((g) => (
