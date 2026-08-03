@@ -177,18 +177,49 @@ export default function MaterialDetailPage() {
     loadData();
   }, [loadCompanyId, loadData]);
 
-  // Group batches by length, summing sticks. Only include lengths with sticks actually on hand.
-  const lengthGroups: LengthGroup[] = (() => {
-    const map = new Map<number, number>();
-    for (const b of batches) {
-      const len = Number(b.stick_length_feet);
-      map.set(len, (map.get(len) || 0) + Number(b.quantity_sticks));
-    }
-    return Array.from(map.entries())
-      .map(([length, sticks]) => ({ length, sticks }))
-      .filter((g) => g.sticks > 0)
-      .sort((a, b) => b.length - a.length);
-  })();
+  // Group batches by length, summing sticks. Do this once, then derive both the
+  // on-hand list (net sticks above zero) and any lengths that have gone negative.
+  const lengthMap = new Map<number, number>();
+  for (const b of batches) {
+    const len = Number(b.stick_length_feet);
+    lengthMap.set(len, (lengthMap.get(len) || 0) + Number(b.quantity_sticks));
+  }
+
+  // Lengths with sticks actually on hand (shown in the "Available lengths" table).
+  const lengthGroups: LengthGroup[] = Array.from(lengthMap.entries())
+    .map(([length, sticks]) => ({ length, sticks }))
+    .filter((g) => g.sticks > 0)
+    .sort((a, b) => b.length - a.length);
+
+  // Per-length breakdown for the problem alert: net sticks, whether a drop was saved
+  // at this length, and whether a manual adjustment removed stock here.
+  const lengthDetail = new Map<number, { length: number; net: number; hasDrop: boolean; hasNegAdjust: boolean }>();
+  for (const b of batches) {
+    const len = Number(b.stick_length_feet);
+    const qty = Number(b.quantity_sticks);
+    const d = lengthDetail.get(len) || { length: len, net: 0, hasDrop: false, hasNegAdjust: false };
+    d.net += qty;
+    if (b.entry_type === "drop" && qty > 0) d.hasDrop = true;
+    if (b.entry_type === "adjustment" && qty < 0) d.hasNegAdjust = true;
+    lengthDetail.set(len, d);
+  }
+
+  // Flag a length when either:
+  //  - its net stick count is below zero (physically impossible), or
+  //  - a saved drop has been cancelled to zero (or below) by a manual adjustment —
+  //    i.e. you saved a drop but a negative adjustment was already sitting there.
+  // A drop cancelled by a job pull is normal (you saved it, then later cut it), so we
+  // deliberately don't flag that.
+  const flaggedLengths = Array.from(lengthDetail.values())
+    .filter((d) => d.net < 0 || (d.net <= 0 && d.hasDrop && d.hasNegAdjust))
+    .map((d) => ({
+      length: d.length,
+      net: d.net,
+      reason: d.net < 0
+        ? "net stock is below zero"
+        : "a saved drop is cancelled out by a manual adjustment",
+    }))
+    .sort((a, b) => a.net - b.net);
 
   const totalInStock = batches.reduce((sum, b) => sum + Number(b.stick_length_feet) * Number(b.quantity_sticks), 0);
 
@@ -455,6 +486,29 @@ export default function MaterialDetailPage() {
           </button>
         </div>
       </div>
+
+      {flaggedLengths.length > 0 && (
+        <div className="mb-6 rounded-lg border border-red-300 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <span className="text-red-600 text-xl leading-none" aria-hidden="true">&#9888;</span>
+            <div>
+              <h3 className="text-sm font-semibold text-red-800">
+                Stock problem &mdash; something&apos;s off here
+              </h3>
+              <p className="text-sm text-red-700 mt-1">
+                {flaggedLengths.length === 1 ? "A length below has" : "The lengths below have"} a stock problem: either the net stick count has gone below zero, or a saved drop has been cancelled out by a manual adjustment. Open <span className="font-medium">Purchase &amp; price history</span> below to find and fix (or delete) the entry that&apos;s causing it.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {flaggedLengths.map((g) => (
+                  <li key={g.length} className="text-sm font-mono text-red-800">
+                    {(g.length * 12).toFixed(1)} in: {g.net} {Math.abs(g.net) === 1 ? "stick" : "sticks"} &mdash; {g.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
