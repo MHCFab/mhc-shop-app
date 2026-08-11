@@ -123,6 +123,7 @@ export default function JobDetailPage() {
   const [qtyDraft, setQtyDraft] = useState("");
   const [dueDateDraft, setDueDateDraft] = useState("");
   const [priceDraft, setPriceDraft] = useState("");
+  const [poDraft, setPoDraft] = useState("");
   // One draft row per product line on a templated job.
   const [lineDrafts, setLineDrafts] = useState<{ id: string; label: string; quantity: string; unitPrice: string }[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -377,6 +378,7 @@ export default function JobDetailPage() {
     setNameDraft(job.job_number);
     setQtyDraft(lineItem ? String(lineItem.quantity) : "");
     setDueDateDraft(job.due_date || "");
+    setPoDraft(job.customer_po || "");
     setPriceDraft(lineItem?.unit_price != null ? String(lineItem.unit_price) : "");
     setLineDrafts(
       lineItems.map((li) => ({
@@ -562,6 +564,8 @@ export default function JobDetailPage() {
       if (newName !== job.job_number) jobUpdates.job_number = newName;
       const newDueDate = dueDateDraft || null;
       if (newDueDate !== job.due_date) jobUpdates.due_date = newDueDate;
+      const newPo = poDraft.trim() || null;
+      if (newPo !== job.customer_po) jobUpdates.customer_po = newPo;
       if (Object.keys(jobUpdates).length > 0) {
         const { error: jobErr } = await supabase.from("jobs").update(jobUpdates).eq("id", job.id);
         if (jobErr) throw new Error("Job update failed: " + jobErr.message);
@@ -1311,6 +1315,18 @@ export default function JobDetailPage() {
                   onChange={(e) => setNameDraft(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer PO</label>
+                <input
+                  type="text"
+                  value={poDraft}
+                  onChange={(e) => setPoDraft(e.target.value)}
+                  placeholder="Leave blank for none"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">The customer&apos;s purchase order number for this job. Leave blank to clear it.</p>
               </div>
 
               <div>
