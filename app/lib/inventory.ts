@@ -392,6 +392,20 @@ export type JobStockShortfallItem = {
 export async function getJobStockShortfall(jobId: string): Promise<JobStockShortfallItem[]> {
   const supabase = createClient();
 
+  // Once the cutting nest is finalized, this job is done pulling material and its need is
+  // settled, so it should never report a stock shortfall. Returning an empty list hides the
+  // whole "Not enough stock to complete this job" banner for it — raw materials, purchased
+  // parts, and fabricated units alike (matches the finalized/complete lifecycle).
+  const { data: finalizedData } = await supabase
+    .from("jobs")
+    .select("cutting_nest_finalized_at")
+    .eq("id", jobId)
+    .maybeSingle();
+  const finalizedRow = finalizedData as unknown as { cutting_nest_finalized_at: string | null } | null;
+  if (finalizedRow?.cutting_nest_finalized_at) {
+    return [];
+  }
+
   const [pickRes, rmInvRes, ppInvRes, fabInvRes, allocRes, nestRes, completeJobsRes] = await Promise.all([
     supabase
       .from("job_pick_list_items")
