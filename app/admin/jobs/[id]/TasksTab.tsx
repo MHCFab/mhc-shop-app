@@ -45,6 +45,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
   // Custom job support
   const [isCustomJob, setIsCustomJob] = useState(false);
@@ -185,6 +186,84 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       return;
     }
     loadTasks();
+  }
+
+  // ---- Admin task completion -------------------------------------------------
+  // Lets an admin close out or reopen a task straight from this tab, mirroring
+  // the floor's Mark complete / Reopen buttons. Marking a task complete does NOT
+  // touch anyone's open time entry: a worker still clocked in keeps running until
+  // they clock out themselves, exactly like the floor button.
+  async function ensureJobInProgress() {
+    const { data: job } = await supabase.from("jobs").select("status").eq("id", jobId).single();
+    if ((job as { status: string } | null)?.status === "ready") {
+      await supabase.from("jobs").update({ status: "in_progress" }).eq("id", jobId);
+    }
+  }
+
+  // If every task on the job is now complete, offer to mark the whole job
+  // complete (the same prompt the floor shows). Returns true when the job was
+  // marked complete, so the caller can refresh into the completed-job view.
+  async function maybeAutoCompleteJob(): Promise<boolean> {
+    const { data: jobRow } = await supabase.from("jobs").select("status").eq("id", jobId).single();
+    const jobStatus = (jobRow as { status: string } | null)?.status;
+    if (!jobStatus || jobStatus === "complete") return false;
+
+    const { data: taskRows } = await supabase.from("job_tasks").select("status").eq("job_id", jobId);
+    const rows = (taskRows || []) as unknown as { status: string }[];
+    if (rows.length === 0) return false;
+    if (!rows.every((r) => r.status === "complete")) return false;
+
+    const ok = confirm(
+      "All tasks on this job are done. Mark the whole job complete?\n\n" +
+      "It'll move to the invoices list for review. You can still reopen a task if you need to keep working."
+    );
+    if (!ok) return false;
+
+    const { error } = await supabase
+      .from("jobs")
+      .update({ status: "complete", completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    if (error) {
+      alert("Couldn't mark the job complete: " + error.message);
+      return false;
+    }
+    return true;
+  }
+
+  async function markComplete(t: JobTask) {
+    setBusyTaskId(t.id);
+    const { error } = await supabase
+      .from("job_tasks")
+      .update({ status: "complete", completed_at: new Date().toISOString() })
+      .eq("id", t.id);
+    if (error) {
+      setBusyTaskId(null);
+      alert("Failed to mark task complete: " + error.message);
+      return;
+    }
+    await ensureJobInProgress();
+    const jobCompleted = await maybeAutoCompleteJob();
+    if (jobCompleted) {
+      // Job is now complete: refresh so the page shows its completed-job view.
+      window.location.reload();
+      return;
+    }
+    setBusyTaskId(null);
+    await loadTasks();
+  }
+
+  async function reopen(t: JobTask) {
+    setBusyTaskId(t.id);
+    const { error } = await supabase
+      .from("job_tasks")
+      .update({ status: "not_started", completed_at: null })
+      .eq("id", t.id);
+    setBusyTaskId(null);
+    if (error) {
+      alert("Failed to reopen task: " + error.message);
+      return;
+    }
+    await loadTasks();
   }
 
   async function regenerateTasks() {
@@ -394,7 +473,7 @@ export default function TasksTab({ jobId }: { jobId: string }) {
                   <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Batch qty</th>
                   <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Est. min total</th>
                   <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
-                  {isCustomJob && <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>}
+                  <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -408,12 +487,31 @@ export default function TasksTab({ jobId }: { jobId: string }) {
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{t.batch_quantity}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(t.estimated_minutes_total).toFixed(2)}</td>
                     <td className="px-4 py-3 text-sm">{statusBadge(t.status)}</td>
-                    {isCustomJob && (
-                      <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                        <button onClick={() => openEdit(t)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
-                        <button onClick={() => deleteTask(t)} className="text-red-600 hover:text-red-800 font-medium">Delete</button>
-                      </td>
-                    )}
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {t.status === "complete" ? (
+                        <button
+                          onClick={() => reopen(t)}
+                          disabled={busyTaskId === t.id}
+                          className="text-amber-700 hover:text-amber-900 font-medium disabled:opacity-50"
+                        >
+                          {busyTaskId === t.id ? "Working..." : "Reopen"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => markComplete(t)}
+                          disabled={busyTaskId === t.id}
+                          className="text-green-700 hover:text-green-900 font-medium disabled:opacity-50"
+                        >
+                          {busyTaskId === t.id ? "Working..." : "Mark complete"}
+                        </button>
+                      )}
+                      {isCustomJob && (
+                        <>
+                          <button onClick={() => openEdit(t)} className="text-blue-600 hover:text-blue-800 font-medium ml-4">Edit</button>
+                          <button onClick={() => deleteTask(t)} className="text-red-600 hover:text-red-800 font-medium ml-4">Delete</button>
+                        </>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
