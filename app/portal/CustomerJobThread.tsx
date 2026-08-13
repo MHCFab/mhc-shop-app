@@ -30,7 +30,7 @@ async function postMessageAction(payload: Record<string, unknown>) {
 // their own jobs' messages); every write goes through /portal/api/messages with
 // the service role. Auto-refreshes every 5 seconds so a live back-and-forth
 // doesn't need a page reload.
-export default function CustomerJobThread({ jobId }: { jobId: string }) {
+export default function CustomerJobThread({ jobId, onClose }: { jobId: string; onClose?: () => void }) {
   const supabase = createClient();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,10 +100,15 @@ export default function CustomerJobThread({ jobId }: { jobId: string }) {
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm mt-6 flex flex-col" style={{ height: "60vh" }}>
-      <div className="px-4 py-3 border-b border-gray-200">
-        <h2 className="text-base font-semibold text-gray-900">Messages about this job</h2>
-        <p className="text-xs text-gray-500">Have a question about this order? Message the shop here. New messages appear automatically.</p>
+    <div className="bg-white border border-gray-200 rounded-lg shadow-xl flex flex-col overflow-hidden" style={{ height: "70vh" }}>
+      <div className="px-4 py-3 border-b border-gray-200 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Messages about this job</h2>
+          <p className="text-xs text-gray-500">Have a question about this order? Message the shop here. New messages appear automatically.</p>
+        </div>
+        {onClose && (
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-gray-700 text-2xl leading-none -mt-1">&times;</button>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50">
