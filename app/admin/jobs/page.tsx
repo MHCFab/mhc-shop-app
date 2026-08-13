@@ -52,6 +52,7 @@ export default function JobsPage() {
   const supabase = createClient();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [openRequests, setOpenRequests] = useState<Map<string, OpenRequest>>(new Map());
+  const [msgUnread, setMsgUnread] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -151,6 +152,28 @@ export default function JobsPage() {
 
   useEffect(() => {
     loadJobs();
+  }, []);
+
+  // Unread customer messages per job -> red badge on the row. Light poll so it
+  // stays current during an active conversation without reloading everything.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data: msgRows } = await supabase
+        .from("job_messages")
+        .select("job_id")
+        .eq("sender_side", "customer")
+        .eq("read_by_staff", false);
+      if (!active) return;
+      const umap = new Map<string, number>();
+      for (const m of (msgRows || []) as unknown as { job_id: string }[]) {
+        umap.set(m.job_id, (umap.get(m.job_id) || 0) + 1);
+      }
+      setMsgUnread(umap);
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => { active = false; clearInterval(t); };
   }, []);
 
   const canReorder = !search;
@@ -292,6 +315,14 @@ export default function JobsPage() {
                             <Link href={"/admin/jobs/" + j.id} className="text-blue-600 hover:text-blue-800">
                               {j.job_number}
                             </Link>
+                            {(msgUnread.get(j.id) || 0) > 0 && (
+                              <span
+                                className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-semibold align-middle"
+                                title={(msgUnread.get(j.id) || 0) + " unread from the customer"}
+                              >
+                                {msgUnread.get(j.id) || 0}
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-700">{j.customer_po || "-"}</td>
                           <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">{j.job_line_items.length}</td>

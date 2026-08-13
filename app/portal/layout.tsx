@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerSupabaseClient } from "../lib/supabase-server";
 import PortalSignOut from "./PortalSignOut";
+import UnreadNavBadge from "../components/UnreadNavBadge";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabaseClient();
@@ -57,7 +58,7 @@ export default async function PortalLayout({ children }: { children: React.React
             {customerName && <p className="text-xs text-gray-500">{customerName}</p>}
           </div>
           <div className="flex items-center gap-4">
-            <Link href="/portal" className="text-sm text-blue-600 hover:text-blue-800 font-medium">Jobs</Link>
+            <Link href="/portal" className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 font-medium">Jobs<UnreadNavBadge side="customer" /></Link>
             <Link href="/portal/products" className="text-sm text-blue-600 hover:text-blue-800 font-medium">Products</Link>
             <span className="hidden sm:inline text-sm text-gray-700">{profile?.full_name || ""}</span>
             <PortalSignOut />

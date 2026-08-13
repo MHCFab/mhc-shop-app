@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useState } from "react";
 import { createClient } from "../lib/supabase";
+import UnreadNavBadge from "./UnreadNavBadge";
 
 type Profile = {
   email: string;
@@ -76,7 +77,7 @@ export default function NavBar({
                         : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                     }`}
                   >
-                    {link.label}
+                    <span className="inline-flex items-center gap-1.5">{link.label}{link.href === "/admin/jobs" && <UnreadNavBadge side="staff" />}</span>
                   </Link>
                 ))}
               </div>
@@ -135,7 +136,7 @@ export default function NavBar({
                     : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                 }`}
               >
-                {link.label}
+                <span className="inline-flex items-center gap-1.5">{link.label}{link.href === "/admin/jobs" && <UnreadNavBadge side="staff" />}</span>
               </Link>
             ))}
           </div>

@@ -58,6 +58,7 @@ export default function PortalJobsPage() {
   const supabase = createClient();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [requests, setRequests] = useState<Map<string, ChangeRequest>>(new Map());
+  const [msgUnread, setMsgUnread] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -102,6 +103,29 @@ export default function PortalJobsPage() {
 
   useEffect(() => {
     loadJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Unread shop messages per job -> red badge on the row. Light poll so it stays
+  // current during an active conversation without reloading the whole list.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data: msgRows } = await supabase
+        .from("job_messages")
+        .select("job_id")
+        .eq("sender_side", "staff")
+        .eq("read_by_customer", false);
+      if (!active) return;
+      const umap = new Map<string, number>();
+      for (const m of (msgRows || []) as unknown as { job_id: string }[]) {
+        umap.set(m.job_id, (umap.get(m.job_id) || 0) + 1);
+      }
+      setMsgUnread(umap);
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => { active = false; clearInterval(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -309,7 +333,17 @@ export default function PortalJobsPage() {
                           </td>
                         )}
                         <td className="px-4 py-3 text-sm text-gray-500 font-mono">{idx + 1}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900">{j.job_number}</td>
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                          {j.job_number}
+                          {(msgUnread.get(j.id) || 0) > 0 && (
+                            <span
+                              className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-semibold align-middle"
+                              title={(msgUnread.get(j.id) || 0) + " unread from the shop"}
+                            >
+                              {msgUnread.get(j.id) || 0}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-sm text-gray-700">{j.customer_po || "-"}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">
                           {j.job_line_items.length === 0

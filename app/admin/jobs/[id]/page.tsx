@@ -12,6 +12,7 @@ import CuttingNestTab from "./CuttingNestTab";
 import TasksTab from "./TasksTab";
 import TimeTab from "./TimeTab";
 import CostTab from "./CostTab";
+import MessagesTab from "./MessagesTab";
 
 const STATUSES = [
   { value: "ordered", label: "Ordered", color: "bg-gray-100 text-gray-800" },
@@ -58,7 +59,7 @@ function money(n: number) {
   return "$" + n.toFixed(2);
 }
 
-type Tab = "overview" | "picklist" | "cuttingnest" | "tasks" | "time" | "cost";
+type Tab = "overview" | "picklist" | "cuttingnest" | "tasks" | "time" | "cost" | "messages";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -105,6 +106,23 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [msgUnread, setMsgUnread] = useState(0);
+
+  const loadMsgUnread = useCallback(async () => {
+    const { count } = await supabase
+      .from("job_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("job_id", id)
+      .eq("sender_side", "customer")
+      .eq("read_by_staff", false);
+    setMsgUnread(count || 0);
+  }, [supabase, id]);
+
+  useEffect(() => {
+    loadMsgUnread();
+    const t = setInterval(loadMsgUnread, 20000);
+    return () => clearInterval(t);
+  }, [loadMsgUnread]);
   const [changingStatus, setChangingStatus] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [invoicing, setInvoicing] = useState(false);
@@ -1066,6 +1084,8 @@ export default function JobDetailPage() {
 
   const isComplete = job.status === "complete";
 
+  const hasCustomer = !!job.customers?.id;
+
   const activeTabs: { value: Tab; label: string }[] = [
     { value: "overview", label: "Overview" },
     { value: "picklist", label: "Pick List" },
@@ -1073,12 +1093,14 @@ export default function JobDetailPage() {
     { value: "tasks", label: "Tasks" },
     { value: "time", label: "Time" },
     { value: "cost", label: "Cost" },
+    ...(hasCustomer ? [{ value: "messages" as Tab, label: "Messages" }] : []),
   ];
 
   const completeTabs: { value: Tab; label: string }[] = [
     { value: "picklist", label: "Pick List" },
     { value: "time", label: "Time" },
     { value: "cost", label: "Cost" },
+    ...(hasCustomer ? [{ value: "messages" as Tab, label: "Messages" }] : []),
   ];
 
   const tabs = isComplete ? completeTabs : activeTabs;
@@ -1286,6 +1308,11 @@ export default function JobDetailPage() {
               }`}
             >
               {t.label}
+              {t.value === "messages" && msgUnread > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-semibold align-middle">
+                  {msgUnread}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1297,6 +1324,14 @@ export default function JobDetailPage() {
       {tab === "tasks" && !isComplete && <TasksTab jobId={job.id} />}
       {tab === "time" && <TimeTab jobId={job.id} />}
       {tab === "cost" && <CostTab jobId={job.id} />}
+      {tab === "messages" && job.customers && (
+        <MessagesTab
+          jobId={job.id}
+          customerId={job.customers.id}
+          customerName={job.customers.name || ""}
+          onReadAll={() => setMsgUnread(0)}
+        />
+      )}
 
       {editing && (
         <div
