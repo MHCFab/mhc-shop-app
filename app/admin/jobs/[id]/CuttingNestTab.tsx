@@ -70,6 +70,7 @@ export default function CuttingNestTab({
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [jobNumber, setJobNumber] = useState("");
   const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
+  const [trackDrops, setTrackDrops] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -108,6 +109,15 @@ export default function CuttingNestTab({
     setEntries((entriesRes.data || []) as unknown as NestEntry[]);
     setJobNumber(jobRes.data?.job_number || "");
     setFinalizedAt(jobRes.data?.cutting_nest_finalized_at || null);
+
+    const { data: { user: dropUser } } = await supabase.auth.getUser();
+    if (dropUser) {
+      const { data: dropProfile } = await supabase.from("profiles").select("company_id").eq("id", dropUser.id).single();
+      if (dropProfile?.company_id) {
+        const { data: dropCo } = await supabase.from("companies").select("inv_track_drops").eq("id", dropProfile.company_id).single();
+        if (dropCo) setTrackDrops(dropCo.inv_track_drops !== false);
+      }
+    }
 
     // Load available lengths for each material
     const lengthsMap: Record<string, { length: number; sticks: number }[]> = {};
@@ -461,7 +471,7 @@ export default function CuttingNestTab({
                       </div>
                     </div>
 
-                    {/* Save drop form */}
+                    {trackDrops && (
                     <div className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
                       <p className="text-sm font-medium text-gray-900">Log a saved drop</p>
                       <div className="flex gap-2">
@@ -485,6 +495,7 @@ export default function CuttingNestTab({
                         <button onClick={() => handleSaveDrop(item)} disabled={busy} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-md font-medium text-sm hover:bg-gray-100 disabled:opacity-50">Save drop</button>
                       </div>
                     </div>
+                    )}
                   </div>
                 )}
               </div>

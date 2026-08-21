@@ -107,6 +107,7 @@ export default function JobDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [msgUnread, setMsgUnread] = useState(0);
+  const [useNesting, setUseNesting] = useState(true);
 
   const loadMsgUnread = useCallback(async () => {
     const { count } = await supabase
@@ -123,6 +124,17 @@ export default function JobDetailPage() {
     const t = setInterval(loadMsgUnread, 20000);
     return () => clearInterval(t);
   }, [loadMsgUnread]);
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: prof } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+      if (!prof?.company_id) return;
+      const { data: co } = await supabase.from("companies").select("inv_use_nesting").eq("id", prof.company_id).single();
+      if (co) setUseNesting(co.inv_use_nesting !== false);
+    })();
+  }, [supabase]);
   const [changingStatus, setChangingStatus] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [invoicing, setInvoicing] = useState(false);
@@ -1089,7 +1101,7 @@ export default function JobDetailPage() {
   const activeTabs: { value: Tab; label: string }[] = [
     { value: "overview", label: "Overview" },
     { value: "picklist", label: "Pick List" },
-    { value: "cuttingnest", label: "Cutting Nest" },
+    ...(useNesting ? [{ value: "cuttingnest" as Tab, label: "Cutting Nest" }] : []),
     { value: "tasks", label: "Tasks" },
     { value: "time", label: "Time" },
     { value: "cost", label: "Cost" },
@@ -1320,7 +1332,7 @@ export default function JobDetailPage() {
 
       {tab === "overview" && !isComplete && <OverviewTab jobId={job.id} jobStatus={job.status} isBuildOrder={job.is_build_order} onChanged={loadJob} />}
       {tab === "picklist" && <PickListTab jobId={job.id} readOnly={isComplete} />}
-      {tab === "cuttingnest" && !isComplete && <CuttingNestTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
+      {tab === "cuttingnest" && !isComplete && useNesting && <CuttingNestTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
       {tab === "tasks" && !isComplete && <TasksTab jobId={job.id} />}
       {tab === "time" && <TimeTab jobId={job.id} />}
       {tab === "cost" && <CostTab jobId={job.id} />}

@@ -19,6 +19,8 @@ export default function SettingsPage() {
   const [invShowFabricated, setInvShowFabricated] = useState(true);
   const [invTrackGrade, setInvTrackGrade] = useState(true);
   const [invTrackWallThickness, setInvTrackWallThickness] = useState(true);
+  const [invTrackDrops, setInvTrackDrops] = useState(true);
+  const [invUseNesting, setInvUseNesting] = useState(true);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -47,7 +49,7 @@ export default function SettingsPage() {
 
     const { data: invCompany } = await supabase
       .from("companies")
-      .select("inv_show_purchased_parts, inv_show_fabricated, inv_track_grade, inv_track_wall_thickness")
+      .select("inv_show_purchased_parts, inv_show_fabricated, inv_track_grade, inv_track_wall_thickness, inv_track_drops, inv_use_nesting")
       .eq("id", profile.company_id)
       .single();
     if (invCompany) {
@@ -55,6 +57,8 @@ export default function SettingsPage() {
       setInvShowFabricated(invCompany.inv_show_fabricated !== false);
       setInvTrackGrade(invCompany.inv_track_grade !== false);
       setInvTrackWallThickness(invCompany.inv_track_wall_thickness !== false);
+      setInvTrackDrops(invCompany.inv_track_drops !== false);
+      setInvUseNesting(invCompany.inv_use_nesting !== false);
     }
     setLoading(false);
   }, [supabase]);
@@ -116,6 +120,8 @@ export default function SettingsPage() {
         inv_show_fabricated: invShowFabricated,
         inv_track_grade: invTrackGrade,
         inv_track_wall_thickness: invTrackWallThickness,
+        inv_track_drops: invTrackDrops,
+        inv_use_nesting: invUseNesting,
       })
       .eq("id", companyId);
 
@@ -212,6 +218,14 @@ export default function SettingsPage() {
             <label className="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={invTrackWallThickness} onChange={(e) => setInvTrackWallThickness(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
               <span className="text-sm"><span className="block font-medium text-gray-800">Track wall thickness</span><span className="block text-xs text-gray-500">Record a wall thickness on raw materials. Turn off if you do not use tube or pipe.</span></span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invUseNesting} onChange={(e) => setInvUseNesting(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Cutting nest</span><span className="block text-xs text-gray-500">Use the cutting-nest step on jobs to pull material by length. Turn off if this shop does not nest cuts (hides the Cutting Nest tab).</span></span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invTrackDrops} onChange={(e) => setInvTrackDrops(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Track saved drops</span><span className="block text-xs text-gray-500">Log offcuts back into stock from the cutting nest. Turn off to skip drop tracking.</span></span>
             </label>
           </div>
         </div>
