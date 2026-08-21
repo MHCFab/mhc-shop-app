@@ -659,121 +659,151 @@ function FloorInfo({ lineItems }: { lineItems: LineItem[] }) {
 // ---------------- Pick List ----------------
 
 type PickItem = {
-    id: string;
-    item_type: string;
-    raw_material_id: string | null;
-    product_template_id: string | null;
-    planned_quantity: number;
-    unit: string;
-    raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
-    purchased_parts: { name: string; part_number: string | null } | null;
-    product_templates: { name: string; product_number: string | null } | null;
-  };
-  
-  type NestPull = {
-    raw_material_id: string;
-    entry_type: string;
-    length_feet: number;
-    quantity: number;
-  };
-  
-  function FloorPickList({ jobId }: { jobId: string }) {
-    const supabase = createClient();
-    const [items, setItems] = useState<PickItem[]>([]);
-    const [pulls, setPulls] = useState<NestPull[]>([]);
-    const [loading, setLoading] = useState(true);
-  
-    const load = useCallback(async () => {
-      setLoading(true);
-      const [itemsRes, pullsRes] = await Promise.all([
-        supabase
-          .from("job_pick_list_items")
-          .select("id, item_type, raw_material_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
-          .eq("job_id", jobId)
-          .order("item_type"),
-        supabase
-          .from("cutting_nest_entries")
-          .select("raw_material_id, entry_type, length_feet, quantity")
-          .eq("job_id", jobId)
-          .in("entry_type", ["pull", "drop"]),
-      ]);
-      setItems((itemsRes.data || []) as unknown as PickItem[]);
-      setPulls((pullsRes.data || []) as unknown as NestPull[]);
-      setLoading(false);
-    }, [supabase, jobId]);
-  
-    useEffect(() => {
-      load();
-    }, [load]);
-  
-    if (loading) return <p className="text-gray-600">Loading materials...</p>;
-  
-    if (items.length === 0) {
-      return <div className="bg-white border border-gray-200 rounded-lg p-6 text-center text-gray-600">No materials listed.</div>;
-    }
-  
-    function describe(item: PickItem) {
-      if (item.item_type === "raw_material" && item.raw_materials) {
-        const m = item.raw_materials;
-        const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
-        return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + " (" + m.grade + ")";
+  id: string;
+  item_type: string;
+  raw_material_id: string | null;
+  product_template_id: string | null;
+  planned_quantity: number;
+  unit: string;
+  raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
+  purchased_parts: { name: string; part_number: string | null } | null;
+  product_templates: { name: string; product_number: string | null } | null;
+};
+
+type NestPull = {
+  raw_material_id: string;
+  entry_type: string;
+  length_feet: number;
+  quantity: number;
+};
+
+function FloorPickList({ jobId }: { jobId: string }) {
+  const supabase = createClient();
+  const [items, setItems] = useState<PickItem[]>([]);
+  const [pulls, setPulls] = useState<NestPull[]>([]);
+  const [useNesting, setUseNesting] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [itemsRes, pullsRes] = await Promise.all([
+      supabase
+        .from("job_pick_list_items")
+        .select("id, item_type, raw_material_id, product_template_id, planned_quantity, unit, raw_materials(shape, size, wall_thickness, grade), purchased_parts(name, part_number), product_templates(name, product_number)")
+        .eq("job_id", jobId)
+        .order("item_type"),
+      supabase
+        .from("cutting_nest_entries")
+        .select("raw_material_id, entry_type, length_feet, quantity")
+        .eq("job_id", jobId)
+        .in("entry_type", ["pull", "drop"]),
+    ]);
+    setItems((itemsRes.data || []) as unknown as PickItem[]);
+    setPulls((pullsRes.data || []) as unknown as NestPull[]);
+
+    // Shops with the cutting nest turned off see plain issued/needed feet instead of
+    // a stick-by-stick nest. Anything unreadable leaves the original nest view in place.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: prof } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
+      if (prof?.company_id) {
+        const { data: co } = await supabase.from("companies").select("inv_use_nesting").eq("id", prof.company_id).single();
+        if (co) setUseNesting(co.inv_use_nesting !== false);
       }
-      if (item.item_type === "purchased_part" && item.purchased_parts) {
-        const p = item.purchased_parts;
-        return p.name + (p.part_number ? " (" + p.part_number + ")" : "");
-      }
-      if (item.item_type === "fabricated" && item.product_templates) {
-        const t = item.product_templates;
-        return t.name + (t.product_number ? " (" + t.product_number + ")" : "");
-      }
-      return "Item";
-    }
-  
-    // Group pull entries by material, then by length
-    function sticksFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
-      if (!rawMaterialId) return [];
-      const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "pull");
-      const map = new Map<number, number>();
-      for (const p of mine) {
-        const len = Number(p.length_feet);
-        map.set(len, (map.get(len) || 0) + Number(p.quantity));
-      }
-      return Array.from(map.entries())
-        .map(([length, sticks]) => ({ length, sticks }))
-        .sort((a, b) => b.length - a.length);
     }
 
-    // Drops the boss logged back to inventory for this material — the crew keeps these.
-    function dropsFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
-      if (!rawMaterialId) return [];
-      const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "drop");
-      const map = new Map<number, number>();
-      for (const p of mine) {
-        const len = Number(p.length_feet);
-        map.set(len, (map.get(len) || 0) + Number(p.quantity));
-      }
-      return Array.from(map.entries())
-        .map(([length, sticks]) => ({ length, sticks }))
-        .sort((a, b) => b.length - a.length);
+    setLoading(false);
+  }, [supabase, jobId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (loading) return <p className="text-gray-600">Loading materials...</p>;
+
+  if (items.length === 0) {
+    return <div className="bg-white border border-gray-200 rounded-lg p-6 text-center text-gray-600">No materials listed.</div>;
+  }
+
+  function describe(item: PickItem) {
+    if (item.item_type === "raw_material" && item.raw_materials) {
+      const m = item.raw_materials;
+      const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
+      const grade = m.grade ? " (" + m.grade + ")" : "";
+      return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + grade;
     }
-  
-    const materials = items.filter((i) => i.item_type === "raw_material");
-    const parts = items.filter((i) => i.item_type === "purchased_part");
-    const fabricated = items.filter((i) => i.item_type === "fabricated");
-  
-    return (
-      <div className="space-y-4">
-        {materials.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Raw Materials (cutting nest)</div>
-            <ul className="divide-y divide-gray-100">
-              {materials.map((i) => {
-                const sticks = sticksFor(i.raw_material_id);
-                const drops = dropsFor(i.raw_material_id);
-                return (
-                  <li key={i.id} className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{describe(i)}</div>
-                    {sticks.length === 0 ? (
+    if (item.item_type === "purchased_part" && item.purchased_parts) {
+      const p = item.purchased_parts;
+      return p.name + (p.part_number ? " (" + p.part_number + ")" : "");
+    }
+    if (item.item_type === "fabricated" && item.product_templates) {
+      const t = item.product_templates;
+      return t.name + (t.product_number ? " (" + t.product_number + ")" : "");
+    }
+    return "Item";
+  }
+
+  // Group pull entries by material, then by length
+  function sticksFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
+    if (!rawMaterialId) return [];
+    const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "pull");
+    const map = new Map<number, number>();
+    for (const p of mine) {
+      const len = Number(p.length_feet);
+      map.set(len, (map.get(len) || 0) + Number(p.quantity));
+    }
+    return Array.from(map.entries())
+      .map(([length, sticks]) => ({ length, sticks }))
+      .sort((a, b) => b.length - a.length);
+  }
+
+  // Drops the boss logged back to inventory for this material — the crew keeps these.
+  function dropsFor(rawMaterialId: string | null): { length: number; sticks: number }[] {
+    if (!rawMaterialId) return [];
+    const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId && p.entry_type === "drop");
+    const map = new Map<number, number>();
+    for (const p of mine) {
+      const len = Number(p.length_feet);
+      map.set(len, (map.get(len) || 0) + Number(p.quantity));
+    }
+    return Array.from(map.entries())
+      .map(([length, sticks]) => ({ length, sticks }))
+      .sort((a, b) => b.length - a.length);
+  }
+
+  // Net feet issued to this job for a material (used when the cutting nest is off).
+  function issuedFeetFor(rawMaterialId: string | null): number {
+    if (!rawMaterialId) return 0;
+    const mine = pulls.filter((p) => p.raw_material_id === rawMaterialId);
+    const issued = mine.filter((p) => p.entry_type === "pull").reduce((s, p) => s + Number(p.length_feet) * Number(p.quantity), 0);
+    const returned = mine.filter((p) => p.entry_type === "drop").reduce((s, p) => s + Number(p.length_feet) * Number(p.quantity), 0);
+    const net = issued - returned;
+    return net > 0 ? net : 0;
+  }
+
+  const materials = items.filter((i) => i.item_type === "raw_material");
+  const parts = items.filter((i) => i.item_type === "purchased_part");
+  const fabricated = items.filter((i) => i.item_type === "fabricated");
+
+  return (
+    <div className="space-y-4">
+      {materials.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">
+            {useNesting ? "Raw Materials (cutting nest)" : "Raw Materials"}
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {materials.map((i) => {
+              const sticks = sticksFor(i.raw_material_id);
+              const drops = dropsFor(i.raw_material_id);
+              const issued = issuedFeetFor(i.raw_material_id);
+              const needed = Number(i.planned_quantity);
+              return (
+                <li key={i.id} className="px-4 py-3">
+                  <div className="font-medium text-gray-900">{describe(i)}</div>
+
+                  {useNesting ? (
+                    sticks.length === 0 ? (
                       <div className="text-sm text-amber-700 mt-1">No nest created yet</div>
                     ) : (
                       <div className="mt-2 space-y-1">
@@ -784,56 +814,71 @@ type PickItem = {
                           </div>
                         ))}
                       </div>
-                    )}
-                    {drops.length > 0 && (
-                      <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-2">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-green-800">Keep these drops — return to inventory</div>
-                        <div className="mt-1 space-y-1">
-                          {drops.map((d) => (
-                            <div key={d.length} className="flex items-center justify-between text-sm">
-                              <span className="text-green-900">{(d.length * 12).toFixed(1)} in drop</span>
-                              <span className="font-mono font-semibold text-green-900">× {d.sticks}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="mt-1 text-xs text-green-700">Any other cut-offs are scrap.</div>
+                    )
+                  ) : (
+                    <div className="mt-2 space-y-1 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700">Needed</span>
+                        <span className="font-mono font-semibold text-gray-900">{needed.toFixed(2)} ft</span>
                       </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-        {parts.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Purchased Parts</div>
-            <ul className="divide-y divide-gray-100">
-              {parts.map((i) => (
-                <li key={i.id} className="px-4 py-3 flex items-center justify-between">
-                  <span className="text-gray-900">{describe(i)}</span>
-                  <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-700">Issued so far</span>
+                        <span className={"font-mono font-semibold " + (issued > 0 ? "text-gray-900" : "text-amber-700")}>
+                          {issued > 0 ? issued.toFixed(2) + " ft" : "none yet"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {drops.length > 0 && (
+                    <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-green-800">Keep these drops — return to inventory</div>
+                      <div className="mt-1 space-y-1">
+                        {drops.map((d) => (
+                          <div key={d.length} className="flex items-center justify-between text-sm">
+                            <span className="text-green-900">{(d.length * 12).toFixed(1)} in drop</span>
+                            <span className="font-mono font-semibold text-green-900">× {d.sticks}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-1 text-xs text-green-700">Any other cut-offs are scrap.</div>
+                    </div>
+                  )}
                 </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {fabricated.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Fabricated Sub-Assemblies (grab from stock)</div>
-            <ul className="divide-y divide-gray-100">
-              {fabricated.map((i) => (
-                <li key={i.id} className="px-4 py-3 flex items-center justify-between">
-                  <span className="text-gray-900">{describe(i)}</span>
-                  <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    );
-  }
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {parts.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Purchased Parts</div>
+          <ul className="divide-y divide-gray-100">
+            {parts.map((i) => (
+              <li key={i.id} className="px-4 py-3 flex items-center justify-between">
+                <span className="text-gray-900">{describe(i)}</span>
+                <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {fabricated.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 font-semibold text-gray-900">Fabricated Sub-Assemblies (grab from stock)</div>
+          <ul className="divide-y divide-gray-100">
+            {fabricated.map((i) => (
+              <li key={i.id} className="px-4 py-3 flex items-center justify-between">
+                <span className="text-gray-900">{describe(i)}</span>
+                <span className="font-mono text-gray-700">{Number(i.planned_quantity).toFixed(0)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------- Scrap Modal ----------------
 
