@@ -15,6 +15,10 @@ export default function SettingsPage() {
   const [burdenRate, setBurdenRate] = useState("");
   const [shopLaborRate, setShopLaborRate] = useState("");
   const [markup, setMarkup] = useState("");
+  const [invShowPurchasedParts, setInvShowPurchasedParts] = useState(true);
+  const [invShowFabricated, setInvShowFabricated] = useState(true);
+  const [invTrackGrade, setInvTrackGrade] = useState(true);
+  const [invTrackWallThickness, setInvTrackWallThickness] = useState(true);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -39,6 +43,18 @@ export default function SettingsPage() {
       setBurdenRate(String(company.burden_rate_per_hour));
       setShopLaborRate(String(company.shop_labor_rate_per_hour));
       setMarkup(String(company.material_markup_percent));
+    }
+
+    const { data: invCompany } = await supabase
+      .from("companies")
+      .select("inv_show_purchased_parts, inv_show_fabricated, inv_track_grade, inv_track_wall_thickness")
+      .eq("id", profile.company_id)
+      .single();
+    if (invCompany) {
+      setInvShowPurchasedParts(invCompany.inv_show_purchased_parts !== false);
+      setInvShowFabricated(invCompany.inv_show_fabricated !== false);
+      setInvTrackGrade(invCompany.inv_track_grade !== false);
+      setInvTrackWallThickness(invCompany.inv_track_wall_thickness !== false);
     }
     setLoading(false);
   }, [supabase]);
@@ -92,6 +108,17 @@ export default function SettingsPage() {
       setError(error.message);
       return;
     }
+
+    await supabase
+      .from("companies")
+      .update({
+        inv_show_purchased_parts: invShowPurchasedParts,
+        inv_show_fabricated: invShowFabricated,
+        inv_track_grade: invTrackGrade,
+        inv_track_wall_thickness: invTrackWallThickness,
+      })
+      .eq("id", companyId);
+
     setMessage("Saved.");
     setTimeout(() => setMessage(null), 2000);
   }
@@ -163,6 +190,29 @@ export default function SettingsPage() {
               />
               <p className="text-xs text-gray-500 mt-1">Markup applied to material and parts for the suggested retail price. Enter 20 for a 20% markup (cost × 1.20).</p>
             </div>
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-gray-200">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Inventory options</h2>
+          <p className="text-xs text-gray-500 mb-4">Turn parts of the inventory system on or off for how a shop works. Everything is on by default.</p>
+          <div className="space-y-3">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invShowPurchasedParts} onChange={(e) => setInvShowPurchasedParts(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Purchased parts</span><span className="block text-xs text-gray-500">Show the Purchased Parts tab for bought-in parts you stock.</span></span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invShowFabricated} onChange={(e) => setInvShowFabricated(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Fabricated sub-assemblies</span><span className="block text-xs text-gray-500">Show the Fabricated tab for items you build from other parts.</span></span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invTrackGrade} onChange={(e) => setInvTrackGrade(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Track material grade</span><span className="block text-xs text-gray-500">Record an alloy or grade on raw materials. Turn off if your stock has no grade.</span></span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={invTrackWallThickness} onChange={(e) => setInvTrackWallThickness(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Track wall thickness</span><span className="block text-xs text-gray-500">Record a wall thickness on raw materials. Turn off if you do not use tube or pipe.</span></span>
+            </label>
           </div>
         </div>
 

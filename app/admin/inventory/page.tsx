@@ -40,7 +40,8 @@ function shapeLabel(s: string) {
 
 function describeMaterial(m: AvailableRawMaterial) {
   const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
-  return shapeLabel(m.shape) + " " + m.size + wall + " (" + m.grade + ")";
+  const gradePart = m.grade ? " (" + m.grade + ")" : "";
+  return shapeLabel(m.shape) + " " + m.size + wall + gradePart;
 }
 
 type Tab = "raw_materials" | "purchased_parts" | "fabricated";
@@ -57,6 +58,10 @@ export default function InventoryPage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showInactive, setShowInactive] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
+  const [invShowPurchasedParts, setInvShowPurchasedParts] = useState(true);
+  const [invShowFabricated, setInvShowFabricated] = useState(true);
+  const [invTrackGrade, setInvTrackGrade] = useState(true);
+  const [invTrackWallThickness, setInvTrackWallThickness] = useState(true);
 
   // Purchase modal state
   const [showPurchase, setShowPurchase] = useState(false);
@@ -133,6 +138,19 @@ export default function InventoryPage() {
     if (!user) return;
     const { data } = await supabase.from("profiles").select("company_id").eq("id", user.id).single();
     if (data) setCompanyId(data.company_id);
+    if (data?.company_id) {
+      const { data: co } = await supabase
+        .from("companies")
+        .select("inv_show_purchased_parts, inv_show_fabricated, inv_track_grade, inv_track_wall_thickness")
+        .eq("id", data.company_id)
+        .single();
+      if (co) {
+        setInvShowPurchasedParts(co.inv_show_purchased_parts !== false);
+        setInvShowFabricated(co.inv_show_fabricated !== false);
+        setInvTrackGrade(co.inv_track_grade !== false);
+        setInvTrackWallThickness(co.inv_track_wall_thickness !== false);
+      }
+    }
   }, [supabase]);
 
   const loadData = useCallback(async () => {
@@ -350,8 +368,8 @@ export default function InventoryPage() {
       setNewItemError("Could not determine your company. Try refreshing.");
       return;
     }
-    if (!newMatForm.size.trim() || !newMatForm.grade.trim()) {
-      setNewItemError("Size and grade are required.");
+    if (!newMatForm.size.trim() || (invTrackGrade && !newMatForm.grade.trim())) {
+      setNewItemError(invTrackGrade ? "Size and grade are required." : "Size is required.");
       return;
     }
     const cost = parseFloat(newMatForm.current_cost_per_foot);
@@ -599,6 +617,7 @@ export default function InventoryPage() {
           >
             Raw Materials
           </button>
+          {invShowPurchasedParts && (
           <button
             onClick={() => setTab("purchased_parts")}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -607,6 +626,8 @@ export default function InventoryPage() {
           >
             Purchased Parts
           </button>
+          )}
+          {invShowFabricated && (
           <button
             onClick={() => setTab("fabricated")}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -615,6 +636,7 @@ export default function InventoryPage() {
           >
             Fabricated
           </button>
+          )}
         </div>
       </div>
 
@@ -840,12 +862,14 @@ export default function InventoryPage() {
                 >
                   Raw Material
                 </button>
+                {invShowPurchasedParts && (
                 <button
                   onClick={() => setTab("purchased_parts")}
                   className={`px-3 py-1.5 text-sm font-medium border-b-2 ${tab === "purchased_parts" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600"}`}
                 >
                   Purchased Part
                 </button>
+                )}
               </div>
 
               {tab === "raw_materials" ? (
@@ -978,12 +1002,14 @@ export default function InventoryPage() {
                 >
                   Raw Material
                 </button>
+                {invShowPurchasedParts && (
                 <button
                   onClick={() => setTab("purchased_parts")}
                   className={`px-3 py-1.5 text-sm font-medium border-b-2 ${tab === "purchased_parts" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-600"}`}
                 >
                   Purchased Part
                 </button>
+                )}
               </div>
 
               {tab === "raw_materials" ? (
@@ -1005,16 +1031,20 @@ export default function InventoryPage() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
                       <input type="text" placeholder='e.g. 1" or 2x3' value={newMatForm.size} onChange={(e) => setNewMatForm({ ...newMatForm, size: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
+                    {invTrackWallThickness && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Wall thickness</label>
                       <input type="text" placeholder="e.g. 0.065 (optional)" value={newMatForm.wall_thickness} onChange={(e) => setNewMatForm({ ...newMatForm, wall_thickness: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
+                    {invTrackGrade && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Grade</label>
                       <input type="text" placeholder="e.g. A500" value={newMatForm.grade} onChange={(e) => setNewMatForm({ ...newMatForm, grade: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
+                    )}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Current cost / ft</label>
                       <input type="number" step="0.0001" min="0" value={newMatForm.current_cost_per_foot} onChange={(e) => setNewMatForm({ ...newMatForm, current_cost_per_foot: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
