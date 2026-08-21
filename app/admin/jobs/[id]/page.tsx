@@ -9,6 +9,7 @@ import { generateJobPickListAndTasks, recomputeJobPlan } from "../../../lib/job-
 import OverviewTab from "./OverviewTab";
 import PickListTab from "./PickListTab";
 import CuttingNestTab from "./CuttingNestTab";
+import IssueMaterialTab from "./IssueMaterialTab";
 import TasksTab from "./TasksTab";
 import TimeTab from "./TimeTab";
 import CostTab from "./CostTab";
@@ -59,7 +60,7 @@ function money(n: number) {
   return "$" + n.toFixed(2);
 }
 
-type Tab = "overview" | "picklist" | "cuttingnest" | "tasks" | "time" | "cost" | "messages";
+type Tab = "overview" | "picklist" | "cuttingnest" | "tasks" | "time" | "cost" | "messages" | "issue";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -282,7 +283,7 @@ export default function JobDetailPage() {
   // Default tab depends on status
   useEffect(() => {
     if (job?.status === "complete") {
-      setTab((prev) => (prev === "overview" || prev === "cuttingnest" || prev === "tasks" ? "picklist" : prev));
+      setTab((prev) => (prev === "overview" || prev === "cuttingnest" || prev === "issue" || prev === "tasks" ? "picklist" : prev));
     }
   }, [job?.status]);
 
@@ -1101,7 +1102,7 @@ export default function JobDetailPage() {
   const activeTabs: { value: Tab; label: string }[] = [
     { value: "overview", label: "Overview" },
     { value: "picklist", label: "Pick List" },
-    ...(useNesting ? [{ value: "cuttingnest" as Tab, label: "Cutting Nest" }] : []),
+    ...(useNesting ? [{ value: "cuttingnest" as Tab, label: "Cutting Nest" }] : [{ value: "issue" as Tab, label: "Issue Material" }]),
     { value: "tasks", label: "Tasks" },
     { value: "time", label: "Time" },
     { value: "cost", label: "Cost" },
@@ -1333,6 +1334,7 @@ export default function JobDetailPage() {
       {tab === "overview" && !isComplete && <OverviewTab jobId={job.id} jobStatus={job.status} isBuildOrder={job.is_build_order} onChanged={loadJob} />}
       {tab === "picklist" && <PickListTab jobId={job.id} readOnly={isComplete} />}
       {tab === "cuttingnest" && !isComplete && useNesting && <CuttingNestTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
+      {tab === "issue" && !isComplete && !useNesting && <IssueMaterialTab jobId={job.id} jobStatus={job.status} onChanged={loadJob} />}
       {tab === "tasks" && !isComplete && <TasksTab jobId={job.id} />}
       {tab === "time" && <TimeTab jobId={job.id} />}
       {tab === "cost" && <CostTab jobId={job.id} />}
