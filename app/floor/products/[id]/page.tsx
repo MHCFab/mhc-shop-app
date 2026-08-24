@@ -115,6 +115,7 @@ export default function FloorProductDetail() {
     if (!files || files.length === 0 || !companyId) return;
     setUploading(true);
     try {
+      let added = 0;
       for (const file of Array.from(files)) {
         if (!file.type.startsWith("image/")) continue;
         if (file.size > 10 * 1024 * 1024) {
@@ -128,13 +129,22 @@ export default function FloorProductDetail() {
           alert("Upload failed: " + upErr.message);
           continue;
         }
-        await supabase.from("product_template_photos").insert({
+        // Saving this record is what actually makes the photo appear. If it
+        // fails, the file is already in storage with nothing pointing at it —
+        // so say so instead of reporting success, and clear the stray file.
+        const { error: saveErr } = await supabase.from("product_template_photos").insert({
           company_id: companyId,
           product_template_id: id,
           storage_path: path,
           caption: null,
-          sort_order: photos.length,
+          sort_order: photos.length + added,
         });
+        if (saveErr) {
+          await supabase.storage.from("product-photos").remove([path]);
+          alert("Couldn't save the photo: " + saveErr.message);
+          continue;
+        }
+        added++;
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadData();
