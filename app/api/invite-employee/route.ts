@@ -44,6 +44,40 @@ export async function POST(req: NextRequest) {
     }
 
     const companyId = profile.company_id;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // ------------------------------------------------------------------
+    // Record the invitation BEFORE sending it.
+    //
+    // Sending the invite is what creates the login, and creating the login
+    // fires the handle_new_user trigger in the database. That trigger now
+    // refuses to create an account unless a pending invitation already exists
+    // for this email address - that is what stops anyone from signing
+    // themselves up into someone else's shop. So the row has to be in place
+    // first, or our own invites would be refused.
+    // ------------------------------------------------------------------
+    const { data: invitationRow, error: trackError } = await supabase
+      .from("employee_invitations")
+      .insert({
+        company_id: companyId,
+        email: normalizedEmail,
+        full_name: fullName || null,
+        invited_by: user.id,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+
+    if (trackError || !invitationRow) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not record the invitation, so the invite was not sent: " +
+            (trackError?.message || "unknown error"),
+        },
+        { status: 400 }
+      );
+    }
 
     // Now use the service role client to send the invite
     const admin = createClient(
@@ -60,7 +94,7 @@ export async function POST(req: NextRequest) {
     base = base.replace(/\/+$/, "");
     const redirectTo = base + "/accept-invite";
 
-    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
+    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(normalizedEmail, {
       data: {
         full_name: fullName || null,
         role: "employee",
@@ -70,17 +104,11 @@ export async function POST(req: NextRequest) {
     });
 
     if (inviteError) {
+      // The email never went out, so clean up the row we just wrote rather
+      // than leaving a pending invitation nobody can use.
+      await supabase.from("employee_invitations").delete().eq("id", invitationRow.id);
       return NextResponse.json({ error: inviteError.message }, { status: 400 });
     }
-
-    // Record the invitation in our tracking table
-    await supabase.from("employee_invitations").insert({
-      company_id: companyId,
-      email: email.toLowerCase().trim(),
-      full_name: fullName || null,
-      invited_by: user.id,
-      status: "pending",
-    });
 
     return NextResponse.json({ success: true, userId: invited.user?.id });
   } catch (e) {

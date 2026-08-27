@@ -111,6 +111,13 @@ moves, nothing re-uploads.
 
 ## Still open
 
+> **2026-08-27 session.** `handle-new-user-hardening.sql` is in the repo root:
+> PART 0 read-only look, PART 1 the change, PART 2 verification, undo at the
+> bottom. **Deploy the app code FIRST** — the two invite routes now record the
+> invitation row before sending the invite, and the hardened trigger depends on
+> that row already existing. Running the SQL against the old routes would refuse
+> every invite.
+
 - [x] ~~Run PART 0, PART 1 and PART 2 of `security-audit-fixes.sql`~~ — done 2026-08-21, all four verified OK
 - [ ] **Remove the two ex-employee logins** (Joseph, Jared) with the Remove
       button on the Employees page, not just the on/off toggle. The toggle
@@ -120,16 +127,18 @@ moves, nothing re-uploads.
       Authentication → Sign In / Providers. If it's on, anyone could register
       themselves as an admin in your shop, because the new-user trigger takes
       role and shop straight from the sign-up data with no verification.
-- [ ] **Harden `handle_new_user`** so it only accepts "admin" from a real
-      pending invitation. Not urgent while sign-up is off — becomes urgent the
-      day self-serve sign-up ships (P2 on the roadmap). Deliberately left out
-      of the fix script: it's the one change that could break invites, so it
-      deserves its own session and its own test.
-- [ ] **Delete `app/cost-sheets/page.tsx`** — an orphan page from early
+- [~] **Harden `handle_new_user`** — SQL WRITTEN 2026-08-27, NOT YET RUN.
+      The trigger no longer reads the role or the shop from the sign-up
+      request at all: the role comes from which invitation list matched (so
+      "admin" is unreachable), the shop comes from the invitation row, and no
+      pending invitation means no account. Run `handle-new-user-hardening.sql`
+      AFTER the code is deployed, then test a real invite end to end.
+- [x] ~~**Delete `app/cost-sheets/page.tsx`**~~ — orphan page from early
       development, linked from nowhere, reading a `parts` table that doesn't
-      exist and inserting materials with no shop attached. Harmless because
-      it's broken; exactly the kind of page that becomes a leak later.
+      exist and inserting materials with no shop attached. Renamed to
+      `page.tsx.disabled` on 2026-08-27 so the route is already dead; delete
+      the whole `app/cost-sheets` folder in Cursor to finish it off.
 - [ ] **Backups** — confirm point-in-time recovery is on, and actually test a
       restore once. A backup nobody has restored isn't a backup.
-- [ ] **Terms of Service + Privacy Policy** before an outside shop's data lands.
+- [x] ~~**Terms of Service + Privacy Policy**~~ — draft pages live at `/terms` and `/privacy` 2026-08-27, linked from the login page. Bracketed blanks still to fill in, and counsel still to review.
 - [ ] **Decide on MFA for admin logins.** Can wait, but decide.

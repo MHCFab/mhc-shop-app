@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     }
 
     const companyId = profile.company_id;
+    const normalizedEmail = email.toLowerCase().trim();
 
     // Verify the customer exists and belongs to this company (the RLS-scoped
     // read only returns customers of the caller's company)
@@ -58,6 +59,41 @@ export async function POST(req: NextRequest) {
 
     if (!customer) {
       return NextResponse.json({ error: "Customer not found." }, { status: 404 });
+    }
+
+    // ------------------------------------------------------------------
+    // Record the invitation BEFORE sending it.
+    //
+    // Sending the invite is what creates the login, and creating the login
+    // fires the handle_new_user trigger in the database. That trigger now
+    // refuses to create an account unless a pending invitation already exists
+    // for this email address, and it takes the shop and the customer from
+    // that row rather than from the invite - that is what stops anyone from
+    // signing themselves up into someone else's shop. So the row has to be in
+    // place first, or our own invites would be refused.
+    // ------------------------------------------------------------------
+    const { data: invitationRow, error: trackError } = await supabase
+      .from("customer_invitations")
+      .insert({
+        company_id: companyId,
+        customer_id: customerId,
+        email: normalizedEmail,
+        full_name: fullName || null,
+        invited_by: user.id,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+
+    if (trackError || !invitationRow) {
+      return NextResponse.json(
+        {
+          error:
+            "Could not record the invitation, so the invite was not sent: " +
+            (trackError?.message || "unknown error"),
+        },
+        { status: 400 }
+      );
     }
 
     // Now use the service role client to send the invite
@@ -75,7 +111,7 @@ export async function POST(req: NextRequest) {
     base = base.replace(/\/+$/, "");
     const redirectTo = base + "/accept-invite";
 
-    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
+    const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(normalizedEmail, {
       data: {
         full_name: fullName || null,
         role: "customer",
@@ -86,26 +122,10 @@ export async function POST(req: NextRequest) {
     });
 
     if (inviteError) {
+      // The email never went out, so clean up the row we just wrote rather
+      // than leaving a pending invitation nobody can use.
+      await supabase.from("customer_invitations").delete().eq("id", invitationRow.id);
       return NextResponse.json({ error: inviteError.message }, { status: 400 });
-    }
-
-    // Record the invitation in our tracking table
-    const { error: trackError } = await supabase.from("customer_invitations").insert({
-      company_id: companyId,
-      customer_id: customerId,
-      email: email.toLowerCase().trim(),
-      full_name: fullName || null,
-      invited_by: user.id,
-      status: "pending",
-    });
-
-    if (trackError) {
-      // The invite email already went out; note the tracking hiccup but don't fail
-      return NextResponse.json({
-        success: true,
-        userId: invited.user?.id,
-        warning: "Invite sent, but recording it failed: " + trackError.message,
-      });
     }
 
     return NextResponse.json({ success: true, userId: invited.user?.id });

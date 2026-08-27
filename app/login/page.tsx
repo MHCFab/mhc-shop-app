@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -89,6 +90,16 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        <p className="mt-6 pt-4 border-t border-gray-200 text-xs text-gray-500 text-center">
+          <Link href="/terms" className="hover:text-blue-600 hover:underline">
+            Terms of Service
+          </Link>
+          <span className="mx-2">&middot;</span>
+          <Link href="/privacy" className="hover:text-blue-600 hover:underline">
+            Privacy Policy
+          </Link>
+        </p>
       </div>
     </div>
   );
