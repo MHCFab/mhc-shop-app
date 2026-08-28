@@ -57,6 +57,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Employee not found in your company." }, { status: 404 });
     }
 
+    // Customer portal logins are not employees. They are removed from the
+    // Customers page, which also clears their link to the customer record.
+    if (target.role === "customer") {
+      return NextResponse.json(
+        { error: "That is a customer portal login. Remove it from the Customers page instead." },
+        { status: 400 }
+      );
+    }
+
     // Use the service role client to delete the auth user.
     // Their profile row is removed via the auth user deletion cascade (or we clean it up after).
     const admin = createClient(

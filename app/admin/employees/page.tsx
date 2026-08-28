@@ -50,7 +50,10 @@ export default function EmployeesPage() {
     const { data: userData } = await supabase.auth.getUser();
     setCurrentUserId(userData.user?.id ?? null);
     const [empRes, invRes] = await Promise.all([
-      supabase.from("profiles").select("id, email, full_name, role, is_active, created_at").order("full_name"),
+      // Shop staff only. Customer portal logins live in profiles too, and the
+      // admin can read them, but they belong on the Customers page - not here,
+      // where they could be made an admin or removed with the employee tools.
+      supabase.from("profiles").select("id, email, full_name, role, is_active, created_at").in("role", ["admin", "employee"]).order("full_name"),
       supabase.from("employee_invitations").select("id, email, full_name, status, created_at").eq("status", "pending").order("created_at", { ascending: false }),
     ]);
     if (empRes.error) setError(empRes.error.message);
