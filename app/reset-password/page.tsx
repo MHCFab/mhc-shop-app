@@ -10,6 +10,7 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [problems, setProblems] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [ready, setReady] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -88,6 +89,62 @@ export default function ResetPasswordPage() {
     return () => { cancelled = true; };
   }, [supabase]);
 
+  // If this account was invited and finished its password here instead of on
+  // the accept-invite page, mark the invitation accepted so the admin view
+  // stops showing "Awaiting password" -- and REPORT BACK if that fails.
+  // These updates used to be fire-and-forget, which hid a broken invite flow
+  // for over a month: a missing row-level-security policy makes an update
+  // touch zero rows and still return no error, so silence proved nothing.
+  //
+  // Unlike the invite page, most people here are doing an ordinary password
+  // reset with no invitation waiting, so finding nothing pending is normal
+  // and stays quiet. Only a real failure is reported.
+  async function recordInvitationAccepted(): Promise<string[]> {
+    const found: string[] = [];
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.email) return found;
+
+    const email = user.email.toLowerCase();
+    const acceptedAt = new Date().toISOString();
+
+    for (const table of ["employee_invitations", "customer_invitations"] as const) {
+      const { data: pendingRows, error: readError } = await supabase
+        .from(table)
+        .select("id")
+        .eq("email", email)
+        .eq("status", "pending");
+      if (readError) {
+        found.push(table + " could not be read: " + readError.message);
+        continue;
+      }
+      if (!pendingRows || pendingRows.length === 0) continue;
+
+      const { data: updatedRows, error: writeError } = await supabase
+        .from(table)
+        .update({ status: "accepted", accepted_at: acceptedAt })
+        .eq("email", email)
+        .eq("status", "pending")
+        .select("id");
+      if (writeError) {
+        found.push(table + " could not be updated: " + writeError.message);
+        continue;
+      }
+      if (!updatedRows || updatedRows.length === 0) {
+        found.push(table + " returned no error but changed no rows - a permission rule is blocking the update.");
+      }
+    }
+
+    return found;
+  }
+
+  // The home page routes everyone to the right place for their role
+  // (admin -> /admin, employee -> /floor, customer -> /portal).
+  function goToApp() {
+    router.push("/");
+    router.refresh();
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -112,31 +169,16 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    // If this account was invited and finished its password here instead of
-    // on the accept-invite page, mark the invitation accepted so the admin
-    // view stops showing "Awaiting password". (One of these will match
-    // depending on the account type; the other is a harmless no-op.)
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email) {
-      const acceptedAt = new Date().toISOString();
-      const email = user.email.toLowerCase();
-      await supabase
-        .from("employee_invitations")
-        .update({ status: "accepted", accepted_at: acceptedAt })
-        .eq("email", email)
-        .eq("status", "pending");
-      await supabase
-        .from("customer_invitations")
-        .update({ status: "accepted", accepted_at: acceptedAt })
-        .eq("email", email)
-        .eq("status", "pending");
+    const bookkeeping = await recordInvitationAccepted();
+    setSaving(false);
+
+    if (bookkeeping.length > 0) {
+      console.error("[ShopWorks] invitation was not marked accepted:", bookkeeping);
+      setProblems(bookkeeping);
+      return;
     }
 
-    setSaving(false);
-    // The home page routes everyone to the right place for their role
-    // (admin -> /admin, employee -> /floor, customer -> /portal).
-    router.push("/");
-    router.refresh();
+    goToApp();
   }
 
   return (
@@ -149,7 +191,30 @@ export default function ResetPasswordPage() {
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3 mb-4">{error}</div>}
 
-        {ready && (
+        {problems && (
+          <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md p-3 mb-4">
+            <p className="font-medium">Your new password is saved and you&apos;re signed in.</p>
+            <p className="mt-1">
+              One bookkeeping step didn&apos;t finish, so your shop admin may still see you as
+              &quot;Awaiting password&quot;. Please mention it to them &mdash; nothing else about your
+              account is affected.
+            </p>
+            <ul className="mt-2 list-disc list-inside text-xs text-amber-800">
+              {problems.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={goToApp}
+              className="mt-3 bg-amber-600 text-white px-4 py-2 rounded-md font-medium hover:bg-amber-700 transition-colors"
+            >
+              Continue
+            </button>
+          </div>
+        )}
+
+        {ready && !problems && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">New password</label>

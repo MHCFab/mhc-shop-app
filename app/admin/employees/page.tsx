@@ -229,6 +229,11 @@ export default function EmployeesPage() {
     loadData();
   }
 
+  // Anyone with a still-pending invite has a login but has not set a password
+  // yet. Badging them here is what stops Active team and Pending invites from
+  // looking like they contradict each other.
+  const awaitingPassword = new Set(invitations.map((inv) => inv.email.toLowerCase()));
+
   const visibleEmployees = employees.filter((e) =>
     statusFilter === "active" ? e.is_active : !e.is_active
   );
@@ -260,6 +265,7 @@ export default function EmployeesPage() {
         <section className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
           <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
             <h3 className="text-base font-semibold text-gray-900">Pending invites</h3>
+            <p className="text-sm text-gray-600 mt-1">These people already have a login and show up under Active team. They stay on this list until they set their password.</p>
           </div>
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
@@ -346,6 +352,9 @@ export default function EmployeesPage() {
                       <span className={"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium " + (emp.role === "admin" ? "bg-purple-100 text-purple-800" : "bg-gray-100 text-gray-700")}>
                         {emp.role === "admin" ? "Admin" : "Employee"}
                       </span>
+                      {awaitingPassword.has(emp.email.toLowerCase()) && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ml-2">Awaiting password</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
                       {emp.role === "admin" ? (
