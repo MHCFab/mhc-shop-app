@@ -68,7 +68,7 @@ export default function NewJobPage() {
         .from("product_templates")
         .select("id, name, product_number, customer_id")
         .eq("is_active", true)
-        .eq("is_sub_assembly", false)
+        .neq("template_type", "fabricated")
         .order("name"),
       supabase
         .from("product_templates")

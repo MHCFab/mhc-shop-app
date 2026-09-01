@@ -10,7 +10,7 @@ type Product = {
   name: string;
   product_number: string | null;
   description: string | null;
-  is_sub_assembly: boolean;
+  template_type: string;
 };
 
 type EditJob = {
@@ -62,15 +62,16 @@ export default function OrderForm({ editJobId, initialProductId }: { editJobId?:
 
       const { data, error: prodError } = await supabase
         .from("product_templates")
-        .select("id, name, product_number, description, is_sub_assembly")
+        .select("id, name, product_number, description, template_type")
         .order("name");
       if (prodError) {
         setError(prodError.message);
         setLoading(false);
         return;
       }
-      // Sub-assemblies are internal components, not orderable products
-      const rows = ((data || []) as unknown as Product[]).filter((p) => !p.is_sub_assembly);
+      // Fabricated parts are internal pieces of a bigger assembly and are
+      // never sold on their own. Sub-assemblies ARE sellable, so they stay.
+      const rows = ((data || []) as unknown as Product[]).filter((p) => p.template_type !== "fabricated");
       setProducts(rows);
 
       // Open jobs, so we can point out "you already have an order for this"

@@ -9,7 +9,7 @@ type Product = {
   name: string;
   product_number: string | null;
   description: string | null;
-  is_sub_assembly: boolean;
+  template_type: string;
 };
 
 export default function PortalProductsPage() {
@@ -22,12 +22,13 @@ export default function PortalProductsPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from("product_templates")
-      .select("id, name, product_number, description, is_sub_assembly")
+      .select("id, name, product_number, description, template_type")
       .order("name");
     if (error) setError(error.message);
     else {
-      // Sub-assemblies are internal components, not orderable products
-      const rows = ((data || []) as unknown as Product[]).filter((p) => !p.is_sub_assembly);
+      // Fabricated parts are internal pieces of a bigger assembly and are
+      // never sold on their own. Sub-assemblies ARE sellable, so they stay.
+      const rows = ((data || []) as unknown as Product[]).filter((p) => p.template_type !== "fabricated");
       setProducts(rows);
     }
     setLoading(false);

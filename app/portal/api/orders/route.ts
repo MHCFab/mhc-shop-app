@@ -107,7 +107,8 @@ export async function POST(req: NextRequest) {
         return bad("Please pick a product.");
       }
 
-      // The product must be this customer's own active product (not a sub-assembly)
+      // The product must be this customer's own active product
+      // (fabricated parts are internal pieces and are never orderable)
       const { data: template } = await admin
         .from("product_templates")
         .select("id, name")
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
         .eq("company_id", companyId)
         .eq("customer_id", customerId)
         .eq("is_active", true)
-        .eq("is_sub_assembly", false)
+        .neq("template_type", "fabricated")
         .single();
 
       if (!template) return bad("That product isn't available to order.");

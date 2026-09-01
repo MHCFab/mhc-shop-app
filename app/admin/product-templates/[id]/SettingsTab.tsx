@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
+import { TEMPLATE_TYPES, canBeStockable, templateType } from "../../../lib/template-types";
 
 type Template = {
   id: string;
@@ -11,6 +12,7 @@ type Template = {
   description: string | null;
   is_active: boolean;
   is_sub_assembly: boolean;
+  template_type: string;
   is_stockable: boolean;
   reorder_point: number | null;
   reorder_target: number | null;
@@ -36,7 +38,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
     product_number: "",
     description: "",
     is_active: true,
-    is_sub_assembly: false,
+    template_type: "product",
     is_stockable: false,
     reorder_point: "",
     reorder_target: "",
@@ -60,7 +62,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         product_number: data.product_number || "",
         description: data.description || "",
         is_active: data.is_active,
-        is_sub_assembly: data.is_sub_assembly,
+        template_type: templateType(data.template_type),
         is_stockable: data.is_stockable ?? false,
         reorder_point: data.reorder_point != null ? String(data.reorder_point) : "",
         reorder_target: data.reorder_target != null ? String(data.reorder_target) : "",
@@ -85,14 +87,14 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
       setError("Name is required.");
       return;
     }
-    if (!form.is_sub_assembly && !form.customer_id) {
-      setError("Please select a customer for this product. (Sub-assemblies don't need one.)");
+    if (!form.customer_id) {
+      setError("Please select a customer. Every product, sub-assembly and fabricated part belongs to one.");
       return;
     }
 
-    // Only a sub-assembly can be a stockable fabricated item, and only a
-    // stockable item carries reorder values.
-    const stockable = form.is_sub_assembly ? form.is_stockable : false;
+    // Only a sub-assembly or a fabricated part can be built to stock, and
+    // only a stockable item carries reorder values.
+    const stockable = canBeStockable(form.template_type) ? form.is_stockable : false;
 
     function parseReorder(value: string, label: string): number | null | "error" {
       if (!stockable || value.trim() === "") return null;
@@ -120,11 +122,15 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
         product_number: form.product_number.trim() || null,
         description: form.description.trim() || null,
         is_active: form.is_active,
-        is_sub_assembly: form.is_sub_assembly,
+        template_type: form.template_type,
+        // Kept in step with the type. This older flag has always meant
+        // "not a top-level orderable product", which is now exactly what
+        // a fabricated part is.
+        is_sub_assembly: form.template_type === "fabricated",
         is_stockable: stockable,
         reorder_point: reorderPoint,
         reorder_target: reorderTarget,
-        customer_id: form.is_sub_assembly ? null : form.customer_id,
+        customer_id: form.customer_id,
         retail_price_per_unit: parseFloat(form.retail_price_per_unit) || 0,
       })
       .eq("id", templateId);
@@ -180,24 +186,35 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           />
         </div>
 
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={form.is_sub_assembly}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                is_sub_assembly: e.target.checked,
-                // Clearing sub-assembly also clears stockable.
-                is_stockable: e.target.checked ? form.is_stockable : false,
-              })
-            }
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          <span className="text-sm text-gray-700">Sub-assembly (used as a component inside other products, not built standalone)</span>
-        </label>
+        <div>
+          <span className="block text-sm font-medium text-gray-700 mb-2">Type</span>
+          <div className="space-y-2">
+            {TEMPLATE_TYPES.map((t) => (
+              <label key={t.value} className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="template_type"
+                  value={t.value}
+                  checked={form.template_type === t.value}
+                  onChange={() =>
+                    setForm({
+                      ...form,
+                      template_type: t.value,
+                      // Only a sub-assembly or a fabricated part can be stocked.
+                      is_stockable: canBeStockable(t.value) ? form.is_stockable : false,
+                    })
+                  }
+                  className="w-4 h-4 mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">
+                  <span className="font-medium text-gray-900">{t.label}</span> &mdash; {t.blurb}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
 
-        {form.is_sub_assembly && (
+        {canBeStockable(form.template_type) && (
           <label className="flex items-start gap-2 ml-6">
             <input
               type="checkbox"
@@ -211,7 +228,7 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           </label>
         )}
 
-        {form.is_sub_assembly && form.is_stockable && (
+        {canBeStockable(form.template_type) && form.is_stockable && (
           <div className="ml-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Reorder point</label>
@@ -242,24 +259,26 @@ export default function SettingsTab({ templateId }: { templateId: string }) {
           </div>
         )}
 
-        {!form.is_sub_assembly && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Customer <span className="text-red-600">*</span>
-            </label>
-            <select
-              value={form.customer_id}
-              onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">-- Select customer --</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">This product will only be orderable for this customer.</p>
-          </div>
-        )}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Customer <span className="text-red-600">*</span>
+          </label>
+          <select
+            value={form.customer_id}
+            onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">-- Select customer --</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {form.template_type === "fabricated"
+              ? "Which customer this part is fabricated for. It groups the part on the templates list. It is never orderable on its own."
+              : "This will only be orderable for this customer."}
+          </p>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Product number</label>

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "../../lib/supabase";
+import { TEMPLATE_TYPES, canBeStockable, templateType } from "../../lib/template-types";
+import type { TemplateType } from "../../lib/template-types";
 
 type ProductTemplate = {
   id: string;
@@ -11,6 +13,7 @@ type ProductTemplate = {
   description: string | null;
   is_active: boolean;
   is_sub_assembly: boolean;
+  template_type: string;
   is_stockable: boolean;
   customer_id: string | null;
   created_at: string;
@@ -23,7 +26,7 @@ type Form = {
   product_number: string;
   description: string;
   is_active: boolean;
-  is_sub_assembly: boolean;
+  template_type: TemplateType;
   is_stockable: boolean;
   customer_id: string;
   open_qty: string;
@@ -35,7 +38,7 @@ const emptyForm: Form = {
   product_number: "",
   description: "",
   is_active: true,
-  is_sub_assembly: false,
+  template_type: "product",
   is_stockable: false,
   customer_id: "",
   open_qty: "",
@@ -53,7 +56,7 @@ export default function ProductTemplatesPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState<"all" | "products" | "sub_assemblies">("all");
+  const [filterType, setFilterType] = useState<"all" | TemplateType>("all");
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -96,8 +99,7 @@ export default function ProductTemplatesPage() {
 
   const baseFiltered = useMemo(() => {
     return templates.filter((t) => {
-      if (filterType === "products" && t.is_sub_assembly) return false;
-      if (filterType === "sub_assemblies" && !t.is_sub_assembly) return false;
+      if (filterType !== "all" && templateType(t.template_type) !== filterType) return false;
       if (search) {
         const s = search.toLowerCase();
         const cust = t.customer_id ? (customerName[t.customer_id] || "") : "";
@@ -119,25 +121,33 @@ export default function ProductTemplatesPage() {
     [baseFiltered, showInactive]
   );
 
-  // Group products under their customer; sub-assemblies share one group at the end.
+  // Everything groups under its customer now, whatever its type. Anything
+  // still missing a customer -- the fabricated parts carried over from the
+  // old sub-assembly flag -- collects in one group at the end until it is
+  // assigned one.
   const groups = useMemo(() => {
-    const map = new Map<string, { key: string; label: string; items: ProductTemplate[]; isSub: boolean }>();
+    const typeOrder: Record<string, number> = { product: 0, sub_assembly: 1, fabricated: 2 };
+    const map = new Map<string, { key: string; label: string; items: ProductTemplate[]; noCustomer: boolean }>();
     for (const t of filtered) {
-      const isSub = t.is_sub_assembly;
-      const key = isSub ? "__subs__" : (t.customer_id || "__none__");
-      const label = isSub
-        ? "Sub-assemblies"
-        : t.customer_id
-          ? (customerName[t.customer_id] || "Unknown customer")
-          : "No customer";
-      if (!map.has(key)) map.set(key, { key, label, items: [], isSub });
+      const key = t.customer_id || "__none__";
+      const label = t.customer_id
+        ? (customerName[t.customer_id] || "Unknown customer")
+        : "No customer yet";
+      if (!map.has(key)) map.set(key, { key, label, items: [], noCustomer: !t.customer_id });
       map.get(key)!.items.push(t);
     }
     const arr = Array.from(map.values());
     arr.sort((a, b) => {
-      if (a.isSub !== b.isSub) return a.isSub ? 1 : -1; // sub-assemblies last
+      if (a.noCustomer !== b.noCustomer) return a.noCustomer ? 1 : -1; // no-customer group last
       return a.label.localeCompare(b.label);
     });
+    // Within a customer: products first, then sub-assemblies, then fabricated parts.
+    for (const g of arr) {
+      g.items.sort((a, b) => {
+        const d = typeOrder[templateType(a.template_type)] - typeOrder[templateType(b.template_type)];
+        return d !== 0 ? d : a.name.localeCompare(b.name);
+      });
+    }
     return arr;
   }, [filtered, customerName]);
 
@@ -154,7 +164,7 @@ export default function ProductTemplatesPage() {
       product_number: t.product_number || "",
       description: t.description || "",
       is_active: t.is_active,
-      is_sub_assembly: t.is_sub_assembly,
+      template_type: templateType(t.template_type),
       is_stockable: t.is_stockable ?? false,
       customer_id: t.customer_id || "",
       open_qty: "",
@@ -191,8 +201,8 @@ export default function ProductTemplatesPage() {
       setSaving(false);
       return;
     }
-    if (!form.is_sub_assembly && !form.customer_id) {
-      setError("Please select a customer for this product. (Sub-assemblies don't need one.)");
+    if (!form.customer_id) {
+      setError("Please select a customer. Every product, sub-assembly and fabricated part belongs to one.");
       setSaving(false);
       return;
     }
@@ -202,7 +212,7 @@ export default function ProductTemplatesPage() {
       return;
     }
 
-    const isStockable = form.is_sub_assembly && form.is_stockable;
+    const isStockable = canBeStockable(form.template_type) && form.is_stockable;
 
     // Validate the optional starting stock up front (before creating anything).
     let openQty = 0;
@@ -230,10 +240,14 @@ export default function ProductTemplatesPage() {
       product_number: form.product_number.trim() || null,
       description: form.description.trim() || null,
       is_active: form.is_active,
-      is_sub_assembly: form.is_sub_assembly,
-      // Only a sub-assembly can be a stockable fabricated item.
+      template_type: form.template_type,
+      // Kept in step with the type. This older flag has always meant
+      // "not a top-level orderable product", which is now exactly what
+      // a fabricated part is.
+      is_sub_assembly: form.template_type === "fabricated",
+      // Only a sub-assembly or a fabricated part can be built to stock.
       is_stockable: isStockable,
-      customer_id: form.is_sub_assembly ? null : form.customer_id,
+      customer_id: form.customer_id,
     };
 
     let targetId = editingId;
@@ -453,12 +467,13 @@ export default function ProductTemplatesPage() {
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <select
           value={filterType}
-          onChange={(e) => setFilterType(e.target.value as "all" | "products" | "sub_assemblies")}
+          onChange={(e) => setFilterType(e.target.value as "all" | TemplateType)}
           className="px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="all">All templates</option>
-          <option value="products">Products only</option>
-          <option value="sub_assemblies">Sub-assemblies only</option>
+          <option value="product">Products only</option>
+          <option value="sub_assembly">Sub-assemblies only</option>
+          <option value="fabricated">Fabricated parts only</option>
         </select>
         <input
           type="text"
@@ -502,6 +517,11 @@ export default function ProductTemplatesPage() {
                   <span className="text-gray-400 text-xs w-3">{isCollapsed ? "▸" : "▾"}</span>
                   <span className="font-semibold text-gray-900">{g.label}</span>
                   <span className="text-sm font-normal text-gray-500">({g.items.length})</span>
+                  {g.noCustomer && (
+                    <span className="ml-1 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+                      Use Edit to assign a customer
+                    </span>
+                  )}
                 </button>
                 {!isCollapsed && (
                   <ul className="divide-y divide-gray-100">
@@ -515,7 +535,13 @@ export default function ProductTemplatesPage() {
                           {!t.is_active && (
                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Inactive</span>
                           )}
-                          {t.is_sub_assembly && t.is_stockable && (
+                          {templateType(t.template_type) === "sub_assembly" && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">Sub-assembly</span>
+                          )}
+                          {templateType(t.template_type) === "fabricated" && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Fabricated part</span>
+                          )}
+                          {t.is_stockable && (
                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">Stockable</span>
                           )}
                         </div>
@@ -562,23 +588,35 @@ export default function ProductTemplatesPage() {
                   />
                 </div>
 
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={form.is_sub_assembly}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        is_sub_assembly: e.target.checked,
-                        is_stockable: e.target.checked ? form.is_stockable : false,
-                      })
-                    }
-                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-sm text-gray-700">Sub-assembly (used as a component, not built standalone)</span>
-                </label>
+                <div>
+                  <span className="block text-sm font-medium text-gray-700 mb-2">Type</span>
+                  <div className="space-y-2">
+                    {TEMPLATE_TYPES.map((t) => (
+                      <label key={t.value} className="flex items-start gap-2">
+                        <input
+                          type="radio"
+                          name="template_type"
+                          value={t.value}
+                          checked={form.template_type === t.value}
+                          onChange={() =>
+                            setForm({
+                              ...form,
+                              template_type: t.value,
+                              // Only a sub-assembly or a fabricated part can be stocked.
+                              is_stockable: canBeStockable(t.value) ? form.is_stockable : false,
+                            })
+                          }
+                          className="w-4 h-4 mt-0.5 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700">
+                          <span className="font-medium text-gray-900">{t.label}</span> &mdash; {t.blurb}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
 
-                {form.is_sub_assembly && (
+                {canBeStockable(form.template_type) && (
                   <label className="flex items-start gap-2 ml-6">
                     <input
                       type="checkbox"
@@ -592,7 +630,7 @@ export default function ProductTemplatesPage() {
                   </label>
                 )}
 
-                {form.is_sub_assembly && form.is_stockable && (
+                {canBeStockable(form.template_type) && form.is_stockable && (
                   <div className="ml-6 border-t border-gray-100 pt-3">
                     <p className="text-sm font-medium text-gray-700">Starting stock <span className="text-gray-400 font-normal">(optional)</span></p>
                     <p className="text-xs text-gray-500 mb-2">Already have some of these built? Add the count now instead of running a build order. This adds a stock entry &mdash; leave blank to skip.</p>
@@ -624,24 +662,26 @@ export default function ProductTemplatesPage() {
                   </div>
                 )}
 
-                {!form.is_sub_assembly && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Customer <span className="text-red-600">*</span>
-                    </label>
-                    <select
-                      value={form.customer_id}
-                      onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">-- Select customer --</option>
-                      {customers.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-gray-500 mt-1">This product will only be orderable for this customer.</p>
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Customer <span className="text-red-600">*</span>
+                  </label>
+                  <select
+                    value={form.customer_id}
+                    onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">-- Select customer --</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {form.template_type === "fabricated"
+                      ? "Which customer this part is fabricated for. It groups the part on this page. It is never orderable on its own."
+                      : "This will only be orderable for this customer."}
+                  </p>
+                </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Product number</label>

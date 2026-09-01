@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
+import { templateType } from "../../../lib/template-types";
 
 const SHAPES = [
   { value: "round_tube", label: "Round Tube" },
@@ -34,6 +35,7 @@ type Template = {
   id: string;
   name: string;
   product_number: string | null;
+  template_type: string;
 };
 
 type MaterialRow = {
@@ -85,14 +87,17 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
   const [addingMat, setAddingMat] = useState(false);
   const [addingPart, setAddingPart] = useState(false);
   const [addingSub, setAddingSub] = useState(false);
+  const [addingFab, setAddingFab] = useState(false);
 
   // Multi-select state for each add form
   const [matChecked, setMatChecked] = useState<Set<string>>(new Set());
   const [partChecked, setPartChecked] = useState<Set<string>>(new Set());
   const [subChecked, setSubChecked] = useState<Set<string>>(new Set());
+  const [fabChecked, setFabChecked] = useState<Set<string>>(new Set());
   const [matSearch, setMatSearch] = useState("");
   const [partSearch, setPartSearch] = useState("");
   const [subSearch, setSubSearch] = useState("");
+  const [fabSearch, setFabSearch] = useState("");
   const [savingAdd, setSavingAdd] = useState(false);
 
   // Inline edit state (one row at a time, across all three sections)
@@ -124,7 +129,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         .order("sort_order"),
       supabase
         .from("product_template_sub_assemblies")
-        .select("*, product_templates!product_template_sub_assemblies_child_template_id_fkey(id, name, product_number)")
+        .select("*, product_templates!product_template_sub_assemblies_child_template_id_fkey(id, name, product_number, template_type)")
         .eq("parent_template_id", templateId)
         .order("sort_order"),
       supabase
@@ -138,11 +143,14 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
         .select("id, name, part_number, current_cost_each")
         .eq("is_active", true)
         .order("name"),
+      // Only things that are meant to go inside something else are offered
+      // as components. Finished products are never on this list.
       supabase
         .from("product_templates")
-        .select("id, name, product_number")
+        .select("id, name, product_number, template_type")
         .eq("is_active", true)
         .neq("id", templateId)
+        .in("template_type", ["sub_assembly", "fabricated"])
         .order("name"),
     ]);
 
@@ -224,6 +232,12 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     setError(null);
     setAddingSub(true);
   }
+  function openAddFab() {
+    setFabChecked(new Set());
+    setFabSearch("");
+    setError(null);
+    setAddingFab(true);
+  }
 
   function toggle(set: Set<string>, id: string, setter: (s: Set<string>) => void) {
     const next = new Set(set);
@@ -286,15 +300,18 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     loadAll();
   }
 
-  async function addSubsBatch() {
+  // Sub-assemblies and fabricated parts are both child templates and live in
+  // the same table. They are only shown as two lists because they mean
+  // different things to you, so one insert handles both.
+  async function addChildrenBatch(checked: Set<string>, noun: string, close: () => void) {
     setError(null);
     if (!companyId) return;
-    if (subChecked.size === 0) {
-      setError("Pick at least one sub-assembly to add.");
+    if (checked.size === 0) {
+      setError("Pick at least one " + noun + " to add.");
       return;
     }
     setSavingAdd(true);
-    const ids = Array.from(subChecked);
+    const ids = Array.from(checked);
     const rows = ids.map((childId, i) => ({
       company_id: companyId,
       parent_template_id: templateId,
@@ -309,7 +326,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
       setError(error.message);
       return;
     }
-    setAddingSub(false);
+    close();
     loadAll();
   }
 
@@ -393,8 +410,8 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     loadAll();
   }
 
-  async function deleteSub(rowId: string) {
-    if (!confirm("Remove this sub-assembly from the BOM?")) return;
+  async function deleteChild(rowId: string, noun: string) {
+    if (!confirm("Remove this " + noun + " from the BOM?")) return;
     await supabase.from("product_template_sub_assemblies").delete().eq("id", rowId);
     loadAll();
   }
@@ -407,10 +424,16 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     (sum, p) => sum + Number(p.quantity_per_unit) * Number(p.purchased_parts?.current_cost_each || 0),
     0
   );
-  const subAssemblyCost = subs.reduce(
-    (sum, s) => sum + Number(s.quantity_per_unit) * (subAssemblyCosts[s.child_template_id] || 0),
-    0
-  );
+  // Both lists come out of the same child rows, split by what the child is.
+  // Anything that is NOT a fabricated part stays in the sub-assembly list, so
+  // a row can never quietly vanish from the BOM because of an odd type.
+  const fabRows = subs.filter((s) => templateType(s.product_templates?.template_type) === "fabricated");
+  const subRows = subs.filter((s) => templateType(s.product_templates?.template_type) !== "fabricated");
+
+  const childCost = (rows: SubRow[]) =>
+    rows.reduce((sum, s) => sum + Number(s.quantity_per_unit) * (subAssemblyCosts[s.child_template_id] || 0), 0);
+  const subAssemblyCost = childCost(subRows);
+  const fabricatedCost = childCost(fabRows);
 
   // Items not already in the BOM (so you can't double-add)
   const usedMaterialIds = new Set(materials.map((m) => m.raw_material_id));
@@ -423,9 +446,17 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
   const availableParts = allParts
     .filter((p) => !usedPartIds.has(p.id))
     .filter((p) => !partSearch || (p.name + " " + (p.part_number || "")).toLowerCase().includes(partSearch.toLowerCase()));
-  const availableTemplates = allTemplates
+  const matchesSearch = (t: Template, term: string) =>
+    !term || (t.name + " " + (t.product_number || "")).toLowerCase().includes(term.toLowerCase());
+
+  const availableSubTemplates = allTemplates
     .filter((t) => !usedSubIds.has(t.id))
-    .filter((t) => !subSearch || (t.name + " " + (t.product_number || "")).toLowerCase().includes(subSearch.toLowerCase()));
+    .filter((t) => templateType(t.template_type) === "sub_assembly")
+    .filter((t) => matchesSearch(t, subSearch));
+  const availableFabTemplates = allTemplates
+    .filter((t) => !usedSubIds.has(t.id))
+    .filter((t) => templateType(t.template_type) === "fabricated")
+    .filter((t) => matchesSearch(t, fabSearch));
 
   if (loading) {
     return <p className="text-gray-600">Loading...</p>;
@@ -435,7 +466,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
     <div className="space-y-8">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Material cost</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">${materialCost.toFixed(2)}</div>
@@ -448,9 +479,13 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
           <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Sub-assemblies</div>
           <div className="text-2xl font-bold text-gray-900 mt-1">${subAssemblyCost.toFixed(2)}</div>
         </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Fabricated parts</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">${fabricatedCost.toFixed(2)}</div>
+        </div>
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wide text-blue-700 font-medium">Total cost per unit</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">${(materialCost + partCost + subAssemblyCost).toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">${(materialCost + partCost + subAssemblyCost + fabricatedCost).toFixed(2)}</div>
           <div className="text-xs text-gray-500 mt-1">Labor not included</div>
         </div>
       </div>
@@ -672,13 +707,16 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
       {/* ---------------- Sub-Assemblies ---------------- */}
       <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
-          <h3 className="text-base font-semibold text-gray-900">Sub-Assemblies</h3>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Sub-Assemblies</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Complete parts that you could sell on their own, used here as components.</p>
+          </div>
           {!addingSub && (
             <button onClick={openAddSub} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
           )}
         </div>
 
-        {subs.length > 0 ? (
+        {subRows.length > 0 ? (
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -691,7 +729,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               </tr>
             </thead>
             <tbody>
-              {subs.map((s) => {
+              {subRows.map((s) => {
                 const costPerSub = subAssemblyCosts[s.child_template_id] || 0;
                 const unitCost = Number(s.quantity_per_unit) * costPerSub;
                 const isEditing = editingId === s.id;
@@ -723,7 +761,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
                       ) : (
                         <>
                           <button onClick={() => startEdit(s.id, Number(s.quantity_per_unit), s.notes)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
-                          <button onClick={() => deleteSub(s.id)} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                          <button onClick={() => deleteChild(s.id, "sub-assembly")} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
                         </>
                       )}
                     </td>
@@ -750,10 +788,10 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md bg-white divide-y divide-gray-100">
-              {availableTemplates.length === 0 ? (
+              {availableSubTemplates.length === 0 ? (
                 <p className="px-3 py-3 text-sm text-gray-500">No matching templates available.</p>
               ) : (
-                availableTemplates.map((t) => (
+                availableSubTemplates.map((t) => (
                   <label key={t.id} className="flex items-center gap-3 px-3 py-2 hover:bg-blue-50 cursor-pointer">
                     <input
                       type="checkbox"
@@ -768,8 +806,118 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setAddingSub(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
-              <button type="button" onClick={addSubsBatch} disabled={savingAdd || subChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+              <button type="button" onClick={() => addChildrenBatch(subChecked, "sub-assembly", () => setAddingSub(false))} disabled={savingAdd || subChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
                 {savingAdd ? "Adding..." : "Add selected (" + subChecked.size + ")"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ---------------- Fabricated Parts ---------------- */}
+      <section className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Fabricated Parts</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Pieces of this assembly that you make in-house and never sell on their own.</p>
+          </div>
+          {!addingFab && (
+            <button onClick={openAddFab} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add</button>
+          )}
+        </div>
+
+        {fabRows.length > 0 ? (
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Fabricated part</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Qty / unit</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / part</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / unit</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fabRows.map((s) => {
+                const costPerPart = subAssemblyCosts[s.child_template_id] || 0;
+                const unitCost = Number(s.quantity_per_unit) * costPerPart;
+                const isEditing = editingId === s.id;
+                return (
+                  <tr key={s.id} className="border-b border-gray-100 last:border-0">
+                    <td className="px-4 py-3 text-sm text-gray-900">{s.product_templates?.name || "Unknown"}{s.product_templates?.product_number ? " (" + s.product_templates.product_number + ")" : ""}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">
+                      {isEditing ? (
+                        <input type="number" step="0.01" min="0" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
+                      ) : (
+                        Number(s.quantity_per_unit).toFixed(2)
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${costPerPart.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">
+                      {isEditing ? (
+                        <input type="text" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-gray-900" />
+                      ) : (
+                        s.notes || "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {isEditing ? (
+                        <>
+                          <button onClick={() => saveEditSub(s.id)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Save</button>
+                          <button onClick={cancelEdit} className="text-gray-600 hover:text-gray-900 font-medium">Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(s.id, Number(s.quantity_per_unit), s.notes)} className="text-blue-600 hover:text-blue-800 font-medium mr-3">Edit</button>
+                          <button onClick={() => deleteChild(s.id, "fabricated part")} className="text-red-600 hover:text-red-800 font-medium">Remove</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          !addingFab && <p className="px-4 py-6 text-sm text-gray-600">No fabricated parts added yet.</p>
+        )}
+
+        {addingFab && (
+          <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold text-gray-900">Select fabricated parts to add (each starts at 1/unit &mdash; edit after)</h4>
+              <span className="text-xs text-gray-500">{fabChecked.size} selected</span>
+            </div>
+            <input
+              type="text"
+              placeholder="Search fabricated parts..."
+              value={fabSearch}
+              onChange={(e) => setFabSearch(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md bg-white divide-y divide-gray-100">
+              {availableFabTemplates.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-gray-500">No matching fabricated parts available.</p>
+              ) : (
+                availableFabTemplates.map((t) => (
+                  <label key={t.id} className="flex items-center gap-3 px-3 py-2 hover:bg-blue-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={fabChecked.has(t.id)}
+                      onChange={() => toggle(fabChecked, t.id, setFabChecked)}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-900">{t.name}{t.product_number ? " (" + t.product_number + ")" : ""}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setAddingFab(false)} className="px-3 py-1.5 text-gray-700 hover:bg-gray-100 rounded-md text-sm font-medium">Cancel</button>
+              <button type="button" onClick={() => addChildrenBatch(fabChecked, "fabricated part", () => setAddingFab(false))} disabled={savingAdd || fabChecked.size === 0} className="px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm font-medium disabled:opacity-50">
+                {savingAdd ? "Adding..." : "Add selected (" + fabChecked.size + ")"}
               </button>
             </div>
           </div>

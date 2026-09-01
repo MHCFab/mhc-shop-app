@@ -84,7 +84,7 @@ export default function OverviewTab({
         .from("product_templates")
         .select("id, name, product_number")
         .eq("is_active", true)
-        .eq("is_sub_assembly", false)
+        .neq("template_type", "fabricated")
         .eq("customer_id", job.customer_id)
         .order("name");
       setTemplates((tplData || []) as unknown as TemplateOption[]);
