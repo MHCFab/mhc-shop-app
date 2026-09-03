@@ -51,13 +51,13 @@ export default function LegalPage({
 
       <footer className="max-w-3xl mx-auto px-6 pb-12 pt-4 text-sm text-gray-500 border-t border-gray-200 mt-8">
         <p>
-          ShopWorks is operated by [LEGAL ENTITY NAME]. Questions about this
+          ShopWorks is operated by Mad House Customs LLC. Questions about this
           document can go to{" "}
           <a
-            href="mailto:[CONTACT EMAIL]"
+            href="mailto:support@mhcfab.com"
             className="text-blue-600 hover:underline"
           >
-            [CONTACT EMAIL]
+            support@mhcfab.com
           </a>
           .
         </p>

@@ -9,18 +9,19 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" effectiveDate="[EFFECTIVE DATE]">
+    <LegalPage title="Privacy Policy" effectiveDate="September 3, 2026">
       <p className="bg-amber-50 border border-amber-200 rounded-md p-4 text-sm text-amber-900">
-        <strong>Draft.</strong> This document has not been reviewed by a
-        lawyer. Every bracketed item below needs to be filled in, and the whole
-        thing should be read by counsel before an outside shop signs up.
+        <strong>Pending legal review.</strong> This document describes how
+        ShopWorks actually works and who operates it, but it has not yet been
+        read by a lawyer. It will be reviewed before any shop outside MHC Fab
+        signs up.
       </p>
 
       <p>
         This policy explains what information ShopWorks handles, why, and who
-        else touches it. ShopWorks is operated by [LEGAL ENTITY NAME] (
+        else touches it. ShopWorks is operated by Mad House Customs LLC (
         <strong>we</strong>, <strong>us</strong>). It covers the ShopWorks
-        application at [WEBSITE], including the shop floor screens, the admin
+        application at shopworks.app, including the shop floor screens, the admin
         area, and the customer portal.
       </p>
 
@@ -103,19 +104,15 @@ export default function PrivacyPage() {
           <li>
             <strong>Supabase</strong> — the database, login system, file
             storage for photos and drawings, and the delivery of invitation and
-            password-reset emails. Data is stored in [REGION].
+            password-reset emails. Data is stored in the United States.
           </li>
           <li>
             <strong>Vercel</strong> — hosting and delivery of the application
             itself.
           </li>
           <li>
-            <strong>[PAYMENT PROCESSOR]</strong> — subscription payments. Card
+            <strong>Stripe</strong> — subscription payments. Card
             details go to them directly and are never stored by ShopWorks.
-          </li>
-          <li>
-            <strong>[EMAIL PROVIDER, IF SEPARATE]</strong> — sending
-            application email.
           </li>
         </ul>
         <p>
@@ -135,7 +132,7 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-6 space-y-2">
           <li>
             Your shop&apos;s working data is kept for as long as the account is
-            active, and for at least [90] days after a subscription ends, so
+            active, and for at least 90 days after a subscription ends, so
             that paying again restores everything.
           </li>
           <li>
@@ -143,15 +140,15 @@ export default function PrivacyPage() {
             belong to has been invoiced. The totals stay on the job; the
             individual clock-in records do not.
           </li>
-          <li>Technical logs are kept for [30-90] days.</li>
+          <li>Technical logs are kept for 30 to 90 days.</li>
           <li>
             Account and billing records are kept for as long as the law
-            requires, typically [7] years.
+            requires, typically 7 years.
           </li>
         </ul>
         <p>
           An administrator can delete records inside the app at any time. To
-          have an entire shop&apos;s data erased, write to [CONTACT EMAIL].
+          have an entire shop&apos;s data erased, write to support@mhcfab.com.
         </p>
       </Section>
 
@@ -182,7 +179,7 @@ export default function PrivacyPage() {
           If you log in as an employee or through a customer portal, the shop
           that invited you decides what is recorded about you and why. Requests
           to see, correct, or delete that information should go to that shop
-          first. If you cannot reach them, write to us at [CONTACT EMAIL] and we
+          first. If you cannot reach them, write to us at support@mhcfab.com and we
           will help where we are able to.
         </p>
         <p>
@@ -204,22 +201,22 @@ export default function PrivacyPage() {
         <p>
           We may update this policy. If a change materially affects how your
           information is handled, we will email the account administrator at
-          least [30] days beforehand. The effective date at the top of this page
+          least 30 days beforehand. The effective date at the top of this page
           always shows the current version.
         </p>
       </Section>
 
       <Section n={10} heading="Contact">
         <p>
-          [LEGAL ENTITY NAME]
+          Mad House Customs LLC
           <br />
-          [MAILING ADDRESS]
+          115 Scotsway Ct, Troutman, NC 28166
           <br />
           <a
-            href="mailto:[CONTACT EMAIL]"
+            href="mailto:support@mhcfab.com"
             className="text-blue-600 hover:underline"
           >
-            [CONTACT EMAIL]
+            support@mhcfab.com
           </a>
         </p>
         <p>

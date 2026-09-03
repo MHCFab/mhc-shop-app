@@ -9,16 +9,17 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" effectiveDate="[EFFECTIVE DATE]">
+    <LegalPage title="Terms of Service" effectiveDate="September 3, 2026">
       <p className="bg-amber-50 border border-amber-200 rounded-md p-4 text-sm text-amber-900">
-        <strong>Draft.</strong> This document has not been reviewed by a
-        lawyer. Every bracketed item below needs to be filled in, and the whole
-        thing should be read by counsel before an outside shop signs up.
+        <strong>Pending legal review.</strong> This document describes how
+        ShopWorks actually works and who operates it, but it has not yet been
+        read by a lawyer. It will be reviewed before any shop outside MHC Fab
+        signs up.
       </p>
 
       <p>
         These Terms of Service (the <strong>Terms</strong>) are an agreement
-        between [LEGAL ENTITY NAME], a [STATE] [ENTITY TYPE] (
+        between Mad House Customs LLC, a North Carolina limited liability company (
         <strong>we</strong>, <strong>us</strong>), and the business that signs
         up for ShopWorks (<strong>you</strong>, <strong>your shop</strong>). By
         creating an account, signing in, or letting anyone at your shop use
@@ -53,7 +54,7 @@ export default function TermsPage() {
           someone leaves your shop, remove their login. Deactivating a login
           inside the app is not the same as removing it. You are responsible
           for keeping passwords confidential and for telling us promptly at
-          [CONTACT EMAIL] if you believe an account has been compromised.
+          support@mhcfab.com if you believe an account has been compromised.
         </p>
         <p>
           Everyone who uses ShopWorks must be old enough to work lawfully for
@@ -79,8 +80,8 @@ export default function TermsPage() {
         </p>
         <p>
           You may ask us for a copy of your data at any time while your
-          subscription is active, and for [30] days after it ends. Ask at
-          [CONTACT EMAIL].
+          subscription is active, and for 30 days after it ends. Ask at
+          support@mhcfab.com.
         </p>
       </Section>
 
@@ -112,13 +113,13 @@ export default function TermsPage() {
 
       <Section n={5} heading="Trial, subscription, and payment">
         <p>
-          New shops get a [14]-day trial at no cost and without a card. At the
+          New shops get a 14-day trial at no cost and without a card. At the
           end of the trial, continued use requires a paid subscription.
         </p>
         <p>
-          Subscriptions are billed [monthly] in advance at the price shown when
+          Subscriptions are billed monthly in advance at the price shown when
           you subscribe. Fees are non-refundable except where the law requires
-          otherwise. We may change prices with at least [30] days notice, which
+          otherwise. We may change prices with at least 30 days notice, which
           takes effect at your next renewal. Any applicable taxes are yours to
           pay.
         </p>
@@ -132,7 +133,7 @@ export default function TermsPage() {
         <p>
           If a subscription lapses, your shop&apos;s access is locked — not
           deleted. Your data stays where it is, and paying restores access to
-          it. We will keep a locked-out shop&apos;s data for at least [90] days
+          it. We will keep a locked-out shop&apos;s data for at least 90 days
           before it becomes eligible for deletion, and we will email the
           account administrator before deleting anything.
         </p>
@@ -154,8 +155,8 @@ export default function TermsPage() {
           recovers everything in every circumstance.
         </p>
         <p>
-          Support is provided by email at [CONTACT EMAIL] during normal
-          business hours, [BUSINESS HOURS / TIME ZONE].
+          Support is provided by email at support@mhcfab.com during normal
+          business hours, Monday through Friday, 7am to 4pm Eastern.
         </p>
       </Section>
 
@@ -211,7 +212,7 @@ export default function TermsPage() {
           indirect, incidental, special, consequential, or punitive damages, or
           for lost profits, lost revenue, or lost data. Our total liability for
           any claim arising out of or relating to these Terms is limited to the
-          amount you paid us for ShopWorks in the [12] months before the event
+          amount you paid us for ShopWorks in the 12 months before the event
           giving rise to the claim.
         </p>
         <p>
@@ -231,7 +232,7 @@ export default function TermsPage() {
       <Section n={14} heading="Changes to these Terms">
         <p>
           We may update these Terms. If a change materially affects you, we
-          will email the account administrator at least [30] days before it
+          will email the account administrator at least 30 days before it
           takes effect. Continuing to use ShopWorks after that means you accept
           the updated Terms. The effective date at the top of this page always
           shows the current version.
@@ -240,24 +241,24 @@ export default function TermsPage() {
 
       <Section n={15} heading="Governing law">
         <p>
-          These Terms are governed by the laws of the State of [STATE], without
+          These Terms are governed by the laws of the State of North Carolina, without
           regard to its conflict of laws rules. Any dispute will be brought in
-          the state or federal courts located in [COUNTY, STATE], and both
+          the state or federal courts located in Iredell County, North Carolina, and both
           parties consent to that jurisdiction.
         </p>
       </Section>
 
       <Section n={16} heading="Contact">
         <p>
-          [LEGAL ENTITY NAME]
+          Mad House Customs LLC
           <br />
-          [MAILING ADDRESS]
+          115 Scotsway Ct, Troutman, NC 28166
           <br />
           <a
-            href="mailto:[CONTACT EMAIL]"
+            href="mailto:support@mhcfab.com"
             className="text-blue-600 hover:underline"
           >
-            [CONTACT EMAIL]
+            support@mhcfab.com
           </a>
         </p>
       </Section>
