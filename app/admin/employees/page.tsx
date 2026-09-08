@@ -14,6 +14,9 @@ type Employee = {
   email: string;
   full_name: string | null;
   role: string;
+  // "active", "inactive", or "pending" - somebody who already had a ShopWorks
+  // login when you invited them, and has not accepted yet.
+  status: string;
   is_active: boolean;
   created_at: string;
 };
@@ -101,6 +104,7 @@ export default function EmployeesPage() {
           email: person.email,
           full_name: person.full_name,
           role: m.role,
+          status: m.status,
           is_active: m.status === "active",
           created_at: person.created_at,
         });
@@ -144,7 +148,13 @@ export default function EmployeesPage() {
         setInviting(false);
         return;
       }
-      setInviteSuccess("Invite sent to " + inviteEmail.trim() + ".");
+      if (data.alreadyAsked) {
+        setInviteSuccess(inviteEmail.trim() + " has already been asked to join your shop. They will see the request next time they sign in to ShopWorks.");
+      } else if (data.pendingMembership) {
+        setInviteSuccess(inviteEmail.trim() + " already has a ShopWorks login, so there is nothing to set up - they have been asked to join your shop and will see the request next time they sign in. No email goes out for this, so it is worth telling them.");
+      } else {
+        setInviteSuccess("Invite sent to " + inviteEmail.trim() + ".");
+      }
       setInviteEmail("");
       setInviteName("");
       setInviting(false);
@@ -333,8 +343,13 @@ export default function EmployeesPage() {
   // looking like they contradict each other.
   const awaitingPassword = new Set(invitations.map((inv) => inv.email.toLowerCase()));
 
+  // Somebody who has been asked to join but has not answered yet is not
+  // "inactive" - nobody switched them off. They sit with the active list under
+  // their own badge until they accept or decline.
   const visibleEmployees = employees.filter((e) =>
-    statusFilter === "active" ? e.is_active : !e.is_active
+    statusFilter === "active"
+      ? e.status === "active" || e.status === "pending"
+      : e.status === "inactive"
   );
 
   if (loading) {
@@ -451,7 +466,10 @@ export default function EmployeesPage() {
                       <span className={"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium " + (emp.role === "admin" ? "bg-purple-100 text-purple-800" : "bg-gray-100 text-gray-700")}>
                         {emp.role === "admin" ? "Admin" : "Employee"}
                       </span>
-                      {awaitingPassword.has(emp.email.toLowerCase()) && (
+                      {emp.status === "pending" && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 ml-2">Waiting for them to accept</span>
+                      )}
+                      {emp.status !== "pending" && awaitingPassword.has(emp.email.toLowerCase()) && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ml-2">Awaiting password</span>
                       )}
                     </td>

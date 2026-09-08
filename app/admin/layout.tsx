@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "../lib/supabase-server";
 import NavBar from "../components/NavBar";
+import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
 
 export default async function AdminLayout({
   children,
@@ -40,8 +41,13 @@ export default async function AdminLayout({
     company = companyData;
   }
 
+  // Which shops this person belongs to. Renders nothing at all unless they
+  // belong to more than one, or another shop has asked to add them.
+  const { data: membershipRows } = await supabase.rpc("my_memberships");
+
   return (
     <>
+      <ShopSwitcher memberships={(membershipRows || []) as unknown as Membership[]} />
       {profile && <NavBar profile={profile} company={company} />}
       <main>{children}</main>
     </>

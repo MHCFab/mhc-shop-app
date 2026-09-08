@@ -23,6 +23,9 @@ type PortalUser = {
   membershipId: string;
   email: string;
   full_name: string | null;
+  // "active", "inactive", or "pending" - somebody who already had a ShopWorks
+  // login when you invited them, and has not accepted yet.
+  status: string;
   is_active: boolean;
   created_at: string;
 };
@@ -183,6 +186,7 @@ export default function CustomersPage() {
         membershipId: m.id,
         email: person.email,
         full_name: person.full_name,
+        status: m.status,
         is_active: m.status === "active",
         created_at: person.created_at,
       });
@@ -288,10 +292,16 @@ export default function CustomersPage() {
         }
         setInviteError(msg);
       } else {
-        setInviteSuccess(
-          "Invite sent to " + email + ". They'll get an email with a link to set their password." +
-          (body.warning ? " (" + body.warning + ")" : "")
-        );
+        if (body.alreadyAsked) {
+          setInviteSuccess(email + " has already been asked to join. They will see the request next time they sign in to ShopWorks.");
+        } else if (body.pendingMembership) {
+          setInviteSuccess(email + " already has a ShopWorks login, so there is no password to set. They have been asked for portal access here and will see the request next time they sign in. No email goes out for this, so it is worth telling them.");
+        } else {
+          setInviteSuccess(
+            "Invite sent to " + email + ". They'll get an email with a link to set their password." +
+            (body.warning ? " (" + body.warning + ")" : "")
+          );
+        }
         setInviteEmail("");
         setInviteName("");
         await loadPortalUsers(portalFor.id);
@@ -577,20 +587,24 @@ export default function CustomersPage() {
                           <p className="text-xs text-gray-500 truncate">{u.email}</p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          {awaiting ? (
+                          {u.status === "pending" ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">Waiting for them to accept</span>
+                          ) : awaiting ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Awaiting password</span>
                           ) : u.is_active ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Disabled</span>
                           )}
-                          <button
-                            onClick={() => toggleUserActive(u)}
-                            disabled={busy}
-                            className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
-                          >
-                            {u.is_active ? "Disable" : "Enable"}
-                          </button>
+                          {u.status !== "pending" && (
+                            <button
+                              onClick={() => toggleUserActive(u)}
+                              disabled={busy}
+                              className="text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                            >
+                              {u.is_active ? "Disable" : "Enable"}
+                            </button>
+                          )}
                           <button
                             onClick={() => removeUser(u)}
                             disabled={busy}

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createServerSupabaseClient } from "../lib/supabase-server";
 import PortalSignOut from "./PortalSignOut";
 import UnreadNavBadge from "../components/UnreadNavBadge";
+import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabaseClient();
@@ -23,9 +24,19 @@ export default async function PortalLayout({ children }: { children: React.React
     redirect("/");
   }
 
-  // Disabled portal accounts get a clear message instead of empty pages
+  // Which shops this person belongs to. Renders nothing at all unless they
+  // belong to more than one, or another shop has asked to add them.
+  const { data: membershipRows } = await supabase.rpc("my_memberships");
+  const memberships = (membershipRows || []) as unknown as Membership[];
+
+  // Disabled portal accounts get a clear message instead of empty pages.
+  // The switcher goes here too: somebody switched off by this shop, but invited
+  // by another one, would otherwise be stuck on this screen with no way to
+  // accept and get out.
   if (!profile?.is_active) {
     return (
+      <>
+      <ShopSwitcher memberships={memberships} />
       <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm max-w-md w-full p-8 text-center">
           <h1 className="text-xl font-bold text-gray-900 mb-2">Portal access disabled</h1>
@@ -36,6 +47,7 @@ export default async function PortalLayout({ children }: { children: React.React
           <PortalSignOut />
         </div>
       </div>
+      </>
     );
   }
 
@@ -51,6 +63,7 @@ export default async function PortalLayout({ children }: { children: React.React
 
   return (
     <div className="min-h-screen bg-gray-100">
+      <ShopSwitcher memberships={memberships} />
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>

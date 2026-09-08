@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerSupabaseClient } from "../lib/supabase-server";
 import FloorSignOut from "./FloorSignOut";
+import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
 
 export default async function FloorLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabaseClient();
@@ -25,8 +26,13 @@ export default async function FloorLayout({ children }: { children: React.ReactN
 
   const isAdmin = profile?.role === "admin";
 
+  // Which shops this person belongs to. Renders nothing at all unless they
+  // belong to more than one, or another shop has asked to add them.
+  const { data: membershipRows } = await supabase.rpc("my_memberships");
+
   return (
     <div className="min-h-screen bg-gray-100">
+      <ShopSwitcher memberships={(membershipRows || []) as unknown as Membership[]} />
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
