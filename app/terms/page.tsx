@@ -10,13 +10,6 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return (
     <LegalPage title="Terms of Service" effectiveDate="September 3, 2026">
-      <p className="bg-amber-50 border border-amber-200 rounded-md p-4 text-sm text-amber-900">
-        <strong>Pending legal review.</strong> This document describes how
-        ShopWorks actually works and who operates it, but it has not yet been
-        read by a lawyer. It will be reviewed before any shop outside MHC Fab
-        signs up.
-      </p>
-
       <p>
         These Terms of Service (the <strong>Terms</strong>) are an agreement
         between Mad House Customs LLC, a North Carolina limited liability company (
