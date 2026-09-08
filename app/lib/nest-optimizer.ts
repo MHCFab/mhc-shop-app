@@ -71,7 +71,7 @@ export type NestSettings = {
   trimStart: number;
   trimEnd: number;
   minDrop: number;
-  /** What a usable leftover is worth when scoring: 0 = burn the stick, 1 = full credit. */
+  /** What a usable leftover is worth when scoring: 0 = burn the stick, 1 = full credit (the default). */
   dropCredit: number;
   allowFlip: boolean;
   iterations: number;
@@ -466,11 +466,14 @@ function mulberry32(seed: number): () => number {
 /* ------------------------------------------------------------------ */
 
 export const NEST_DEFAULTS: NestSettings = {
-  kerf: 0.125,
+  kerf: 0.035,
   trimStart: 0,
   trimEnd: 0,
   minDrop: 12,
-  dropCredit: 0.5,
+  // Full credit: a leftover longer than minDrop goes back on the rack whole, so
+  // it costs the job nothing. Nests that leave one long usable drop therefore
+  // beat nests that leave several short unusable ones.
+  dropCredit: 1,
   allowFlip: true,
   iterations: 900,
   timeBudgetMs: 700,

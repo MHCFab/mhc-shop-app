@@ -42,11 +42,11 @@ type NestSettingsRow = {
 };
 
 const DEFAULT_SETTINGS: NestSettingsRow = {
-  kerf: "0.125",
+  kerf: "0.035",
   minDrop: "12",
   trimStart: "0",
   trimEnd: "0",
-  dropCredit: "0.5",
+  dropCredit: "1",
   effort: "normal",
   depth: "",
 };
@@ -635,9 +635,9 @@ export default function CuttingNestOptimizer({
               <label className="block text-xs font-medium text-gray-700 mb-1">A usable drop is worth</label>
               <select value={settings.dropCredit} onChange={(e) => setSettings({ ...settings, dropCredit: e.target.value })}
                 className="w-full px-2 py-1.5 border border-gray-300 rounded text-gray-900 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="0">Nothing &mdash; burn the stick</option>
-                <option value="0.5">Half &mdash; the honest middle</option>
-                <option value="1">Full &mdash; back on the rack</option>
+                <option value="1">Full &mdash; it goes back on the rack</option>
+                <option value="0.5">Half &mdash; split the difference</option>
+                <option value="0">Nothing &mdash; count the whole stick</option>
               </select>
             </div>
             <div>

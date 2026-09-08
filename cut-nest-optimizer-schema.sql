@@ -48,11 +48,11 @@ ALTER TABLE public.jobs
 -- ------------------------------------------------------------
 -- 2. Shop-wide saw defaults
 -- ------------------------------------------------------------
--- Kerf 1/8" is the usual cold-saw / bandsaw blade. Min usable
--- drop 12" means anything shorter than a foot is scrap, not
--- something worth racking. Both are editable per nest later.
+-- Kerf .035 is MHC's bandsaw blade. Min usable drop 12" means
+-- anything shorter than a foot is scrap, not something worth
+-- racking. Both are editable per nest later.
 ALTER TABLE public.companies
-  ADD COLUMN IF NOT EXISTS nest_kerf_inches     numeric NOT NULL DEFAULT 0.125,
+  ADD COLUMN IF NOT EXISTS nest_kerf_inches     numeric NOT NULL DEFAULT 0.035,
   ADD COLUMN IF NOT EXISTS nest_min_drop_inches numeric NOT NULL DEFAULT 12;
 
 
@@ -130,15 +130,16 @@ CREATE TABLE IF NOT EXISTS public.job_cut_nests (
 
   -- Settings this nest was optimized with. They start from your
   -- shop defaults and can be nudged per nest.
-  kerf_inches       numeric NOT NULL DEFAULT 0.125 CHECK (kerf_inches >= 0),
+  kerf_inches       numeric NOT NULL DEFAULT 0.035 CHECK (kerf_inches >= 0),
   min_drop_inches   numeric NOT NULL DEFAULT 12    CHECK (min_drop_inches >= 0),
   trim_start_inches numeric NOT NULL DEFAULT 0     CHECK (trim_start_inches >= 0),
   trim_end_inches   numeric NOT NULL DEFAULT 0     CHECK (trim_end_inches >= 0),
 
   -- How much a usable leftover is worth when scoring a nest:
-  -- 0 = burn the whole stick, 1 = it goes back on the rack whole,
-  -- 0.5 = the honest middle, and the default.
-  drop_credit numeric NOT NULL DEFAULT 0.5 CHECK (drop_credit >= 0 AND drop_credit <= 1),
+  -- 0 = burn the whole stick, 0.5 = split the difference,
+  -- 1 = it goes back on the rack whole, and the default: anything
+  -- longer than the min usable drop is saved, so it costs nothing.
+  drop_credit numeric NOT NULL DEFAULT 1 CHECK (drop_credit >= 0 AND drop_credit <= 1),
 
   effort text NOT NULL DEFAULT 'normal' CHECK (effort IN ('quick', 'normal', 'thorough')),
 

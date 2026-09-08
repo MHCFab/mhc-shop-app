@@ -74,7 +74,7 @@ export default function CuttingNestTab({
   const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
   const [trackDrops, setTrackDrops] = useState(true);
   const [nestOn, setNestOn] = useState<Record<string, boolean>>({});
-  const [companyKerf, setCompanyKerf] = useState(0.125);
+  const [companyKerf, setCompanyKerf] = useState(0.035);
   const [companyMinDrop, setCompanyMinDrop] = useState(12);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
