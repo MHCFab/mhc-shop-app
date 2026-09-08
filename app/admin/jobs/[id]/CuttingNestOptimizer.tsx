@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "../../../lib/supabase";
 import { pullSticks, saveDrop } from "../../../lib/inventory";
+import NestSticksView from "../../../components/NestSticksView";
 import {
   optimizeNest,
   planToInventoryOps,
@@ -741,85 +742,7 @@ export default function CuttingNestOptimizer({
             to bottom so the lean is visible &mdash; a half-inch of miter on a 20-foot stick is otherwise a hair.
           </div>
 
-          <div className="divide-y divide-gray-100">
-            {plan.sticks.map((st, i) => {
-              return (
-                <div key={i} className="p-3">
-                  <div className="flex items-baseline gap-3 flex-wrap mb-2">
-                    <span className="text-sm font-semibold text-gray-900">Stick {i + 1}</span>
-                    <span className="text-sm text-gray-600 font-mono">{inches(st.stockLength)}</span>
-                    <span className="ml-auto text-xs font-mono text-gray-500">
-                      used {inches(st.consumed)} &middot; drop {inches(st.drop)}{" "}
-                      {st.usableDrop ? (
-                        <span className="text-green-700">back on the rack</span>
-                      ) : (
-                        <span className="text-amber-700">scrap</span>
-                      )}
-                    </span>
-                  </div>
-
-                  {/* One bar per stick. Each piece is drawn as the four-sided shape
-                      it really is: the bottom face runs pBottom -> qBottom, and the
-                      top face is shifted by the miter offset at each end. So a
-                      mitered end leans, and two ends cut in one blade pass share an
-                      edge instead of sitting square against each other. */}
-                  <div className="relative h-12 w-full bg-gray-100 border border-gray-300 rounded-sm overflow-hidden">
-                    <svg
-                      viewBox={"0 0 " + st.stockLength + " " + vbDepth}
-                      preserveAspectRatio="none"
-                      className="absolute inset-0 h-full w-full"
-                      aria-hidden="true"
-                    >
-                      {st.pieces.map((p, j) => (
-                        <polygon
-                          key={j}
-                          points={
-                            (p.pBottom + p.sLead) + ",0 " +
-                            (p.qBottom + p.sTrail) + ",0 " +
-                            p.qBottom + "," + vbDepth + " " +
-                            p.pBottom + "," + vbDepth
-                          }
-                          fill={p.sharedCut ? "#a5c8fb" : "#bfdbfe"}
-                          stroke="#2563eb"
-                          strokeWidth={1}
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
-                    </svg>
-                    {st.pieces.map((p, j) => (
-                      <span
-                        key={j}
-                        title={p.label + " " + inches(p.length) + (p.sharedCut ? " — shares the previous cut" : "")}
-                        className="pointer-events-none absolute top-1/2 -translate-y-1/2 truncate px-0.5 text-center text-[10px] font-medium text-blue-900"
-                        style={{
-                          left: (p.startX / st.stockLength) * 100 + "%",
-                          width: ((p.endX - p.startX) / st.stockLength) * 100 + "%",
-                        }}
-                      >
-                        {p.label}
-                      </span>
-                    ))}
-                  </div>
-
-                  <table className="w-full text-sm mt-2">
-                    <tbody>
-                      {st.pieces.map((p, j) => (
-                        <tr key={j} className="border-t border-gray-100 first:border-t-0">
-                          <td className="py-1 text-gray-900">{p.label}</td>
-                          <td className="py-1 font-mono text-gray-700">{inches(p.length)}</td>
-                          <td className="py-1 text-xs text-gray-500">
-                            {p.sLead || p.sTrail ? "mitered" : "square"}
-                            {p.sharedCut ? " · shares the previous cut" : ""}
-                            {p.flipped ? " · turned" : ""}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })}
-          </div>
+          <NestSticksView sticks={plan.sticks} fallbackDepth={vbDepth} />
         </div>
       )}
     </div>

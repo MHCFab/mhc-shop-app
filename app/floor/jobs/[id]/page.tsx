@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createClient } from "../../../lib/supabase";
 import { getAvailableLengths, pullSticks, saveDrop } from "../../../lib/inventory";
+import NestSticksView from "../../../components/NestSticksView";
+import { type NestResult } from "../../../lib/nest-optimizer";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -33,7 +35,7 @@ type LineItem = {
   product_templates: { id: string; name: string; product_number: string | null } | null;
 };
 
-type Tab = "tasks" | "info" | "picklist";
+type Tab = "tasks" | "info" | "picklist" | "cutnest";
 
 export default function FloorJobDetail() {
   const params = useParams<{ id: string }>();
@@ -148,6 +150,7 @@ export default function FloorJobDetail() {
     { value: "tasks", label: "Tasks" },
     { value: "info", label: "Product Info" },
     { value: "picklist", label: "Materials" },
+    { value: "cutnest", label: "Cut Nest" },
   ];
 
   // Nothing on this job is reachable until the notes have been read.
@@ -221,6 +224,7 @@ export default function FloorJobDetail() {
           )}
           {tab === "info" && <FloorInfo lineItems={lineItems} />}
           {tab === "picklist" && <FloorPickList jobId={job.id} />}
+          {tab === "cutnest" && <FloorCutNest jobId={job.id} />}
         </>
       )}
     </div>
@@ -875,6 +879,102 @@ function FloorPickList({ jobId }: { jobId: string }) {
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------- Cut Nest (read-only) ----------------
+
+// What the floor sees of the cutting nest: the same to-scale stick drawings
+// and cut lists the office optimized, and nothing else. No settings, no
+// buttons, no costs. A nest only appears here once the office has APPLIED it
+// to inventory - an applied plan is a released plan. Anything still being
+// tinkered with stays out of the shop's hands.
+
+type FloorNest = {
+  id: string;
+  raw_material_id: string;
+  depth_inches: number | null;
+  applied_at: string | null;
+  result: NestResult | null;
+  raw_materials: { shape: string; size: string; wall_thickness: string | null; grade: string } | null;
+};
+
+function FloorCutNest({ jobId }: { jobId: string }) {
+  const supabase = createClient();
+  const [nests, setNests] = useState<FloorNest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("job_cut_nests")
+      .select("id, raw_material_id, depth_inches, applied_at, result, raw_materials(shape, size, wall_thickness, grade)")
+      .eq("job_id", jobId)
+      .not("applied_at", "is", null);
+    setNests((data || []) as unknown as FloorNest[]);
+    setLoading(false);
+  }, [supabase, jobId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function materialLabel(n: FloorNest) {
+    const m = n.raw_materials;
+    if (!m) return "Material";
+    const wall = m.wall_thickness ? " x " + m.wall_thickness : "";
+    const grade = m.grade ? " (" + m.grade + ")" : "";
+    return (SHAPES_MAP[m.shape] || m.shape) + " " + m.size + wall + grade;
+  }
+
+  if (loading) return <p className="text-gray-600">Loading cut nest...</p>;
+
+  // Only nests that actually produced sticks are worth showing.
+  const ready = nests
+    .filter((n) => n.result && Array.isArray(n.result.sticks) && n.result.sticks.length > 0)
+    .sort((a, b) => materialLabel(a).localeCompare(materialLabel(b)));
+
+  if (ready.length === 0) {
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg p-6 text-center">
+        <p className="text-gray-700 font-medium">No cut nest released for this job yet.</p>
+        <p className="text-sm text-gray-500 mt-1">
+          Cut the way the Materials tab lists it. If a nest gets released while you are working, it shows up here.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-900">
+        Cut these sticks in this order. Each bar is drawn to scale along its length, and mitered ends lean
+        the way they sit in the saw. Where two pieces meet on one line, that is a single blade pass &mdash;
+        do not cut it twice. Lengths are LONG POINT, in inches.
+      </div>
+
+      {ready.map((n) => {
+        const sticks = n.result!.sticks;
+        const keep = sticks.filter((s) => s.usableDrop).length;
+        return (
+          <div key={n.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <div className="font-semibold text-gray-900">{materialLabel(n)}</div>
+              <div className="text-sm text-gray-600 mt-0.5">
+                {sticks.length} stick{sticks.length === 1 ? "" : "s"}
+                {keep > 0 ? " · " + keep + " drop" + (keep === 1 ? "" : "s") + " back on the rack" : ""}
+              </div>
+            </div>
+            <NestSticksView
+              sticks={sticks}
+              fallbackDepth={n.depth_inches || 1}
+              showAngles
+              large
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
