@@ -8,6 +8,7 @@ import {
   saveDrop,
   reverseCuttingNestEntry,
 } from "../../../lib/inventory";
+import CuttingNestOptimizer from "./CuttingNestOptimizer";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -26,6 +27,7 @@ type RawMat = {
   wall_thickness: string | null;
   grade: string;
   current_cost_per_foot: number;
+  nest_depth_inches: number | null;
 };
 
 type PickItem = {
@@ -71,6 +73,9 @@ export default function CuttingNestTab({
   const [jobNumber, setJobNumber] = useState("");
   const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
   const [trackDrops, setTrackDrops] = useState(true);
+  const [optimizerOn, setOptimizerOn] = useState(false);
+  const [companyKerf, setCompanyKerf] = useState(0.125);
+  const [companyMinDrop, setCompanyMinDrop] = useState(12);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -91,7 +96,7 @@ export default function CuttingNestTab({
     const [pickRes, entriesRes, jobRes] = await Promise.all([
       supabase
         .from("job_pick_list_items")
-        .select("id, raw_material_id, planned_quantity, raw_materials(id, shape, size, wall_thickness, grade, current_cost_per_foot)")
+        .select("id, raw_material_id, planned_quantity, raw_materials(id, shape, size, wall_thickness, grade, current_cost_per_foot, nest_depth_inches)")
         .eq("job_id", jobId)
         .eq("item_type", "raw_material"),
       supabase
@@ -99,7 +104,7 @@ export default function CuttingNestTab({
         .select("*")
         .eq("job_id", jobId)
         .order("created_at"),
-      supabase.from("jobs").select("job_number, cutting_nest_finalized_at").eq("id", jobId).single(),
+      supabase.from("jobs").select("job_number, cutting_nest_finalized_at, cut_optimizer_enabled").eq("id", jobId).single(),
     ]);
 
     
@@ -109,13 +114,18 @@ export default function CuttingNestTab({
     setEntries((entriesRes.data || []) as unknown as NestEntry[]);
     setJobNumber(jobRes.data?.job_number || "");
     setFinalizedAt(jobRes.data?.cutting_nest_finalized_at || null);
+    setOptimizerOn(jobRes.data?.cut_optimizer_enabled === true);
 
     const { data: { user: dropUser } } = await supabase.auth.getUser();
     if (dropUser) {
       const { data: dropProfile } = await supabase.from("profiles").select("company_id").eq("id", dropUser.id).single();
       if (dropProfile?.company_id) {
-        const { data: dropCo } = await supabase.from("companies").select("inv_track_drops").eq("id", dropProfile.company_id).single();
-        if (dropCo) setTrackDrops(dropCo.inv_track_drops !== false);
+        const { data: dropCo } = await supabase.from("companies").select("inv_track_drops, nest_kerf_inches, nest_min_drop_inches").eq("id", dropProfile.company_id).single();
+        if (dropCo) {
+          setTrackDrops(dropCo.inv_track_drops !== false);
+          if (dropCo.nest_kerf_inches !== null && dropCo.nest_kerf_inches !== undefined) setCompanyKerf(Number(dropCo.nest_kerf_inches));
+          if (dropCo.nest_min_drop_inches !== null && dropCo.nest_min_drop_inches !== undefined) setCompanyMinDrop(Number(dropCo.nest_min_drop_inches));
+        }
       }
     }
 
@@ -316,6 +326,13 @@ export default function CuttingNestTab({
     if (onChanged) onChanged();
   }
 
+  async function toggleOptimizer(next: boolean) {
+    setBusy(true);
+    setOptimizerOn(next);
+    await supabase.from("jobs").update({ cut_optimizer_enabled: next }).eq("id", jobId);
+    setBusy(false);
+  }
+
   if (loading) return <p className="text-gray-600">Loading...</p>;
 
   if (items.length === 0) {
@@ -344,8 +361,16 @@ export default function CuttingNestTab({
         <div>
           <h3 className="text-base font-semibold text-gray-900">Cutting nest</h3>
           <p className="text-sm text-gray-600 mt-1">
-            Pull the sticks you used from inventory, then log the drops you saved. Net consumed = pulled minus saved.
+            {optimizerOn
+              ? "Build a cut list, let it work out the nest, then apply the whole thing to inventory in one go."
+              : "Pull the sticks you used from inventory, then log the drops you saved. Net consumed = pulled minus saved."}
           </p>
+          {!isFinalized && (
+            <label className="mt-2 inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={optimizerOn} disabled={busy} onChange={(e) => toggleOptimizer(e.target.checked)} className="w-4 h-4" />
+              Use the cut optimizer on this job
+            </label>
+          )}
         </div>
         {isFinalized ? (
           <div className="flex items-center gap-3">
@@ -444,7 +469,7 @@ export default function CuttingNestTab({
                   </div>
                 )}
 
-                {!isFinalized && (
+                {!isFinalized && !optimizerOn && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Pull sticks form */}
                     <div className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
@@ -497,6 +522,27 @@ export default function CuttingNestTab({
                     </div>
                     )}
                   </div>
+                )}
+
+                {!isFinalized && optimizerOn && companyId && (
+                  <CuttingNestOptimizer
+                    jobId={jobId}
+                    jobNumber={jobNumber}
+                    companyId={companyId}
+                    rawMaterialId={item.raw_material_id}
+                    materialLabel={describeMaterial(item.raw_materials)}
+                    costPerFoot={costPerFoot}
+                    depthInches={item.raw_materials?.nest_depth_inches ?? null}
+                    availableLengths={lengths}
+                    trackDrops={trackDrops}
+                    companyKerf={companyKerf}
+                    companyMinDrop={companyMinDrop}
+                    onChanged={async () => {
+                      await syncPickListActuals();
+                      await loadData();
+                      if (onChanged) onChanged();
+                    }}
+                  />
                 )}
               </div>
             </div>
