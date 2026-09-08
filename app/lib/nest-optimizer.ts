@@ -250,6 +250,75 @@ export function formatLength(value: number, opts?: { denom?: number; useFeet?: b
 }
 
 /* ------------------------------------------------------------------ */
+/* Suggesting a depth from a material size                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Depths worth offering for a material, read out of its size text.
+ *
+ * Depth is a property of how the stick is LYING IN THE SAW, not of the
+ * material, so this only ever suggests - the nest stores what was actually
+ * chosen. Rectangle tube and angle legitimately have two answers.
+ *
+ * The shape matters, because the second number does not always mean the same
+ * thing. A channel written "C6 x 10.5" is 6 inches deep and weighs 10.5 lb per
+ * foot; offering 10.5 as a depth would be nonsense. Same for "W10 x 15".
+ */
+export function depthCandidates(shape: string, size: string): number[] {
+  const text = String(size || "").trim();
+  if (!text) return [];
+  // Numbers as the shop writes them: 2, 1.5, .75, 1/2, 2.375
+  const tokens = text.match(/\d*\.?\d+(?:\s*\/\s*\d+)?/g) || [];
+  const nums: number[] = [];
+  for (const t of tokens) {
+    const v = parseLength(t);
+    if (v !== null && v > 0) nums.push(v);
+  }
+  if (!nums.length) return [];
+
+  switch (shape) {
+    // One dimension, and it is the depth whichever way the stick lies.
+    case "square_tube":
+    case "round_tube":
+    case "flat_bar":
+      return [nums[0]];
+
+    // Rolled sections: first number is the nominal depth, second is weight
+    // per foot. Only the first is a dimension.
+    case "channel":
+    case "i_beam":
+      return [nums[0]];
+
+    // Two real dimensions - either can be the one facing the blade.
+    case "rectangle_tube":
+    case "angle":
+    default:
+      return Array.from(new Set(nums.slice(0, 2)));
+  }
+}
+
+/** A plain-language note about what depth means for this shape. */
+export function depthHint(shape: string): string {
+  switch (shape) {
+    case "square_tube":
+      return "Square tube - the depth is the tube dimension.";
+    case "round_tube":
+      return "Round tube - the depth is the outside diameter.";
+    case "rectangle_tube":
+      return "Rectangle tube - whichever face the blade crosses, so it depends which way it lies in the saw.";
+    case "angle":
+      return "Angle - the leg standing up in the saw.";
+    case "channel":
+    case "i_beam":
+      return "The first number in the size is the depth; the second is weight per foot, not a dimension.";
+    case "flat_bar":
+      return "Flat bar - the dimension the blade crosses.";
+    default:
+      return "The dimension the blade travels across as it cuts.";
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Miter geometry                                                      */
 /* ------------------------------------------------------------------ */
 

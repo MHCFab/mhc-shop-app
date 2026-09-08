@@ -73,7 +73,7 @@ export default function CuttingNestTab({
   const [jobNumber, setJobNumber] = useState("");
   const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
   const [trackDrops, setTrackDrops] = useState(true);
-  const [optimizerOn, setOptimizerOn] = useState(false);
+  const [nestOn, setNestOn] = useState<Record<string, boolean>>({});
   const [companyKerf, setCompanyKerf] = useState(0.125);
   const [companyMinDrop, setCompanyMinDrop] = useState(12);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +93,7 @@ export default function CuttingNestTab({
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [pickRes, entriesRes, jobRes] = await Promise.all([
+    const [pickRes, entriesRes, jobRes, nestRes] = await Promise.all([
       supabase
         .from("job_pick_list_items")
         .select("id, raw_material_id, planned_quantity, raw_materials(id, shape, size, wall_thickness, grade, current_cost_per_foot, nest_depth_inches)")
@@ -104,7 +104,8 @@ export default function CuttingNestTab({
         .select("*")
         .eq("job_id", jobId)
         .order("created_at"),
-      supabase.from("jobs").select("job_number, cutting_nest_finalized_at, cut_optimizer_enabled").eq("id", jobId).single(),
+      supabase.from("jobs").select("job_number, cutting_nest_finalized_at").eq("id", jobId).single(),
+      supabase.from("job_cut_nests").select("raw_material_id, enabled").eq("job_id", jobId),
     ]);
 
     
@@ -114,7 +115,10 @@ export default function CuttingNestTab({
     setEntries((entriesRes.data || []) as unknown as NestEntry[]);
     setJobNumber(jobRes.data?.job_number || "");
     setFinalizedAt(jobRes.data?.cutting_nest_finalized_at || null);
-    setOptimizerOn(jobRes.data?.cut_optimizer_enabled === true);
+
+    const nestFlags: Record<string, boolean> = {};
+    for (const n of nestRes.data || []) nestFlags[n.raw_material_id as string] = n.enabled === true;
+    setNestOn(nestFlags);
 
     const { data: { user: dropUser } } = await supabase.auth.getUser();
     if (dropUser) {
@@ -326,10 +330,14 @@ export default function CuttingNestTab({
     if (onChanged) onChanged();
   }
 
-  async function toggleOptimizer(next: boolean) {
+  async function toggleNest(rawMaterialId: string, next: boolean) {
+    if (!companyId) return;
     setBusy(true);
-    setOptimizerOn(next);
-    await supabase.from("jobs").update({ cut_optimizer_enabled: next }).eq("id", jobId);
+    setNestOn((prev) => ({ ...prev, [rawMaterialId]: next }));
+    await supabase.from("job_cut_nests").upsert(
+      { company_id: companyId, job_id: jobId, raw_material_id: rawMaterialId, enabled: next },
+      { onConflict: "job_id,raw_material_id" }
+    );
     setBusy(false);
   }
 
@@ -361,16 +369,9 @@ export default function CuttingNestTab({
         <div>
           <h3 className="text-base font-semibold text-gray-900">Cutting nest</h3>
           <p className="text-sm text-gray-600 mt-1">
-            {optimizerOn
-              ? "Build a cut list, let it work out the nest, then apply the whole thing to inventory in one go."
-              : "Pull the sticks you used from inventory, then log the drops you saved. Net consumed = pulled minus saved."}
+            Pull the sticks you used from inventory, then log the drops you saved. Net consumed = pulled minus saved.
+            Turn the optimizer on per material below &mdash; saw-cut stock can nest while plasma work stays as it is.
           </p>
-          {!isFinalized && (
-            <label className="mt-2 inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input type="checkbox" checked={optimizerOn} disabled={busy} onChange={(e) => toggleOptimizer(e.target.checked)} className="w-4 h-4" />
-              Use the cut optimizer on this job
-            </label>
-          )}
         </div>
         {isFinalized ? (
           <div className="flex items-center gap-3">
@@ -398,8 +399,20 @@ export default function CuttingNestTab({
 
           return (
             <div key={item.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-3 flex-wrap">
                 <h4 className="text-sm font-semibold text-gray-900">{describeMaterial(item.raw_materials)}</h4>
+                {!isFinalized && (
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={nestOn[item.raw_material_id] === true}
+                      disabled={busy}
+                      onChange={(e) => toggleNest(item.raw_material_id, e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    Nest this material
+                  </label>
+                )}
               </div>
 
               <div className="p-4 space-y-4">
@@ -469,7 +482,7 @@ export default function CuttingNestTab({
                   </div>
                 )}
 
-                {!isFinalized && !optimizerOn && (
+                {!isFinalized && nestOn[item.raw_material_id] !== true && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Pull sticks form */}
                     <div className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
@@ -524,7 +537,7 @@ export default function CuttingNestTab({
                   </div>
                 )}
 
-                {!isFinalized && optimizerOn && companyId && (
+                {!isFinalized && nestOn[item.raw_material_id] === true && companyId && (
                   <CuttingNestOptimizer
                     jobId={jobId}
                     jobNumber={jobNumber}
@@ -532,7 +545,9 @@ export default function CuttingNestTab({
                     rawMaterialId={item.raw_material_id}
                     materialLabel={describeMaterial(item.raw_materials)}
                     costPerFoot={costPerFoot}
-                    depthInches={item.raw_materials?.nest_depth_inches ?? null}
+                    shape={item.raw_materials?.shape || ""}
+                    size={item.raw_materials?.size || ""}
+                    materialDepth={item.raw_materials?.nest_depth_inches ?? null}
                     availableLengths={lengths}
                     trackDrops={trackDrops}
                     companyKerf={companyKerf}
