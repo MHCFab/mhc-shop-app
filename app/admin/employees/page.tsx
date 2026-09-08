@@ -4,12 +4,34 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "../../lib/supabase";
 
+// One person, as they exist AT THIS SHOP. role and is_active now come from
+// their membership here, not from their profile: a person can belong to more
+// than one shop, and their profile only ever describes the shop they happen to
+// be looking at right now.
 type Employee = {
   id: string;
+  membershipId: string;
   email: string;
   full_name: string | null;
   role: string;
   is_active: boolean;
+  created_at: string;
+};
+
+// A row of the memberships table: who belongs to this shop and how.
+type MembershipRow = {
+  id: string;
+  user_id: string;
+  role: string;
+  status: string;
+};
+
+// The person themselves. Name and email are the same in every shop they
+// belong to, so they live here rather than on the membership.
+type Person = {
+  id: string;
+  email: string;
+  full_name: string | null;
   created_at: string;
 };
 
@@ -49,15 +71,43 @@ export default function EmployeesPage() {
     setLoading(true);
     const { data: userData } = await supabase.auth.getUser();
     setCurrentUserId(userData.user?.id ?? null);
-    const [empRes, invRes] = await Promise.all([
-      // Shop staff only. Customer portal logins live in profiles too, and the
-      // admin can read them, but they belong on the Customers page - not here,
-      // where they could be made an admin or removed with the employee tools.
-      supabase.from("profiles").select("id, email, full_name, role, is_active, created_at").in("role", ["admin", "employee"]).order("full_name"),
+    const [memRes, profRes, invRes] = await Promise.all([
+      // Who belongs to THIS shop, and in what role. The database only ever
+      // hands back this shop's memberships, so there is nothing to filter by
+      // company here. Customer portal logins are left out on purpose: they
+      // belong on the Customers page, not here, where they could be made an
+      // admin or removed with the employee tools.
+      supabase.from("memberships").select("id, user_id, role, status").in("role", ["admin", "employee"]),
+      // Names and email addresses, looked up separately because they belong to
+      // the person rather than to any one shop.
+      supabase.from("profiles").select("id, email, full_name, created_at"),
       supabase.from("employee_invitations").select("id, email, full_name, status, created_at").eq("status", "pending").order("created_at", { ascending: false }),
     ]);
-    if (empRes.error) setError(empRes.error.message);
-    else setEmployees((empRes.data || []) as Employee[]);
+
+    if (memRes.error) setError(memRes.error.message);
+    else if (profRes.error) setError(profRes.error.message);
+    else {
+      setError(null);
+      const people = new Map<string, Person>(
+        ((profRes.data || []) as unknown as Person[]).map((p) => [p.id, p])
+      );
+      const rows: Employee[] = [];
+      for (const m of (memRes.data || []) as unknown as MembershipRow[]) {
+        const person = people.get(m.user_id);
+        if (!person) continue;
+        rows.push({
+          id: m.user_id,
+          membershipId: m.id,
+          email: person.email,
+          full_name: person.full_name,
+          role: m.role,
+          is_active: m.status === "active",
+          created_at: person.created_at,
+        });
+      }
+      rows.sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
+      setEmployees(rows);
+    }
     setInvitations((invRes.data || []) as Invitation[]);
     setLoading(false);
   }, [supabase]);
@@ -137,12 +187,29 @@ export default function EmployeesPage() {
     loadData();
   }
 
+  // Deactivating switches off their membership in THIS shop. If they also
+  // belong to another shop, that access is untouched - one shop's admin does
+  // not get to lock someone out of a different company's system.
   async function toggleActive(emp: Employee) {
+    if (emp.id === currentUserId) {
+      alert("You can't deactivate your own account. You would lock yourself out.");
+      return;
+    }
     setBusyId(emp.id);
-    const { error } = await supabase.from("profiles").update({ is_active: !emp.is_active }).eq("id", emp.id);
+    const { data, error } = await supabase
+      .from("memberships")
+      .update({ status: emp.is_active ? "inactive" : "active" })
+      .eq("id", emp.membershipId)
+      .select("id");
     setBusyId(null);
     if (error) {
       alert("Failed to update: " + error.message);
+      return;
+    }
+    // A blocked write returns success and changes nothing, so check that a row
+    // actually came back rather than trusting the absence of an error.
+    if (!data || data.length === 0) {
+      alert("Nothing was changed - the database refused that update. " + (emp.full_name || emp.email) + " is still " + (emp.is_active ? "active" : "inactive") + ".");
       return;
     }
     loadData();
@@ -151,10 +218,18 @@ export default function EmployeesPage() {
   async function makeAdmin(emp: Employee) {
     if (!confirm("Give " + (emp.full_name || emp.email) + " full admin access? They'll be able to manage employees, settings, and all company data.")) return;
     setBusyId(emp.id);
-    const { error } = await supabase.from("profiles").update({ role: "admin" }).eq("id", emp.id);
+    const { data, error } = await supabase
+      .from("memberships")
+      .update({ role: "admin" })
+      .eq("id", emp.membershipId)
+      .select("id");
     setBusyId(null);
     if (error) {
       alert("Failed to update: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert("Nothing was changed - the database refused that update. " + (emp.full_name || emp.email) + " is still an employee.");
       return;
     }
     flash((emp.full_name || emp.email) + " is now an admin.");
@@ -168,10 +243,18 @@ export default function EmployeesPage() {
     }
     if (!confirm("Remove admin access from " + (emp.full_name || emp.email) + "? They'll go back to a regular employee.")) return;
     setBusyId(emp.id);
-    const { error } = await supabase.from("profiles").update({ role: "employee" }).eq("id", emp.id);
+    const { data, error } = await supabase
+      .from("memberships")
+      .update({ role: "employee" })
+      .eq("id", emp.membershipId)
+      .select("id");
     setBusyId(null);
     if (error) {
       alert("Failed to update: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert("Nothing was changed - the database refused that update. " + (emp.full_name || emp.email) + " is still an admin.");
       return;
     }
     flash("Removed admin access from " + (emp.full_name || emp.email) + ".");
@@ -183,12 +266,23 @@ export default function EmployeesPage() {
     setEditName(emp.full_name || "");
   }
 
+  // The name lives on the person, not the membership, so this still writes to
+  // profiles. It can only be changed while that person's active shop is this
+  // one - which is everybody, until somebody joins a second shop.
   async function saveEditName(emp: Employee) {
     setBusyId(emp.id);
-    const { error } = await supabase.from("profiles").update({ full_name: editName.trim() || null }).eq("id", emp.id);
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ full_name: editName.trim() || null })
+      .eq("id", emp.id)
+      .select("id");
     setBusyId(null);
     if (error) {
       alert("Failed to save: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert("The name was not saved. That usually means this person is currently signed in to a different shop, so their details can't be edited from here.");
       return;
     }
     setEditingId(null);
@@ -207,8 +301,11 @@ export default function EmployeesPage() {
     flash("Password reset email sent to " + emp.email + ".");
   }
 
+  // Remove means "take them off MY shop". If they work at another shop on
+  // ShopWorks too, their login survives and keeps that access; if this was the
+  // only shop they belonged to, the account itself goes.
   async function deleteEmployee(emp: Employee) {
-    if (!confirm("Permanently remove " + (emp.full_name || emp.email) + "? This deletes their account entirely and cannot be undone. (To just disable login, use Deactivate instead.)")) return;
+    if (!confirm("Remove " + (emp.full_name || emp.email) + " from your shop? This cannot be undone. If this is the only shop they belong to, their login is deleted entirely. (To just switch off their access for now, use Deactivate instead.)")) return;
     setBusyId(emp.id);
     try {
       const res = await fetch("/api/delete-employee", {
@@ -219,6 +316,8 @@ export default function EmployeesPage() {
       const data = await res.json();
       if (!res.ok) {
         alert("Failed to remove: " + (data.error || "Unknown error"));
+      } else if (data.detached) {
+        flash("Removed " + (emp.full_name || emp.email) + " from your shop. Their login still works for the other shop they belong to.");
       } else {
         flash("Removed " + (emp.full_name || emp.email) + ".");
       }

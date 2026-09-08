@@ -15,11 +15,28 @@ type Customer = {
   labor_rate_per_hour: number | null;
 };
 
+// A portal login, as it exists AT THIS SHOP. Whether they are switched on is
+// a property of their membership here, not of their profile: the same person
+// may belong to another shop, and switching them off here must not touch that.
 type PortalUser = {
   id: string;
+  membershipId: string;
   email: string;
   full_name: string | null;
   is_active: boolean;
+  created_at: string;
+};
+
+type PortalMembershipRow = {
+  id: string;
+  user_id: string;
+  status: string;
+};
+
+type PortalPerson = {
+  id: string;
+  email: string;
+  full_name: string | null;
   created_at: string;
 };
 
@@ -132,12 +149,18 @@ export default function CustomersPage() {
   async function loadPortalUsers(customerId: string) {
     setPortalLoading(true);
     setPortalError(null);
-    const [usersRes, invitesRes] = await Promise.all([
+    const [memRes, peopleRes, invitesRes] = await Promise.all([
+      // Portal memberships for this customer, in this shop. The database only
+      // ever hands back this shop's memberships.
+      supabase
+        .from("memberships")
+        .select("id, user_id, status")
+        .eq("role", "customer")
+        .eq("customer_id", customerId),
+      // Names and emails, which belong to the person rather than to this shop.
       supabase
         .from("profiles")
-        .select("id, email, full_name, is_active, created_at")
-        .eq("role", "customer")
-        .eq("customer_id", customerId)
+        .select("id, email, full_name, created_at")
         .order("created_at"),
       supabase
         .from("customer_invitations")
@@ -145,8 +168,27 @@ export default function CustomersPage() {
         .eq("customer_id", customerId)
         .eq("status", "pending"),
     ]);
-    if (usersRes.error) setPortalError(usersRes.error.message);
-    setPortalUsers((usersRes.data || []) as unknown as PortalUser[]);
+    if (memRes.error) setPortalError(memRes.error.message);
+    else if (peopleRes.error) setPortalError(peopleRes.error.message);
+
+    const peopleById = new Map<string, PortalPerson>(
+      ((peopleRes.data || []) as unknown as PortalPerson[]).map((p) => [p.id, p])
+    );
+    const rows: PortalUser[] = [];
+    for (const m of (memRes.data || []) as unknown as PortalMembershipRow[]) {
+      const person = peopleById.get(m.user_id);
+      if (!person) continue;
+      rows.push({
+        id: m.user_id,
+        membershipId: m.id,
+        email: person.email,
+        full_name: person.full_name,
+        is_active: m.status === "active",
+        created_at: person.created_at,
+      });
+    }
+    rows.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    setPortalUsers(rows);
     const pending = new Set<string>();
     for (const inv of invitesRes.data || []) pending.add(String(inv.email).toLowerCase());
     setPendingEmails(pending);
@@ -180,18 +222,24 @@ export default function CustomersPage() {
     if (!portalFor) return;
     setPortalBusyId(u.id);
     setPortalError(null);
-    const { error } = await supabase
-      .from("profiles")
-      .update({ is_active: !u.is_active })
-      .eq("id", u.id);
+    const { data, error } = await supabase
+      .from("memberships")
+      .update({ status: u.is_active ? "inactive" : "active" })
+      .eq("id", u.membershipId)
+      .select("id");
     if (error) setPortalError(error.message);
+    // A blocked write returns success and changes nothing, so check that a row
+    // actually came back rather than trusting the absence of an error.
+    else if (!data || data.length === 0) {
+      setPortalError("Nothing was changed - the database refused that update.");
+    }
     await loadPortalUsers(portalFor.id);
     setPortalBusyId(null);
   }
 
   async function removeUser(u: PortalUser) {
     if (!portalFor) return;
-    if (!confirm("Remove portal access for " + (u.full_name || u.email) + "? Their login is deleted entirely. You can re-invite the same email later.")) return;
+    if (!confirm("Remove portal access for " + (u.full_name || u.email) + "? If this is the only shop they belong to, their login is deleted entirely. You can re-invite the same email later.")) return;
     setPortalBusyId(u.id);
     setPortalError(null);
     try {
