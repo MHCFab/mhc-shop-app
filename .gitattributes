@@ -1,0 +1,16 @@
+# Git stores every text file with LF internally and checks it out with LF.
+# Without this, an editor that saves CRLF makes every line of a file look
+# changed, which buries real edits. Behaviour of the app is unaffected.
+* text=auto eol=lf
+
+# Leave binaries alone.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
