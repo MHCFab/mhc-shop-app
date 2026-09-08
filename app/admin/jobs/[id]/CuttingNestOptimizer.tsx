@@ -460,6 +460,10 @@ export default function CuttingNestOptimizer({
   if (loading) return <p className="text-sm text-gray-600">Loading the cut list...</p>;
 
   const s = plan?.summary;
+  const depthNum = parseLength(settings.depth) || 0;
+  // The drawing's vertical units are inches of profile depth. With no depth
+  // recorded every cut is square, so any positive number gives flat rectangles.
+  const vbDepth = depthNum > 0 ? depthNum : 1;
   const stockTotalSticks = availableLengths.reduce((a, l) => a + l.sticks, 0);
 
   return (
@@ -731,9 +735,14 @@ export default function CuttingNestOptimizer({
             </div>
           )}
 
+          <div className="px-3 py-2 border-b border-gray-200 text-xs text-gray-500">
+            Each stick is drawn to scale along its length. Angled ends lean the way they sit in the saw,
+            and where two pieces share one blade pass they meet on a single line. Depth is stretched top
+            to bottom so the lean is visible &mdash; a half-inch of miter on a 20-foot stick is otherwise a hair.
+          </div>
+
           <div className="divide-y divide-gray-100">
             {plan.sticks.map((st, i) => {
-              const usable = Math.max(1e-6, st.stockLength - st.trimStart - st.trimEnd);
               return (
                 <div key={i} className="p-3">
                   <div className="flex items-baseline gap-3 flex-wrap mb-2">
@@ -749,20 +758,46 @@ export default function CuttingNestOptimizer({
                     </span>
                   </div>
 
-                  {/* one bar per stick, pieces to scale */}
-                  <div className="relative h-7 w-full bg-gray-100 border border-gray-300 rounded-sm overflow-hidden">
+                  {/* One bar per stick. Each piece is drawn as the four-sided shape
+                      it really is: the bottom face runs pBottom -> qBottom, and the
+                      top face is shifted by the miter offset at each end. So a
+                      mitered end leans, and two ends cut in one blade pass share an
+                      edge instead of sitting square against each other. */}
+                  <div className="relative h-12 w-full bg-gray-100 border border-gray-300 rounded-sm overflow-hidden">
+                    <svg
+                      viewBox={"0 0 " + st.stockLength + " " + vbDepth}
+                      preserveAspectRatio="none"
+                      className="absolute inset-0 h-full w-full"
+                      aria-hidden="true"
+                    >
+                      {st.pieces.map((p, j) => (
+                        <polygon
+                          key={j}
+                          points={
+                            (p.pBottom + p.sLead) + ",0 " +
+                            (p.qBottom + p.sTrail) + ",0 " +
+                            p.qBottom + "," + vbDepth + " " +
+                            p.pBottom + "," + vbDepth
+                          }
+                          fill={p.sharedCut ? "#a5c8fb" : "#bfdbfe"}
+                          stroke="#2563eb"
+                          strokeWidth={1}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ))}
+                    </svg>
                     {st.pieces.map((p, j) => (
-                      <div
+                      <span
                         key={j}
-                        title={p.label + " " + inches(p.length) + (p.sharedCut ? " (shares a cut)" : "")}
-                        className="absolute top-0 h-full bg-blue-200 border-r border-blue-500 flex items-center justify-center overflow-hidden"
+                        title={p.label + " " + inches(p.length) + (p.sharedCut ? " — shares the previous cut" : "")}
+                        className="pointer-events-none absolute top-1/2 -translate-y-1/2 truncate px-0.5 text-center text-[10px] font-medium text-blue-900"
                         style={{
-                          left: (p.startX / usable) * 100 + "%",
-                          width: Math.max(0.4, ((p.endX - p.startX) / usable) * 100) + "%",
+                          left: (p.startX / st.stockLength) * 100 + "%",
+                          width: ((p.endX - p.startX) / st.stockLength) * 100 + "%",
                         }}
                       >
-                        <span className="text-[10px] font-medium text-blue-900 truncate px-0.5">{p.label}</span>
-                      </div>
+                        {p.label}
+                      </span>
                     ))}
                   </div>
 
