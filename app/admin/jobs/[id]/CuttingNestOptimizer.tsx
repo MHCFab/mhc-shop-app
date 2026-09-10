@@ -29,6 +29,14 @@ type CutRow = {
   trailDir: MiterDir;
   allowFlip: boolean;
   isNew?: boolean;
+  /**
+   * Where this line came from. 'template' means a Fill from products put it
+   * here and a later fill may replace it; 'manual' means somebody typed or
+   * changed it and a fill must leave it alone. Undefined counts as manual.
+   */
+  source?: "manual" | "template";
+  /** Which product template a filled line came off. Kept for provenance. */
+  productTemplateId?: string | null;
 };
 
 type NestSettingsRow = {
@@ -134,6 +142,7 @@ export default function CuttingNestOptimizer({
   trackDrops,
   companyKerf,
   companyMinDrop,
+  reloadKey,
   onChanged,
 }: {
   jobId: string;
@@ -152,6 +161,11 @@ export default function CuttingNestOptimizer({
   trackDrops: boolean;
   companyKerf: number;
   companyMinDrop: number;
+  /**
+   * Bumped by the parent when something outside this panel changed the cut
+   * list -- a Fill from products. Any new value re-runs load().
+   */
+  reloadKey?: number;
   onChanged?: () => void;
 }) {
   const supabase = createClient();
@@ -172,6 +186,11 @@ export default function CuttingNestOptimizer({
   const suggested = useMemo(() => depthCandidates(shape, size), [shape, size]);
 
   const load = useCallback(async () => {
+    // Referenced on purpose. reloadKey carries no information -- the parent
+    // just bumps it after a Fill from products -- but naming it here is what
+    // makes it a real dependency, rather than one lint has to be told to
+    // ignore.
+    void reloadKey;
     setLoading(true);
     const [cutRes, nestRes] = await Promise.all([
       supabase
@@ -198,6 +217,8 @@ export default function CuttingNestOptimizer({
       trailAngle: String(r.trail_angle),
       trailDir: (Number(r.trail_dir) === -1 ? -1 : 1) as MiterDir,
       allowFlip: r.allow_flip !== false,
+      source: (r.source as string) === "template" ? "template" : "manual",
+      productTemplateId: (r.product_template_id as string | null) ?? null,
     }));
     setRows(loaded.length ? loaded : [blankRow()]);
 
@@ -231,14 +252,20 @@ export default function CuttingNestOptimizer({
     }
     setDirty(false);
     setLoading(false);
-  }, [supabase, jobId, rawMaterialId, companyKerf, companyMinDrop, materialDepth, suggested]);
+  }, [supabase, jobId, rawMaterialId, companyKerf, companyMinDrop, materialDepth, suggested, reloadKey]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   function patchRow(id: string, patch: Partial<CutRow>) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    // Touching a line that came from a product template makes it YOURS: it
+    // flips to manual so the next Fill from products leaves it standing
+    // instead of quietly overwriting the change you just made. The template it
+    // came from is kept, so you can still see where it started.
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ...patch, source: "manual" as const } : r))
+    );
     setDirty(true);
   }
 
@@ -313,7 +340,11 @@ export default function CuttingNestOptimizer({
       trail_dir: r.trailDir,
       allow_flip: r.allowFlip,
       sort_order: i,
-      source: "manual",
+      // Was hardcoded to "manual", which silently converted every filled line
+      // the first time this list was saved -- and then a re-fill duplicated
+      // them all, because nothing was left for it to replace.
+      source: r.source === "template" ? "template" : "manual",
+      product_template_id: r.productTemplateId ?? null,
     }));
     const ins = await supabase.from("job_cut_list_items").insert(payload);
     if (ins.error) {

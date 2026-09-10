@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
 import { templateType } from "../../../lib/template-types";
+import TemplateCutList from "./TemplateCutList";
 
 const SHAPES = [
   { value: "round_tube", label: "Round Tube" },
@@ -107,6 +108,13 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
 
   const [error, setError] = useState<string | null>(null);
 
+  // How many pieces each material line has on its cut list, keyed by
+  // product_template_materials.id. A material with a count is the one whose
+  // feet per unit is derived rather than typed.
+  const [cutCounts, setCutCounts] = useState<Record<string, number>>({});
+  // Which material's cut list is open. One at a time, like the inline edits.
+  const [openCutList, setOpenCutList] = useState<string | null>(null);
+
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -197,7 +205,21 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
       }
     }
 
-    setMaterials((matsRes.data || []) as unknown as MaterialRow[]);
+    // Cut list piece counts for this template's material lines.
+    const matRows = (matsRes.data || []) as unknown as MaterialRow[];
+    const counts: Record<string, number> = {};
+    if (matRows.length > 0) {
+      const { data: cutData } = await supabase
+        .from("product_template_cut_items")
+        .select("product_template_material_id")
+        .in("product_template_material_id", matRows.map((m) => m.id));
+      for (const row of (cutData || []) as unknown as { product_template_material_id: string }[]) {
+        counts[row.product_template_material_id] = (counts[row.product_template_material_id] || 0) + 1;
+      }
+    }
+    setCutCounts(counts);
+
+    setMaterials(matRows);
     setParts((partsRes.data || []) as unknown as PartRow[]);
     setSubs(subRows);
     setSubAssemblyCosts(subCosts);
@@ -345,14 +367,25 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
   }
 
   async function saveEditMaterial(rowId: string) {
-    const qty = parseFloat(editQty);
-    if (isNaN(qty) || qty <= 0) {
-      alert("Feet per unit must be greater than 0.");
-      return;
+    // A material with a cut list has its feet ADDED UP from the pieces, so the
+    // figure is not the operator's to type here. Writing it anyway would put a
+    // wrong number on screen until the next thing touched the cut list and the
+    // database corrected it. Notes are still yours to edit either way.
+    const derived = (cutCounts[rowId] || 0) > 0;
+    const updates: { notes: string | null; feet_per_unit?: number } = {
+      notes: editNotes.trim() || null,
+    };
+    if (!derived) {
+      const qty = parseFloat(editQty);
+      if (isNaN(qty) || qty <= 0) {
+        alert("Feet per unit must be greater than 0.");
+        return;
+      }
+      updates.feet_per_unit = qty;
     }
     const { error } = await supabase
       .from("product_template_materials")
-      .update({ feet_per_unit: qty, notes: editNotes.trim() || null })
+      .update(updates)
       .eq("id", rowId);
     if (error) {
       alert("Failed to save: " + error.message);
@@ -505,6 +538,7 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
               <tr>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Material</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Feet / unit</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Cut list</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / ft</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">$ / unit</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
@@ -516,15 +550,36 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
                 const cf = Number(m.raw_materials?.current_cost_per_foot || 0);
                 const unitCost = Number(m.feet_per_unit) * cf;
                 const isEditing = editingId === m.id;
+                const pieceCount = cutCounts[m.id] || 0;
+                const derived = pieceCount > 0;
+                const cutListOpen = openCutList === m.id;
                 return (
-                  <tr key={m.id} className="border-b border-gray-100 last:border-0">
+                  <Fragment key={m.id}>
+                  <tr className="border-b border-gray-100 last:border-0">
                     <td className="px-4 py-3 text-sm text-gray-900">{describeMaterial(m.raw_materials)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">
-                      {isEditing ? (
+                      {isEditing && !derived ? (
                         <input type="number" step="0.01" min="0" value={editQty} onChange={(e) => setEditQty(e.target.value)} className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-gray-900" />
                       ) : (
-                        Number(m.feet_per_unit).toFixed(2)
+                        <>
+                          {Number(m.feet_per_unit).toFixed(2)}
+                          {derived && (
+                            <div className="text-xs text-gray-500 font-sans">from cut list</div>
+                          )}
+                        </>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <button
+                        onClick={() => setOpenCutList(cutListOpen ? null : m.id)}
+                        className="text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        {cutListOpen
+                          ? "Hide"
+                          : derived
+                            ? pieceCount + (pieceCount === 1 ? " piece" : " pieces")
+                            : "Add pieces"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${cf.toFixed(4)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">${unitCost.toFixed(2)}</td>
@@ -549,6 +604,19 @@ export default function BillOfMaterialsTab({ templateId }: { templateId: string 
                       )}
                     </td>
                   </tr>
+                  {cutListOpen && companyId && (
+                    <tr className="border-b border-gray-100 last:border-0">
+                      <td colSpan={7} className="px-4 pb-4 bg-white">
+                        <TemplateCutList
+                          materialRowId={m.id}
+                          companyId={companyId}
+                          materialLabel={describeMaterial(m.raw_materials)}
+                          onChanged={loadAll}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

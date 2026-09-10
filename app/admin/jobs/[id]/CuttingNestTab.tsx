@@ -9,6 +9,7 @@ import {
   reverseCuttingNestEntry,
 } from "../../../lib/inventory";
 import CuttingNestOptimizer from "./CuttingNestOptimizer";
+import { generateJobCutList } from "../../../lib/job-generation";
 
 const SHAPES_MAP: Record<string, string> = {
   round_tube: "Round Tube",
@@ -78,6 +79,11 @@ export default function CuttingNestTab({
   const [companyMinDrop, setCompanyMinDrop] = useState(12);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [fillNote, setFillNote] = useState<string | null>(null);
+  // Bumped after a fill so the optimizer panels already on screen reload their
+  // cut lists instead of showing what was there before.
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Pull form per material
   const [pullForm, setPullForm] = useState<Record<string, { length: string; qty: string }>>({});
@@ -330,6 +336,47 @@ export default function CuttingNestTab({
     if (onChanged) onChanged();
   }
 
+  // Builds this job's cut list from the cut lists on its products' templates.
+  // Replaces only what a previous fill put here -- anything typed by hand, and
+  // any material whose nest is already applied to inventory, is left standing.
+  async function fillFromProducts() {
+    if (!companyId) return;
+    setFilling(true);
+    setError(null);
+    setFillNote(null);
+    try {
+      const res = await generateJobCutList(supabase, companyId, jobId);
+      if (res.inserted === 0 && res.skipped.length === 0) {
+        setFillNote(
+          "Nothing to fill. None of the products on this job have cut lists on their templates yet - add the pieces on the product template's Bill of Materials tab."
+        );
+      } else {
+        const label = (id: string) =>
+          describeMaterial(items.find((i) => i.raw_material_id === id)?.raw_materials || null);
+        const said: string[] = [];
+        if (res.inserted > 0) {
+          said.push(
+            "Filled " + res.inserted + " line" + (res.inserted === 1 ? "" : "s") +
+            " across " + res.filled.length + " material" + (res.filled.length === 1 ? "" : "s") + "."
+          );
+        }
+        if (res.skipped.length > 0) {
+          said.push(
+            "Left alone: " + res.skipped.map(label).join(", ") +
+            " - that nest is already applied to inventory. Undo the apply first if you want it refilled."
+          );
+        }
+        setFillNote(said.join(" "));
+      }
+      await loadData();
+      setReloadKey((k) => k + 1);
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to fill the cut list.");
+    }
+    setFilling(false);
+  }
+
   async function toggleNest(rawMaterialId: string, next: boolean) {
     if (!companyId) return;
     setBusy(true);
@@ -357,6 +404,13 @@ export default function CuttingNestTab({
     <div className="space-y-4">
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
 
+      {fillNote && (
+        <div className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md p-3 flex items-start justify-between gap-3">
+          <span>{fillNote}</span>
+          <button onClick={() => setFillNote(null)} className="text-blue-600 hover:text-blue-800 font-medium shrink-0">Dismiss</button>
+        </div>
+      )}
+
       {jobStatus === "ordered" && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <p className="text-sm text-amber-800">
@@ -373,16 +427,27 @@ export default function CuttingNestTab({
             Turn the optimizer on per material below &mdash; saw-cut stock can nest while plasma work stays as it is.
           </p>
         </div>
-        {isFinalized ? (
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">Finalized</span>
-            <button onClick={unfinalize} disabled={busy} className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">Un-finalize</button>
-          </div>
-        ) : (
-          <button onClick={finalize} disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors">
-            Finalize cutting nest
-          </button>
-        )}
+        <div className="flex items-center gap-3 flex-wrap">
+          {!isFinalized && (
+            <button
+              onClick={fillFromProducts}
+              disabled={busy || filling}
+              className="border border-blue-600 text-blue-700 px-4 py-2 rounded-md font-medium text-sm hover:bg-blue-50 disabled:opacity-50 transition-colors"
+            >
+              {filling ? "Filling..." : "Fill cut lists from products"}
+            </button>
+          )}
+          {isFinalized ? (
+            <>
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">Finalized</span>
+              <button onClick={unfinalize} disabled={busy} className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">Un-finalize</button>
+            </>
+          ) : (
+            <button onClick={finalize} disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              Finalize cutting nest
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -552,6 +617,7 @@ export default function CuttingNestTab({
                     trackDrops={trackDrops}
                     companyKerf={companyKerf}
                     companyMinDrop={companyMinDrop}
+                    reloadKey={reloadKey}
                     onChanged={async () => {
                       await syncPickListActuals();
                       await loadData();

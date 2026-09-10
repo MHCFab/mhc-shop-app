@@ -37,12 +37,30 @@ export type PlannedTask = {
   lineItemId: string | null;
 };
 
+// One line of the cutting nest cut list, worked out from the product templates.
+// Lengths are LONG POINT inches, the way a cut is called out on a shop drawing.
+export type PlannedCutItem = {
+  rawMaterialId: string;
+  templateId: string;
+  mark: string | null;
+  lengthInches: number;
+  quantity: number;
+  leadAngle: number;
+  leadDir: number;
+  trailAngle: number;
+  trailDir: number;
+  allowFlip: boolean;
+};
+
 export type JobPlan = {
   // Aggregated across every product line on the job: shared items merge into one entry.
   materials: Map<string, { quantity: number; description: string }>;
   parts: Map<string, { quantity: number; name: string; partNumber: string | null }>;
   fabricated: Map<string, number>;
   tasks: PlannedTask[];
+  // Empty unless a template's materials carry cut lists. Materials without one
+  // behave exactly as they always have.
+  cutItems: PlannedCutItem[];
 };
 
 // Works out everything a job needs from its product lines: material, parts,
@@ -59,7 +77,7 @@ export async function computeJobPlan(
   items: PlanLine[],
   options?: { mergeTasks?: boolean }
 ): Promise<JobPlan> {
-  const empty: JobPlan = { materials: new Map(), parts: new Map(), fabricated: new Map(), tasks: [] };
+  const empty: JobPlan = { materials: new Map(), parts: new Map(), fabricated: new Map(), tasks: [], cutItems: [] };
   if (items.length === 0) return empty;
 
   const allTemplateIds = new Set<string>();
@@ -84,7 +102,7 @@ export async function computeJobPlan(
   const [matsRes, partsRes, subLinksRes, tasksRes, templatesData] = await Promise.all([
     supabase
       .from("product_template_materials")
-      .select("product_template_id, feet_per_unit, raw_materials(id, shape, size, wall_thickness, grade)")
+      .select("id, product_template_id, raw_material_id, feet_per_unit, raw_materials(id, shape, size, wall_thickness, grade)")
       .in("product_template_id", templateIdArr),
     supabase
       .from("product_template_parts")
@@ -106,7 +124,9 @@ export async function computeJobPlan(
   ]);
 
   type TplMatRow = {
+    id: string;
     product_template_id: string;
+    raw_material_id: string;
     feet_per_unit: number;
     raw_materials: { id: string; shape: string; size: string; wall_thickness: string | null; grade: string } | null;
   };
@@ -164,6 +184,96 @@ export async function computeJobPlan(
   for (const item of items) {
     expandTemplate(item.templateId, item.quantity);
   }
+
+  // ---- Cut list pieces ----
+  // A cut item hangs off a BOM ROW, not off a raw material, so a template's
+  // pieces are reached through its material rows. Fetched on its own rather
+  // than as an embedded join, because PostgREST types embedded rows as arrays
+  // and that breaks the TypeScript build.
+  //
+  // Note this reads templateQtyTotals, which already stops at a stockable
+  // sub-assembly -- so the pieces of something pulled finished off the shelf
+  // correctly do NOT land on this job's saw list.
+  type TplCutRow = {
+    product_template_material_id: string;
+    mark: string | null;
+    length_inches: number;
+    quantity_per_unit: number;
+    lead_angle: number;
+    lead_dir: number;
+    trail_angle: number;
+    trail_dir: number;
+    allow_flip: boolean;
+    sort_order: number;
+  };
+  const ptmIds = tplMaterials.map((m) => m.id);
+  let tplCutRows: TplCutRow[] = [];
+  if (ptmIds.length > 0) {
+    const cutRes = await supabase
+      .from("product_template_cut_items")
+      .select(
+        "product_template_material_id, mark, length_inches, quantity_per_unit, lead_angle, lead_dir, trail_angle, trail_dir, allow_flip, sort_order"
+      )
+      .in("product_template_material_id", ptmIds)
+      .order("sort_order");
+    tplCutRows = (cutRes.data || []) as unknown as TplCutRow[];
+  }
+
+  const ptmById = new Map<string, TplMatRow>(tplMaterials.map((m) => [m.id, m]));
+
+  // Identical pieces merge, so a job for two railings that share a POST mark
+  // shows one line of eight rather than two lines of four.
+  const cutMap = new Map<string, PlannedCutItem>();
+  const cutOrder = new Map<string, number>();
+  for (const c of tplCutRows) {
+    const parent = ptmById.get(c.product_template_material_id);
+    if (!parent) continue;
+    const totalQty = templateQtyTotals.get(parent.product_template_id);
+    if (!totalQty) continue;
+    // Pieces are whole things -- a job cannot need three quarters of a post --
+    // so a fractional total rounds UP rather than losing a piece.
+    const qty = Math.ceil(Number(c.quantity_per_unit) * totalQty);
+    if (qty < 1) continue;
+    const leadDir = Number(c.lead_dir) === -1 ? -1 : 1;
+    const trailDir = Number(c.trail_dir) === -1 ? -1 : 1;
+    const allowFlip = c.allow_flip !== false;
+    const key = [
+      parent.raw_material_id,
+      (c.mark || "").trim().toLowerCase(),
+      Number(c.length_inches),
+      Number(c.lead_angle),
+      leadDir,
+      Number(c.trail_angle),
+      trailDir,
+      allowFlip,
+    ].join("|");
+    const existing = cutMap.get(key);
+    if (existing) {
+      existing.quantity += qty;
+    } else {
+      cutOrder.set(key, Number(c.sort_order) || 0);
+      cutMap.set(key, {
+        rawMaterialId: parent.raw_material_id,
+        templateId: parent.product_template_id,
+        mark: c.mark ? String(c.mark) : null,
+        lengthInches: Number(c.length_inches),
+        quantity: qty,
+        leadAngle: Number(c.lead_angle),
+        leadDir,
+        trailAngle: Number(c.trail_angle),
+        trailDir,
+        allowFlip,
+      });
+    }
+  }
+  const cutItems = Array.from(cutMap.entries())
+    .sort((a, b) => {
+      if (a[1].rawMaterialId !== b[1].rawMaterialId) {
+        return a[1].rawMaterialId < b[1].rawMaterialId ? -1 : 1;
+      }
+      return (cutOrder.get(a[0]) || 0) - (cutOrder.get(b[0]) || 0);
+    })
+    .map(([, v]) => v);
 
   const matMap = new Map<string, { quantity: number; description: string }>();
   const partMap = new Map<string, { quantity: number; name: string; partNumber: string | null }>();
@@ -258,6 +368,7 @@ export async function computeJobPlan(
     parts: partMap,
     fabricated: fabricatedQtyTotals,
     tasks: mergeTasks ? Array.from(mergedTasks.values()) : perLineTasks,
+    cutItems,
   };
 }
 
@@ -578,4 +689,134 @@ export async function recomputeJobPlan(
       }
     }
   }
+}
+
+
+// What a fill did, so the screen can tell the truth about it afterwards.
+export type CutListFillResult = {
+  inserted: number;
+  filled: { rawMaterialId: string; pieces: number }[];
+  // Materials left alone because their nest has already been pushed into
+  // inventory. Their plan is what the pulls and drops were made from, so it is
+  // not ours to rewrite underneath them.
+  skipped: string[];
+};
+
+// Fills a job's cutting-nest cut list from the cut lists on its products'
+// templates. Deliberately NOT called from job creation -- it runs from the
+// "Fill from products" button on the Cutting Nest tab, so nothing about
+// creating a job changes and a fill can be repeated and seen before it lands.
+//
+// Rules it keeps:
+//   - Only rows a previous fill created (source = 'template') are replaced.
+//     Anything typed by hand stays 'manual' and is never touched.
+//   - A material whose nest has already been applied is skipped whole, and
+//     reported back rather than silently ignored.
+//   - Materials that got pieces have their nest switched on, or the tab would
+//     show a filled cut list behind a toggle that is still off.
+export async function generateJobCutList(
+  supabase: SupabaseClient,
+  companyId: string,
+  jobId: string
+): Promise<CutListFillResult> {
+  const empty: CutListFillResult = { inserted: 0, filled: [], skipped: [] };
+  if (!companyId) return empty;
+
+  const { data: liData } = await supabase
+    .from("job_line_items")
+    .select("id, product_template_id, quantity")
+    .eq("job_id", jobId)
+    .order("sort_order");
+  const lineItems = (liData || []) as unknown as {
+    id: string;
+    product_template_id: string | null;
+    quantity: number;
+  }[];
+  const templateLines: PlanLine[] = lineItems
+    .filter((li) => li.product_template_id)
+    .map((li) => ({
+      lineItemId: li.id,
+      templateId: li.product_template_id as string,
+      quantity: Number(li.quantity),
+    }));
+  if (templateLines.length === 0) return empty;
+
+  const plan = await computeJobPlan(supabase, templateLines, { mergeTasks: false });
+  if (plan.cutItems.length === 0) return empty;
+
+  const affected = Array.from(new Set(plan.cutItems.map((c) => c.rawMaterialId)));
+
+  const { data: nestData } = await supabase
+    .from("job_cut_nests")
+    .select("id, raw_material_id, applied_at")
+    .eq("job_id", jobId);
+  const nests = (nestData || []) as unknown as {
+    id: string;
+    raw_material_id: string;
+    applied_at: string | null;
+  }[];
+  const appliedIds = new Set(nests.filter((n) => n.applied_at).map((n) => n.raw_material_id));
+
+  const skipped = affected.filter((id) => appliedIds.has(id));
+  const fillable = affected.filter((id) => !appliedIds.has(id));
+  if (fillable.length === 0) return { inserted: 0, filled: [], skipped };
+
+  const del = await supabase
+    .from("job_cut_list_items")
+    .delete()
+    .eq("job_id", jobId)
+    .eq("source", "template")
+    .in("raw_material_id", fillable);
+  if (del.error) throw new Error("Failed to clear the previous fill: " + del.error.message);
+
+  const rows = plan.cutItems
+    .filter((c) => !appliedIds.has(c.rawMaterialId))
+    .map((c, i) => ({
+      company_id: companyId,
+      job_id: jobId,
+      raw_material_id: c.rawMaterialId,
+      mark: c.mark,
+      length_inches: c.lengthInches,
+      quantity: c.quantity,
+      lead_angle: c.leadAngle,
+      lead_dir: c.leadDir,
+      trail_angle: c.trailAngle,
+      trail_dir: c.trailDir,
+      allow_flip: c.allowFlip,
+      sort_order: i,
+      source: "template",
+      product_template_id: c.templateId,
+    }));
+
+  if (rows.length > 0) {
+    const ins = await supabase.from("job_cut_list_items").insert(rows);
+    if (ins.error) throw new Error("Failed to write the cut list: " + ins.error.message);
+  }
+
+  const existingByMaterial = new Map(nests.map((n) => [n.raw_material_id, n]));
+  const newNests = fillable
+    .filter((id) => !existingByMaterial.has(id))
+    .map((id) => ({ company_id: companyId, job_id: jobId, raw_material_id: id, enabled: true }));
+  if (newNests.length > 0) {
+    const nestIns = await supabase.from("job_cut_nests").insert(newNests);
+    if (nestIns.error) throw new Error("Failed to turn the nest on: " + nestIns.error.message);
+  }
+  const toEnable = fillable.filter((id) => existingByMaterial.has(id));
+  if (toEnable.length > 0) {
+    const nestUpd = await supabase
+      .from("job_cut_nests")
+      .update({ enabled: true })
+      .eq("job_id", jobId)
+      .in("raw_material_id", toEnable);
+    if (nestUpd.error) throw new Error("Failed to turn the nest on: " + nestUpd.error.message);
+  }
+
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.raw_material_id, (counts.get(r.raw_material_id) || 0) + 1);
+
+  return {
+    inserted: rows.length,
+    filled: Array.from(counts.entries()).map(([rawMaterialId, pieces]) => ({ rawMaterialId, pieces })),
+    skipped,
+  };
 }
