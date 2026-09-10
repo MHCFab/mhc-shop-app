@@ -148,10 +148,17 @@ export default function EmployeesPage() {
         setInviting(false);
         return;
       }
-      if (data.alreadyAsked) {
-        setInviteSuccess(inviteEmail.trim() + " has already been asked to join your shop. They will see the request next time they sign in to ShopWorks.");
-      } else if (data.pendingMembership) {
-        setInviteSuccess(inviteEmail.trim() + " already has a ShopWorks login, so there is nothing to set up - they have been asked to join your shop and will see the request next time they sign in. No email goes out for this, so it is worth telling them.");
+      if (data.pendingMembership) {
+        const asked = data.alreadyAsked
+          ? inviteEmail.trim() + " has already been asked to join your shop"
+          : inviteEmail.trim() + " already has a ShopWorks login, so there is nothing to set up - they have been asked to join your shop";
+        setInviteSuccess(
+          data.emailSent
+            ? asked + ", and we have emailed them. They will also see the request next time they sign in to ShopWorks."
+            : asked + ". We could not email them" +
+              (data.emailError ? " (" + data.emailError + ")" : "") +
+              ", so it is worth telling them - they will see the request next time they sign in to ShopWorks."
+        );
       } else {
         setInviteSuccess("Invite sent to " + inviteEmail.trim() + ".");
       }

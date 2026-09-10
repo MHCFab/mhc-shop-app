@@ -292,10 +292,17 @@ export default function CustomersPage() {
         }
         setInviteError(msg);
       } else {
-        if (body.alreadyAsked) {
-          setInviteSuccess(email + " has already been asked to join. They will see the request next time they sign in to ShopWorks.");
-        } else if (body.pendingMembership) {
-          setInviteSuccess(email + " already has a ShopWorks login, so there is no password to set. They have been asked for portal access here and will see the request next time they sign in. No email goes out for this, so it is worth telling them.");
+        if (body.pendingMembership) {
+          const asked = body.alreadyAsked
+            ? email + " has already been asked for portal access here"
+            : email + " already has a ShopWorks login, so there is no password to set - they have been asked for portal access here";
+          setInviteSuccess(
+            body.emailSent
+              ? asked + ", and we have emailed them. They will also see the request next time they sign in to ShopWorks."
+              : asked + ". We could not email them" +
+                (body.emailError ? " (" + body.emailError + ")" : "") +
+                ", so it is worth telling them - they will see the request next time they sign in to ShopWorks."
+          );
         } else {
           setInviteSuccess(
             "Invite sent to " + email + ". They'll get an email with a link to set their password." +

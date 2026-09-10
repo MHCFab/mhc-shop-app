@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+import { sendMembershipRequestEmail, appBaseUrl } from "@/app/lib/email";
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role, company_id")
+      .select("role, company_id, full_name")
       .eq("id", user.id)
       .single();
 
@@ -102,6 +103,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (existingUserId) {
+      // Set when they had already been asked and had not answered, so the
+      // tail below can word the reply as a nudge rather than a fresh request.
+      let alreadyAsked = false;
+
       // Where do they stand with THIS shop already?
       const { data: already } = await supabase
         .from("memberships")
@@ -133,11 +138,11 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       } else if (already?.status === "pending") {
-        return NextResponse.json({
-          success: true,
-          pendingMembership: true,
-          alreadyAsked: true,
-        });
+        // They were already asked and have not answered. There is nothing new
+        // to write - but an admin clicking Invite a second time is deliberately
+        // nudging them, so fall through to the tail below and send the email
+        // again rather than returning here silently.
+        alreadyAsked = true;
       } else if (already) {
         // An old membership that was switched off or declined: ask again.
         const { data: revived, error: reviveError } = await supabase
@@ -171,12 +176,40 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // No email goes out. Supabase will not mail an address that already has
-      // an account, and ShopWorks has no mail of its own yet - so they will see
-      // the request in the app the next time they sign in, and the person
-      // inviting them is told to say so.
+      // ----------------------------------------------------------------
+      // Now tell them.
+      //
+      // Supabase refuses to mail an address that already has a login, so this
+      // one is ours to send. It goes out AFTER the membership row is safely
+      // written, and a failure here undoes nothing: the request stands either
+      // way and they will see it in the app at their next sign-in. We hand the
+      // outcome back so the admin knows whether to give them a heads-up.
+      //
+      // The shop name is read through the CALLER'S client, which can only ever
+      // see its own shop - exactly the one doing the inviting.
+      // ----------------------------------------------------------------
       if (!(already?.status === "active" && stillSettingUp)) {
-        return NextResponse.json({ success: true, pendingMembership: true });
+        const { data: shop } = await supabase
+          .from("companies")
+          .select("name")
+          .eq("id", companyId)
+          .maybeSingle();
+
+        const mail = await sendMembershipRequestEmail({
+          to: normalizedEmail,
+          shopName: (shop?.name as string) || "",
+          inviterName: (profile.full_name as string) || null,
+          role: "employee",
+          appUrl: appBaseUrl(req.headers.get("origin")),
+        });
+
+        return NextResponse.json({
+          success: true,
+          pendingMembership: true,
+          alreadyAsked,
+          emailSent: mail.ok,
+          emailError: mail.ok ? null : mail.error,
+        });
       }
     }
 
