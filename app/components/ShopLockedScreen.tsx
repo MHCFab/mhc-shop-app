@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "../lib/supabase";
 
 export default function ShopLockedScreen({
@@ -53,20 +54,30 @@ export default function ShopLockedScreen({
               starts.
             </p>
             <p className="text-gray-600 mb-6">
-              To pick up where you left off, email{" "}
-              <a
-                href={"mailto:" + supportEmail}
-                className="text-blue-600 hover:underline"
-              >
-                {supportEmail}
-              </a>{" "}
-              and we&apos;ll get you set up.
+              Pick the plan that fits your shop and we&apos;ll switch it back
+              on. It takes a minute and there is no card form to fight with.
             </p>
+            <Link
+              href="/billing"
+              className="inline-block w-full text-center bg-blue-600 text-white py-2.5 rounded-md font-medium hover:bg-blue-700 transition-colors mb-6"
+            >
+              Choose your plan
+            </Link>
             <div className="bg-gray-50 border border-gray-200 rounded-md p-4 mb-6">
               <p className="text-sm text-gray-600">
                 Your crew and your customers can&apos;t get in either right now.
                 They&apos;re just being told the shop isn&apos;t available —
                 they aren&apos;t shown anything about billing.
+              </p>
+              <p className="text-sm text-gray-600 mt-2">
+                Rather talk to somebody? Email{" "}
+                <a
+                  href={"mailto:" + supportEmail}
+                  className="text-blue-600 hover:underline"
+                >
+                  {supportEmail}
+                </a>
+                .
               </p>
             </div>
           </>

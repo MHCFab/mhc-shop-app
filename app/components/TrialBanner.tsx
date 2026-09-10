@@ -43,7 +43,7 @@ export default function TrialBanner({
           </span>
         </span>
         <Link
-          href="/admin/billing"
+          href="/billing"
           className="font-medium underline hover:no-underline"
         >
           Trial and setup
