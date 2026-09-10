@@ -4,6 +4,8 @@ import { createServerSupabaseClient } from "../lib/supabase-server";
 import PortalSignOut from "./PortalSignOut";
 import UnreadNavBadge from "../components/UnreadNavBadge";
 import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
+import ShopLockedScreen from "../components/ShopLockedScreen";
+import { checkShopAccess } from "../lib/shop-access";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabaseClient();
@@ -28,6 +30,22 @@ export default async function PortalLayout({ children }: { children: React.React
   // belong to more than one, or another shop has asked to add them.
   const { data: membershipRows } = await supabase.rpc("my_memberships");
   const memberships = (membershipRows || []) as unknown as Membership[];
+
+  // If the shop has lapsed, its customers get the neutral screen and NOTHING
+  // about money. They are not our customer and they are not the ones who owe
+  // anything - all they need to know is that it is not available and their
+  // supplier can tell them more. The switcher stays, for the same reason it
+  // is on the disabled screen below.
+  const access = await checkShopAccess(supabase);
+
+  if (access?.state === "locked") {
+    return (
+      <>
+        <ShopSwitcher memberships={memberships} />
+        <ShopLockedScreen isOwner={false} />
+      </>
+    );
+  }
 
   // Disabled portal accounts get a clear message instead of empty pages.
   // The switcher goes here too: somebody switched off by this shop, but invited

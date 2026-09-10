@@ -190,3 +190,131 @@ export async function sendMembershipRequestEmail(params: {
 
   return sendEmail({ to: params.to, subject, html, text });
 }
+
+// ---------------------------------------------------------------------------
+// Signup: "confirm your email address".
+//
+// This is the ONLY thing standing between the form and a real shop record. At
+// the moment we send it, nothing exists but one row in shop_signups - no shop,
+// no login, and no password anywhere. The link is the whole account.
+// ---------------------------------------------------------------------------
+export async function sendSignupConfirmationEmail(params: {
+  to: string;
+  shopName: string;
+  fullName: string;
+  confirmUrl: string;
+}): Promise<SendResult> {
+  const subject = "Confirm your email to finish setting up ShopWorks";
+
+  const greeting = params.fullName ? "Hi " + params.fullName + "," : "Hi,";
+
+  const text =
+    greeting +
+    "\n\nYou started setting up " +
+    params.shopName +
+    " on ShopWorks. Open the link below to pick a password and get into your shop:\n\n" +
+    params.confirmUrl +
+    "\n\nThe link works once and expires in 24 hours.\n\n" +
+    "Your 14-day free trial starts when you finish, not now, so there is no rush " +
+    "and there is no card to enter.\n\n" +
+    "If you did not start this, ignore this email - nothing has been created.\n";
+
+  const html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#111;">' +
+    "<p>" +
+    escapeHtml(greeting) +
+    "</p>" +
+    "<p>You started setting up <strong>" +
+    escapeHtml(params.shopName) +
+    "</strong> on ShopWorks. Use the button below to pick a password and get into your shop.</p>" +
+    '<p><a href="' +
+    escapeHtml(params.confirmUrl) +
+    '" style="display:inline-block;background:#111;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">Set my password</a></p>' +
+    "<p>The link works once and expires in 24 hours.</p>" +
+    "<p>Your 14-day free trial starts when you finish, not now — so there is no rush, and there is no card to enter.</p>" +
+    '<p style="color:#666;font-size:13px;">If you did not start this, ignore this email. Nothing has been created.</p>' +
+    "</div>";
+
+  return sendEmail({ to: params.to, subject, html, text });
+}
+
+// ---------------------------------------------------------------------------
+// Signup, when that address ALREADY has a ShopWorks login.
+//
+// The signup form deliberately gives the same answer either way - "check your
+// email" - so that nobody can use it to find out whether an address has an
+// account here. This is the email that goes instead, and it is genuinely
+// useful: somebody with a customer portal login at one shop who wants their
+// own shop is exactly the case this points the right way.
+// ---------------------------------------------------------------------------
+export async function sendSignupExistingAccountEmail(params: {
+  to: string;
+  shopName: string;
+  appUrl: string;
+}): Promise<SendResult> {
+  const subject = "You already have a ShopWorks login";
+  const signIn = params.appUrl || "https://shopworks.app";
+
+  const text =
+    "Somebody - probably you - just tried to start a new ShopWorks shop called " +
+    params.shopName +
+    " using this email address.\n\n" +
+    "This address already has a ShopWorks login, so we did not create anything new. " +
+    "Sign in at " +
+    signIn +
+    " with your existing password.\n\n" +
+    "Once you are in, you can start your own shop from Admin, then Trial and setup. " +
+    "Your existing access stays exactly as it is, and you can switch between them.\n\n" +
+    "If you have forgotten your password, use the reset link on the sign-in page.\n\n" +
+    "If this was not you, you can ignore it - nothing has changed.\n";
+
+  const html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#111;">' +
+    "<p>Somebody — probably you — just tried to start a new ShopWorks shop called <strong>" +
+    escapeHtml(params.shopName) +
+    "</strong> using this email address.</p>" +
+    "<p>This address already has a ShopWorks login, so nothing new was created.</p>" +
+    '<p><a href="' +
+    escapeHtml(signIn) +
+    '" style="display:inline-block;background:#111;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">Sign in</a></p>' +
+    "<p>Once you are in, you can start your own shop from Admin &rarr; Trial and setup. Your existing access stays exactly as it is, and you can switch between them.</p>" +
+    '<p style="color:#666;font-size:13px;">Forgotten your password? Use the reset link on the sign-in page. If this was not you, ignore this email — nothing has changed.</p>' +
+    "</div>";
+
+  return sendEmail({ to: params.to, subject, html, text });
+}
+
+// ---------------------------------------------------------------------------
+// The email that comes to YOU, not to a customer.
+//
+// Goes to OWNER_ALERT_EMAIL. That is an environment variable rather than a
+// hardcoded address on purpose - support@mhcfab.com is what the legal pages
+// promise to customers, and this is operational mail for whoever is running
+// ShopWorks. Keeping them separate means changing one does not change the
+// other.
+//
+// If the variable is not set, this quietly does nothing. It is never worth
+// failing a customer's page over an internal notification.
+// ---------------------------------------------------------------------------
+export async function sendOwnerAlertEmail(params: {
+  subject: string;
+  lines: string[];
+}): Promise<SendResult> {
+  const to = process.env.OWNER_ALERT_EMAIL;
+  if (!to) {
+    return { ok: false, error: "OWNER_ALERT_EMAIL is not set." };
+  }
+
+  const body = params.lines.filter((l) => l !== undefined && l !== null);
+
+  const text = body.join("\n") + "\n";
+
+  const html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#111;">' +
+    body
+      .map((l) => (l === "" ? "<br />" : "<p>" + escapeHtml(l) + "</p>"))
+      .join("") +
+    "</div>";
+
+  return sendEmail({ to, subject: params.subject, html, text });
+}

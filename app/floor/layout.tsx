@@ -3,6 +3,8 @@ import Link from "next/link";
 import { createServerSupabaseClient } from "../lib/supabase-server";
 import FloorSignOut from "./FloorSignOut";
 import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
+import ShopLockedScreen from "../components/ShopLockedScreen";
+import { checkShopAccess } from "../lib/shop-access";
 
 export default async function FloorLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createServerSupabaseClient();
@@ -29,6 +31,20 @@ export default async function FloorLayout({ children }: { children: React.ReactN
   // Which shops this person belongs to. Renders nothing at all unless they
   // belong to more than one, or another shop has asked to add them.
   const { data: membershipRows } = await supabase.rpc("my_memberships");
+
+  // Same check the admin area does. An admin standing at a tablet gets the
+  // owner wording; the crew get the plain one, with nothing about billing in
+  // it - that is a conversation for them and their boss, not for us.
+  const access = await checkShopAccess(supabase);
+
+  if (access?.state === "locked") {
+    return (
+      <>
+        <ShopSwitcher memberships={(membershipRows || []) as unknown as Membership[]} />
+        <ShopLockedScreen isOwner={isAdmin} shopName={access.shopName} />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100">

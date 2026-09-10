@@ -91,7 +91,14 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 pt-4 border-t border-gray-200 text-xs text-gray-500 text-center">
+        <p className="mt-6 pt-4 border-t border-gray-200 text-sm text-gray-600 text-center">
+          New to ShopWorks?{" "}
+          <Link href="/signup" className="text-blue-600 hover:underline">
+            Start a free trial
+          </Link>
+        </p>
+
+        <p className="mt-4 text-xs text-gray-500 text-center">
           <Link href="/terms" className="hover:text-blue-600 hover:underline">
             Terms of Service
           </Link>

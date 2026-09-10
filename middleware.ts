@@ -15,14 +15,23 @@ import { NextResponse, type NextRequest } from "next/server";
 const SUPABASE_TIMEOUT_MS = 2000;
 
 // Paths that don't require a logged-in user.
-const PUBLIC_PATHS = ["/login", "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
+const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/shops",
+  "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Paths that don't need Supabase in the middleware at all. These pages run
 // their own token-based flows, so we skip the auth round-trip entirely and they
 // keep loading even when Supabase is unreachable. The legal pages are here for
 // the same reason: Terms and Privacy have to be readable by someone with no
 // account, and have to stay readable during an outage.
-const NO_AUTH_PATHS = ["/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
+//
+// Signing up and starting a shop are on this list too. Signing up is done by
+// somebody with no account at all, and "start a new shop" has to be reachable
+// by a customer portal login - who the rules below would otherwise bounce
+// straight back to /portal. Both of those pages check for a signed-in person
+// themselves, and both API routes do their own checking, so nothing is
+// unguarded - the check just happens there instead of here.
+const NO_AUTH_PATHS = ["/signup", "/api/signup", "/new-shop", "/api/shops",
+  "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Resolves to the promise's value, or to null if it rejects or takes too long.
 // This is what guarantees the middleware always moves on instead of hanging.
