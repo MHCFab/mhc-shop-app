@@ -16,6 +16,7 @@ const SUPABASE_TIMEOUT_MS = 2000;
 
 // Paths that don't require a logged-in user.
 const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/shops",
+  "/api/stripe",
   "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Paths that don't need Supabase in the middleware at all. These pages run
@@ -30,7 +31,14 @@ const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/sho
 // straight back to /portal. Both of those pages check for a signed-in person
 // themselves, and both API routes do their own checking, so nothing is
 // unguarded - the check just happens there instead of here.
+// ⚠️ /api/stripe is on both lists because STRIPE IS NOT SIGNED IN. It posts
+// to the webhook with no cookies at all, and without this the middleware
+// would redirect it to /login - Stripe would see a 307, mark the webhook as
+// failed, and no shop would ever get switched on after paying. The webhook
+// does something far stronger than a session check instead: it verifies
+// Stripe's signature on the raw body before it reads a single field.
 const NO_AUTH_PATHS = ["/signup", "/api/signup", "/new-shop", "/api/shops",
+  "/api/stripe",
   "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Resolves to the promise's value, or to null if it rejects or takes too long.

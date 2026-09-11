@@ -3,6 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { sendMembershipRequestEmail, appBaseUrl } from "@/app/lib/email";
+import { planById, PLANS } from "@/app/lib/plans";
 
 export async function POST(req: NextRequest) {
   try {
@@ -42,6 +43,61 @@ export async function POST(req: NextRequest) {
 
     if (!profile || profile.role !== "admin") {
       return NextResponse.json({ error: "Only admins can invite employees." }, { status: 403 });
+    }
+
+    // ------------------------------------------------------------------
+    // Is there room on their plan for one more login?
+    //
+    // The price bands are sold on shop logins - admin and floor together,
+    // customer portal logins excluded and free - so this is the one place
+    // that number has to be enforced, or the bands mean nothing.
+    //
+    // ⚠️ ONLY A SHOP THAT IS ACTUALLY ON A PLAN IS CAPPED. A shop still on its
+    // free trial has no band yet and can invite whoever it likes; the billing
+    // page works out which band it will need and says so before they pick one.
+    // Capping a trial would mean telling somebody who is evaluating the
+    // software that they cannot put their crew on it, which is the opposite
+    // of what a trial is for.
+    //
+    // ⚠️ KNOWN GAP, ACCEPTED FOR NOW: this covers INVITING somebody. It does
+    // not cover an existing ShopWorks user ACCEPTING a pending membership -
+    // that runs inside the database and never comes through here. So a shop
+    // with room could send several requests and end up one over its band if
+    // they all say yes at once. Nobody is anywhere near a boundary yet; when
+    // somebody is, the same check belongs inside the accept function.
+    // ------------------------------------------------------------------
+    const { data: billingRows } = await supabase.rpc("my_billing_summary");
+    const billing = ((billingRows || []) as unknown as {
+      plan_id: string | null;
+      login_count: number;
+    }[])[0];
+
+    if (billing?.plan_id) {
+      const band = planById(billing.plan_id);
+      const used = Number(billing.login_count ?? 0);
+
+      if (band && used >= band.maxLogins) {
+        const next = PLANS.find((p) => p.maxLogins > band.maxLogins);
+        const upgrade = next
+          ? "Moving up to the " + next.label + " plan lets you add more."
+          : "Please get in touch and we will sort something out.";
+
+        return NextResponse.json(
+          {
+            error:
+              "Your plan covers " +
+              band.maxLogins +
+              " shop logins and you are using all " +
+              used +
+              ". " +
+              upgrade +
+              " Nothing has been sent to them.",
+            needsUpgrade: true,
+            billingUrl: "/billing",
+          },
+          { status: 402 }
+        );
+      }
     }
 
     const companyId = profile.company_id;

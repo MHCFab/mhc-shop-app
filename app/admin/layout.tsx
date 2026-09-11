@@ -4,6 +4,7 @@ import NavBar from "../components/NavBar";
 import ShopSwitcher, { type Membership } from "../components/ShopSwitcher";
 import ShopLockedScreen from "../components/ShopLockedScreen";
 import TrialBanner from "../components/TrialBanner";
+import PastDueBanner from "../components/PastDueBanner";
 import { checkShopAccess } from "../lib/shop-access";
 
 export default async function AdminLayout({
@@ -68,6 +69,13 @@ export default async function AdminLayout({
     <>
       <ShopSwitcher memberships={(membershipRows || []) as unknown as Membership[]} />
       {access?.state === "trial" && <TrialBanner daysLeft={access.daysLeft} />}
+      {/* ⚠️ ADMIN ONLY, and that is the point. A failed card is the shop
+          owner's problem to fix; his welders and his customers must not be
+          shown it. The floor and portal layouts deliberately have no
+          equivalent of this line. */}
+      {access?.state === "grace" && (
+        <PastDueBanner graceEndsAt={access.graceEndsAt} />
+      )}
       {profile && <NavBar profile={profile} company={company} />}
       <main>{children}</main>
     </>

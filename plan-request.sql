@@ -195,79 +195,120 @@ notify pgrst, 'reload schema';
 */
 
 
--- ===========================================================================
--- PART 3 - CLOSE A HOLE THE LOCKOUT FEATURE JUST MADE IMPORTANT
--- ===========================================================================
--- ⚠️ READ THIS BEFORE RUNNING IT. It is a real fix, and it is the one part of
--- today's work that can break an existing screen if I have got the column list
--- wrong.
+-- ###########################################################################
+-- ###  PART 3 BELOW IS SUPERSEDED AND DID NOT WORK. DO NOT RUN IT.        ###
+-- ###  ITS CHECK IS COMMENTED OUT BECAUSE IT ASKS THE WRONG QUESTION      ###
+-- ###  AND WILL REPORT "PROBLEM" FOREVER, EVEN NOW THAT THE HOLE IS SHUT. ###
+-- ###                                                                     ###
+-- ###  THE FIX THAT WORKS IS IN:  subscription-guard.sql  (run, verified) ###
+-- ###########################################################################
 --
--- THE PROBLEM
--- The rule `companies_admin_update` lets a shop's admin update THEIR OWN shop
--- row - which is right - but it does not say WHICH COLUMNS. Until today that
--- did not matter, because every column on that row was a setting they were
--- entitled to change anyway.
+-- WHAT WENT WRONG, so nobody repeats it:
 --
--- Today three of those columns became the subscription. So as things stand, a
--- shop whose trial has ended can switch itself back on with a single call to
--- the API - no password cracking, no clever trick, just the ordinary
--- permissions their own login already has. Proven in rehearsal: the locked
--- admin ran one UPDATE and went straight back to full access.
+-- PART 3 tried to TAKE A PRIVILEGE AWAY - revoke UPDATE on `companies` from
+-- the signed-in role, then hand it back one column at a time. On Supabase the
+-- blanket table privileges were granted by `supabase_admin`, and the `postgres`
+-- role the SQL Editor runs as is not that role. Postgres does NOT raise an
+-- error on a REVOKE it cannot perform - it shrugs and carries on. So the revoke
+-- was a no-op, the column grants underneath were never reached, and the hole
+-- stayed open.
 --
--- That is a bigger thing than the hole you already knowingly accepted. You
--- accepted that a locked shop's DATA is still readable outside the app. This
--- is the lockout not actually locking.
+-- WHY ITS CHECK IS NOW MISLEADING:
 --
--- THE FIX
--- Say which columns a signed-in person may write, instead of all of them. The
--- rule about which ROWS they can reach does not change at all. Your Settings
--- page keeps working; the subscription columns become writable only by you in
--- the dashboard, and by the two functions that are meant to touch them.
+-- That check asks "does the app have PERMISSION to write these columns?" The
+-- answer is yes, and it always will be - that permission is the one we could
+-- not revoke. The guard in subscription-guard.sql does not remove permission;
+-- it lets the write be attempted and then REFUSES it. So permission is simply
+-- the wrong thing to measure, and the check reports PROBLEM even though the
+-- subscription is now properly protected.
 --
--- ⚠️ THE ONE RISK: if a future screen ever writes a NEW column on `companies`,
--- that column must be added to the grant below or the save will fail. The list
--- was taken from the only two places in the whole app that update this table,
--- both in app/admin/settings/page.tsx, plus every other settings-ish column
--- that exists today for good measure.
--- ---------------------------------------------------------------------------
+-- The check in subscription-guard.sql asks the right question: it becomes the
+-- signed-in role, signs in as a real admin, and actually attempts the write.
+-- That one was also run with the guard deliberately removed, and it correctly
+-- reported PROBLEM - so it is a test that can fail, not one that always passes.
+--
+-- ⚠️ Running PART 3 again is harmless (it is a no-op), but pointless.
+-- ⚠️ You do NOT need to undo it. The redundant column grants it added do
+--    nothing while the table-level grant stands.
+--
+-- THE LESSON, worth more than this feature: test a security fix by DOING the
+-- thing you are trying to prevent, not by asking the database whether it thinks
+-- it is prevented.
+-- ###########################################################################
 
-revoke update on public.companies from authenticated;
-
-grant update (
-  name,
-  slug,
-  is_active,
-  updated_at,
-  burden_rate_per_hour,
-  shop_labor_rate_per_hour,
-  material_markup_percent,
-  inv_show_purchased_parts,
-  inv_show_fabricated,
-  inv_track_grade,
-  inv_track_wall_thickness,
-  inv_track_drops,
-  inv_use_nesting,
-  nest_kerf_inches,
-  nest_min_drop_inches
-) on public.companies to authenticated;
-
-notify pgrst, 'reload schema';
-
-
--- ---------------------------------------------------------------------------
--- PART 3 CHECK - read-only. Both lines should say OK.
--- ---------------------------------------------------------------------------
-select 'settings columns are still writable' as check_name,
-       case when has_column_privilege('authenticated','public.companies','burden_rate_per_hour','update')
-             and has_column_privilege('authenticated','public.companies','name','update')
-             and has_column_privilege('authenticated','public.companies','inv_use_nesting','update')
-            then 'OK - your Settings page still saves'
-            else 'PROBLEM: a settings column lost its permission' end as result
-
-union all
-select 'the subscription columns are NOT writable',
-       case when not has_column_privilege('authenticated','public.companies','subscription_status','update')
-             and not has_column_privilege('authenticated','public.companies','trial_ends_at','update')
-             and not has_column_privilege('authenticated','public.companies','requested_plan','update')
-            then 'OK - a locked shop can no longer switch itself back on'
-            else 'PROBLEM: the subscription is still writable from the app' end;
+-- -- ===========================================================================
+-- -- PART 3 - CLOSE A HOLE THE LOCKOUT FEATURE JUST MADE IMPORTANT
+-- -- ===========================================================================
+-- -- ⚠️ READ THIS BEFORE RUNNING IT. It is a real fix, and it is the one part of
+-- -- today's work that can break an existing screen if I have got the column list
+-- -- wrong.
+-- --
+-- -- THE PROBLEM
+-- -- The rule `companies_admin_update` lets a shop's admin update THEIR OWN shop
+-- -- row - which is right - but it does not say WHICH COLUMNS. Until today that
+-- -- did not matter, because every column on that row was a setting they were
+-- -- entitled to change anyway.
+-- --
+-- -- Today three of those columns became the subscription. So as things stand, a
+-- -- shop whose trial has ended can switch itself back on with a single call to
+-- -- the API - no password cracking, no clever trick, just the ordinary
+-- -- permissions their own login already has. Proven in rehearsal: the locked
+-- -- admin ran one UPDATE and went straight back to full access.
+-- --
+-- -- That is a bigger thing than the hole you already knowingly accepted. You
+-- -- accepted that a locked shop's DATA is still readable outside the app. This
+-- -- is the lockout not actually locking.
+-- --
+-- -- THE FIX
+-- -- Say which columns a signed-in person may write, instead of all of them. The
+-- -- rule about which ROWS they can reach does not change at all. Your Settings
+-- -- page keeps working; the subscription columns become writable only by you in
+-- -- the dashboard, and by the two functions that are meant to touch them.
+-- --
+-- -- ⚠️ THE ONE RISK: if a future screen ever writes a NEW column on `companies`,
+-- -- that column must be added to the grant below or the save will fail. The list
+-- -- was taken from the only two places in the whole app that update this table,
+-- -- both in app/admin/settings/page.tsx, plus every other settings-ish column
+-- -- that exists today for good measure.
+-- -- ---------------------------------------------------------------------------
+--
+-- revoke update on public.companies from authenticated;
+--
+-- grant update (
+--   name,
+--   slug,
+--   is_active,
+--   updated_at,
+--   burden_rate_per_hour,
+--   shop_labor_rate_per_hour,
+--   material_markup_percent,
+--   inv_show_purchased_parts,
+--   inv_show_fabricated,
+--   inv_track_grade,
+--   inv_track_wall_thickness,
+--   inv_track_drops,
+--   inv_use_nesting,
+--   nest_kerf_inches,
+--   nest_min_drop_inches
+-- ) on public.companies to authenticated;
+--
+-- notify pgrst, 'reload schema';
+--
+--
+-- -- ---------------------------------------------------------------------------
+-- -- PART 3 CHECK - read-only. Both lines should say OK.
+-- -- ---------------------------------------------------------------------------
+-- select 'settings columns are still writable' as check_name,
+--        case when has_column_privilege('authenticated','public.companies','burden_rate_per_hour','update')
+--              and has_column_privilege('authenticated','public.companies','name','update')
+--              and has_column_privilege('authenticated','public.companies','inv_use_nesting','update')
+--             then 'OK - your Settings page still saves'
+--             else 'PROBLEM: a settings column lost its permission' end as result
+--
+-- union all
+-- select 'the subscription columns are NOT writable',
+--        case when not has_column_privilege('authenticated','public.companies','subscription_status','update')
+--              and not has_column_privilege('authenticated','public.companies','trial_ends_at','update')
+--              and not has_column_privilege('authenticated','public.companies','requested_plan','update')
+--             then 'OK - a locked shop can no longer switch itself back on'
+--             else 'PROBLEM: the subscription is still writable from the app' end;
