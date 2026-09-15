@@ -32,21 +32,56 @@ const argv = process.argv.slice(2);
 const apply = argv.includes("--apply");
 const liveConfirmed = argv.includes("--live");
 
+// ⚠️ --sandbox reads a DIFFERENT line out of .env.local. Since 14 September
+// STRIPE_SECRET_KEY is the LIVE key, so there is no way to reach the sandbox
+// through the normal path any more without swapping keys about - which is how
+// the wrong key ends up deployed. This reads STRIPE_SANDBOX_SECRET_KEY
+// instead, the same line scripts/stripe-preview.mjs uses, and then REFUSES
+// anything that is not a test key. Nothing to paste on a command line.
+const sandbox = argv.includes("--sandbox");
+
 function argValue(name) {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : null;
 }
 
 // ---------------------------------------------------------------------------
+// ⚠️ AM I EVEN IN THE RIGHT FOLDER? ASKED FIRST, ON PURPOSE.
+//
+// Everything below reads a file relative to where this was run from - the
+// plans, and the key in .env.local. Run from the wrong folder, every one of
+// those comes back empty, and the error you get is about whichever one is
+// checked first rather than about the actual problem. So the actual problem
+// gets checked first.
+// ---------------------------------------------------------------------------
+const plansPath = path.join(process.cwd(), "app", "lib", "plans.ts");
+
+if (!fs.existsSync(plansPath)) {
+  console.error(
+    "\nThis is not the ShopWorks folder.\n\n" +
+      "  Running in : " + process.cwd() + "\n" +
+      "  Looking for: " + plansPath + "\n\n" +
+      "  Move to the folder that has app/ and package.json in it, then run\n" +
+      "  the script again. In Cursor's terminal that is usually:\n\n" +
+      "      cd " + path.join("C:", "Users", "erikp", "Desktop", "ShopWorks", "mhc-shop-app") + "\n"
+  );
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // Where the key comes from.
 //
 // ⚠️ PASTING A SECRET KEY ON A COMMAND LINE IS THE FIDDLIEST STEP IN THIS
-// WHOLE JOB, so it is not required. If --key is not given, this reads
-// STRIPE_SECRET_KEY out of .env.local - the same file the app itself uses,
-// which has to be filled in anyway. Nothing to paste twice, nothing to
-// truncate, and the script and the app are then provably using the same key.
+// WHOLE JOB, so it is not required. If --key is not given, this reads the key
+// out of .env.local - the same file the app itself uses, which has to be
+// filled in anyway. Nothing to paste twice, nothing to truncate, and no key
+// left sitting in a shell history or a screenshot.
+//
+//   node scripts/stripe-setup.mjs --sandbox           # see what it would do
+//   node scripts/stripe-setup.mjs --sandbox --apply   # do it, to the sandbox
+//   node scripts/stripe-setup.mjs --apply --live      # do it, for real
 // ---------------------------------------------------------------------------
-function keyFromEnvFile() {
+function keyFromEnvFile(name) {
   const envPath = path.join(process.cwd(), ".env.local");
   if (!fs.existsSync(envPath)) return "";
 
@@ -56,7 +91,7 @@ function keyFromEnvFile() {
 
     const eq = line.indexOf("=");
     if (eq < 0) continue;
-    if (line.slice(0, eq).trim() !== "STRIPE_SECRET_KEY") continue;
+    if (line.slice(0, eq).trim() !== name) continue;
 
     // Strip surrounding quotes if somebody added them.
     return line
@@ -68,29 +103,42 @@ function keyFromEnvFile() {
   return "";
 }
 
+// --sandbox looks at STRIPE_SANDBOX_SECRET_KEY; everything else at
+// STRIPE_SECRET_KEY, which is the live key on this machine.
+const ENV_NAME = sandbox ? "STRIPE_SANDBOX_SECRET_KEY" : "STRIPE_SECRET_KEY";
+
 const keySource = argValue("--key")
   ? "--key"
-  : process.env.STRIPE_SECRET_KEY
-  ? "STRIPE_SECRET_KEY in the environment"
-  : ".env.local";
+  : process.env[ENV_NAME]
+  ? ENV_NAME + " in the environment"
+  : ENV_NAME + " in .env.local";
 
 const key = (
   argValue("--key") ||
-  process.env.STRIPE_SECRET_KEY ||
-  keyFromEnvFile() ||
+  process.env[ENV_NAME] ||
+  keyFromEnvFile(ENV_NAME) ||
   ""
 ).trim();
 
 if (!key) {
+  const envPath = path.join(process.cwd(), ".env.local");
+  const envExists = fs.existsSync(envPath);
+
   console.error(
     "\nNo Stripe secret key found.\n\n" +
-      "  Easiest: put this line in .env.local and run the script again with\n" +
-      "  no arguments at all -\n\n" +
+      "  Looked in   : " + envPath + "\n" +
+      "  That file   : " + (envExists ? "exists" : "IS NOT THERE") + "\n" +
+      (envExists
+        ? "  But it has no line starting STRIPE_SECRET_KEY=\n"
+        : "") +
+      "\n" +
+      "  Add this to .env.local, on its own line, no quotes, no spaces around\n" +
+      "  the = sign, and SAVE the file:\n\n" +
       "      STRIPE_SECRET_KEY=sk_test_...\n\n" +
-      "  Or pass it directly:  node scripts/stripe-setup.mjs --key sk_test_...\n\n" +
+      "  Then run:  node scripts/stripe-setup.mjs\n\n" +
       "  Get the key from Stripe: Developers -> API keys. Use the COPY BUTTON\n" +
       "  next to the secret key, not by selecting the text - the text on screen\n" +
-      "  is partly hidden and selecting it gives you a key that will not work.\n"
+      "  is partly hidden and selecting it gives a key that will not work.\n"
   );
   process.exit(1);
 }
@@ -132,20 +180,21 @@ if (key.length < 40) {
 }
 
 const live = key.startsWith("sk_live_");
-const stripe = new Stripe(key);
 
-// ---------------------------------------------------------------------------
-// Read the plans out of app/lib/plans.ts
-// ---------------------------------------------------------------------------
-const plansPath = path.join(process.cwd(), "app", "lib", "plans.ts");
-
-if (!fs.existsSync(plansPath)) {
+// ⚠️ --sandbox MEANS SANDBOX. If STRIPE_SANDBOX_SECRET_KEY has somehow been
+// filled in with a live key, stop here rather than quietly applying sandbox
+// intentions to the live account.
+if (sandbox && !key.startsWith("sk_test_")) {
   console.error(
-    "\nCannot find app/lib/plans.ts.\n" +
-      "Run this from the top of the repo:  node scripts/stripe-setup.mjs --key ...\n"
+    "\n  ⚠️  REFUSING TO RUN. --sandbox was given but that is not a test key.\n\n" +
+      "  Read from  : " + keySource + "\n" +
+      "  Starts with: " + key.slice(0, 8) + "\n\n" +
+      "  A sandbox key starts sk_test_. Check the line in .env.local.\n"
   );
   process.exit(1);
 }
+
+const stripe = new Stripe(key);
 
 const plansSource = fs.readFileSync(plansPath, "utf8");
 
@@ -379,24 +428,26 @@ async function ensurePrice({ lookupKey, productId, dollars, recurring, nickname 
 //
 // ⚠️ THIS IS WHERE ERIK'S "PRORATE UPGRADES, NEVER REFUND DOWNGRADES" LIVES.
 //
-//   proration_behavior: create_prorations
-//       An upgrade happens now, and what they already paid for the rest of the
-//       period is credited against it. Moving from monthly to quarterly, or
-//       from 1-15 to 16-50, does the right thing.
+//   proration_behavior: always_invoice
+//       An upgrade happens now and is billed now: what they already paid for
+//       the rest of the period is credited against the new price and they pay
+//       the difference on the spot. ⚠️ NOT create_prorations - that is what
+//       billed two years at once on 11 September. The measured numbers for
+//       both are in the block further down; read them before touching this.
 //
-//   schedule_at_period_end.conditions: [shortening_interval]
-//       Going the other way on the CALENDAR - yearly back to monthly - is not
-//       applied now. It is scheduled for the end of the period they paid for,
-//       so they ride out what they bought and no money goes back.
+//   billing_cycle_anchor: unchanged
+//       A shop keeps its billing date. Moving to yearly on the 30th when the
+//       date is the 15th buys a short first year, priced pro rata, and the
+//       renewal stays on the 15th.
 //
-//   ⚠️ decreasing_item_amount IS DELIBERATELY NOT IN THAT LIST, and it is the
-//   trap here. Stripe counts a move to a cheaper-in-the-long-run price as
-//   "decreasing" - and because our yearly price is two months free, monthly ->
-//   yearly qualifies. Adding that condition would push the most valuable
-//   upgrade a shop can make to the end of the period instead of taking the
-//   money now. A band downgrade at the same interval therefore applies
-//   immediately and leaves a CREDIT on their Stripe account, which offsets
-//   their next invoices. That is not a refund - no money leaves.
+//   schedule_at_period_end.conditions:
+//       [shortening_interval, decreasing_item_amount]
+//       Anything that goes DOWN - yearly back to monthly, 16-50 back to 1-15 -
+//       waits for the end of the period they paid for. They ride out what they
+//       bought, nothing is invoiced on the day, and no money goes back.
+//       ⚠️ decreasing_item_amount is new and needs watching: if it turns out
+//       to catch monthly -> yearly too, it has to come out. The block further
+//       down says how to tell.
 //
 //   subscription_cancel: at_period_end, proration_behavior none
 //       They keep what they paid for and get nothing back. No refunds.
@@ -435,15 +486,100 @@ async function ensurePortalConfiguration(productIds) {
         ],
       },
     },
+    // ⚠️⚠️ SWITCHED BACK ON 2026-09-15, AND THE NUMBERS BELOW ARE MEASURED,
+    // NOT REASONED. Read them before changing anything here.
+    //
+    // WHAT WENT WRONG ON 11 SEPTEMBER. A shop on $149 monthly, one day in,
+    // chose yearly in the portal and was offered $2,831.01 - two years at
+    // once. The setting at fault was proration_behavior: create_prorations.
+    //
+    // create_prorations does NOT mean "work out the proration". It means
+    // "work it out and HOLD it until the next invoice". Change the interval
+    // and the next invoice is a year away and already contains the next
+    // year's charge - so the credit, the new period AND the period after it
+    // all land on one bill:
+    //
+    //     -$149.00   15 Sep 26 - 15 Oct 26   unused time, 1-15 monthly
+    //   $1,490.00    15 Sep 26 - 15 Sep 27   remaining time, 1-15 yearly
+    //   $1,490.00    15 Sep 27 - 15 Sep 28   the next year as well
+    //   ---------
+    //   $2,831.00    dated 15 Sep 2027
+    //
+    // always_invoice bills the proration NOW instead, so the third line
+    // never exists. Same shop, same day, same everything else:
+    //
+    //     -$149.00   15 Sep 26 - 15 Oct 26   unused time, 1-15 monthly
+    //   $1,490.00    15 Sep 26 - 15 Sep 27   remaining time, 1-15 yearly
+    //   ---------
+    //   $1,341.00    dated 15 Sep 2026        <- what Erik asked for
+    //
+    // ⚠️ billing_cycle_anchor: "unchanged" WAS NOT THE PROBLEM and IS being
+    // honoured - the old note here was wrong. A shop 15 days into its month
+    // that moves to yearly keeps the 15th as its billing date: Stripe charges
+    // $1,428.77 for 30 Sep 26 to 15 Sep 27 (a short first year, priced pro
+    // rata), less the $74.50 unused, so $1,354.27 today and the next bill on
+    // 15 Sep 2027. Leave it alone. Setting it to "now" moves everybody's
+    // billing date to whenever they happened to click.
+    //
+    // Every number above came out of scripts/stripe-preview.mjs against the
+    // sandbox on 2026-09-15, and the $2,831.00 line is the real bug
+    // reproduced to the penny - which is what says the rest can be believed.
+    // Run that script again before changing any of this.
+    //
+    // ⚠️ THE TWO schedule_at_period_end CONDITIONS ARE WHAT KEEP MONEY FROM
+    // GOING BACKWARDS. Without them, always_invoice bills a DOWNGRADE as a
+    // negative invoice - measured at -$100.00 for 16-50 back down to 1-15,
+    // and -$1,341.00 for yearly back down to monthly. Stripe would not refund
+    // a card over it, but it is still value handed back, and Erik's rule is
+    // that a shop rides out what it already paid for.
+    //
+    //   shortening_interval    yearly -> monthly, quarterly -> monthly, and
+    //                          anything else that shortens the billing period
+    //   decreasing_item_amount 16-50 -> 1-15 and any other drop to a cheaper
+    //                          price at the same interval
+    //
+    // Both wait for the end of the period they paid for. Nothing is invoiced
+    // on the day, their login cap does not tighten under people who are using
+    // it, and there is no credit balance to explain.
+    //
+    // ⚠️⚠️ decreasing_item_amount IS THE ONE TO WATCH, and the sandbox
+    // click-through is what proves it. An older note in this file claimed
+    // Stripe counts monthly -> yearly as "decreasing" because our yearly is
+    // two months free, which would push the most valuable upgrade a shop can
+    // make to the end of its period instead of taking the money now. Stripe
+    // documents the condition as the new price's UNIT AMOUNT being lower, and
+    // $1,490 is not lower than $149 - but that is reading, not evidence, and
+    // reading is exactly what cost $1,400 last time. In the sandbox portal,
+    // pick yearly on a monthly shop: if the page offers roughly $1,341 today
+    // it is right; if it says the change is scheduled for a later date, take
+    // decreasing_item_amount out and accept a credit balance on band
+    // downgrades instead.
+    //
+    // ⚠️ always_invoice charges the card THE MOMENT they confirm. A card that
+    // fails leaves them on the new plan with an unpaid invoice, which becomes
+    // past_due and runs into the 7-day grace like any other failed payment.
+    // That is the right outcome, but it is worth knowing it is the path.
     subscription_update: {
       enabled: true,
       default_allowed_updates: ["price", "promotion_code"],
-      proration_behavior: "create_prorations",
+
+      // ⚠️ NOT create_prorations. That is the $2,831 bug. See above.
+      proration_behavior: "always_invoice",
+
+      // ⚠️ NOT "now". Leave a shop's billing date where it is.
       billing_cycle_anchor: "unchanged",
+
+      // A shop still inside its free trial that picks a different plan stays
+      // on trial rather than being charged on the spot.
       trial_update_behavior: "continue_trial",
+
       schedule_at_period_end: {
-        conditions: [{ type: "shortening_interval" }],
+        conditions: [
+          { type: "shortening_interval" },
+          { type: "decreasing_item_amount" },
+        ],
       },
+
       products: productIds,
     },
   };
@@ -537,7 +673,12 @@ async function main() {
   });
 
   // Stripe allows at most 10 products in the portal's switchable list. Three
-  // is fine, but guard it so a future band does not fail the whole run.
+  // band products, so the cap is not close - but it is sliced anyway, because
+  // a fourth band one day should not turn into a Stripe error nobody expects.
+  //
+  // ⚠️ THIS LIST IS ONLY FILLED ON --apply (see the loop above). A dry run
+  // shows the portal configuration with no switchable products; that is the
+  // dry run being honest, not the list being lost.
   await ensurePortalConfiguration(productIds.slice(0, 10));
 
   console.log("");

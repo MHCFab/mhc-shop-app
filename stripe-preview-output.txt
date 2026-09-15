@@ -1,0 +1,47 @@
+
+ShopWorks - what would a plan change actually cost?
+
+  ACCOUNT      : Shopworks sandbox
+  account id   : acct_1UEaUKH23o1oRIgR
+  mode         : SANDBOX (sk_test_)
+  key read from: STRIPE_SANDBOX_SECRET_KEY in .env.local
+  run at       : 2026-09-15T18:58:54.718Z
+
+  Nothing here is charged. The invoice preview API answers the
+  question without creating anything, and the throwaway shops this
+  builds are deleted at the end.
+
+  prices found : 4 of 4
+
+  portal config: bpc_1UEanlH23o1oRIgRWfFSppI8
+  can change plan: YES
+  proration_behavior   : always_invoice
+  billing_cycle_anchor : unchanged
+  scheduled at period end when: ["shortening_interval","decreasing_item_amount"]
+
+  a throwaway shop on 1 to 15 shop logins, monthly $149  (active)
+
+  OPEN THIS, then click Update subscription:
+
+      https://billing.stripe.com/p/session?secret=test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WR1lnaVRQUFRBMGo4MWgzeGc3RVV4QUZRcXd4emth01000z7Iaw5O
+
+  WHAT TO READ ON THE PAGE, in order:
+    1. Pick YEARLY. It should offer roughly $1,341 due today and take effect now.
+       ⚠️ If it says the change is SCHEDULED for a later date instead,
+       decreasing_item_amount is catching the upgrade - say so and stop.
+    2. Go back and pick a BIGGER BAND, same interval. Expect the
+       difference, prorated, due today.
+    3. Go back and pick a SMALLER BAND. Expect 'scheduled' and $0 today.
+    4. Go back and pick MONTHLY from yearly. Expect the same.
+
+  ⚠️ Nothing here is real money, but DO NOT confirm step 1 and then
+     judge steps 2-4 - each one changes what the next one is offered.
+     Read the confirmation page, then back out, for all four.
+
+  ⚠️ The test clock is LEFT BEHIND so the shop stays alive while you
+     click: clock_1UG1ZDH23o1oRIgR4sB51NEL
+     Delete it in the sandbox dashboard when you are finished.
+
+
+  test clocks LEFT BEHIND at your request: clock_1UG1ZDH23o1oRIgR4sB51NEL
+  Delete them in the Stripe sandbox dashboard when you are done.
