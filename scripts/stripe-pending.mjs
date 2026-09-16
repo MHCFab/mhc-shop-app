@@ -309,11 +309,20 @@ async function main() {
       "Every live schedule was reachable through subscription.schedule, which is " +
         "where the app looks. The belief the feature rests on holds on real data."
     );
+  } else if (!testMode) {
+    // ⚠️ On the LIVE account, nothing pending is the RIGHT answer, not a
+    // failed test. Telling Erik to go and schedule a downgrade here would be
+    // telling him to go and do it to a real customer.
+    console.log(
+      "No schedules on the live account - nothing is pending for anybody. " +
+        "That is the answer you want here. To TEST the feature, run this " +
+        "with --sandbox."
+    );
   } else {
     console.log(
       "No live schedules found, so nothing here proves or disproves anything. " +
-        "Schedule a downgrade in the portal first - and check the clock count " +
-        "above is not zero when it should not be."
+        "Schedule a downgrade in the sandbox portal first - and check the " +
+        "clock count above is not zero when it should not be."
     );
   }
   console.log("");
