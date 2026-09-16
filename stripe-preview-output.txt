@@ -5,7 +5,7 @@ ShopWorks - what would a plan change actually cost?
   account id   : acct_1UEaUKH23o1oRIgR
   mode         : SANDBOX (sk_test_)
   key read from: STRIPE_SANDBOX_SECRET_KEY in .env.local
-  run at       : 2026-09-15T18:58:54.718Z
+  run at       : 2026-09-16T20:34:00.544Z
 
   Nothing here is charged. The invoice preview API answers the
   question without creating anything, and the throwaway shops this
@@ -19,14 +19,14 @@ ShopWorks - what would a plan change actually cost?
   billing_cycle_anchor : unchanged
   scheduled at period end when: ["shortening_interval","decreasing_item_amount"]
 
-  a throwaway shop on 1 to 15 shop logins, monthly $149  (active)
+  a throwaway shop on 51 to 150 shop logins, monthly $399  (active)
 
   OPEN THIS, then click Update subscription:
 
-      https://billing.stripe.com/p/session?secret=test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WR1lnaVRQUFRBMGo4MWgzeGc3RVV4QUZRcXd4emth01000z7Iaw5O
+      https://billing.stripe.com/p/session?secret=test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WR3hSd09neUgwVThsVFBZYTdNT0d2TWhvZWxwUTBO0100oTJpKugP
 
   WHAT TO READ ON THE PAGE, in order:
-    1. Pick YEARLY. It should offer roughly $1,341 due today and take effect now.
+    1. Pick YEARLY. It should offer roughly $3,591 due today and take effect now.
        ⚠️ If it says the change is SCHEDULED for a later date instead,
        decreasing_item_amount is catching the upgrade - say so and stop.
     2. Go back and pick a BIGGER BAND, same interval. Expect the
@@ -39,9 +39,9 @@ ShopWorks - what would a plan change actually cost?
      Read the confirmation page, then back out, for all four.
 
   ⚠️ The test clock is LEFT BEHIND so the shop stays alive while you
-     click: clock_1UG1ZDH23o1oRIgR4sB51NEL
+     click: clock_1UGPWnH23o1oRIgR5FuWIUzU
      Delete it in the sandbox dashboard when you are finished.
 
 
-  test clocks LEFT BEHIND at your request: clock_1UG1ZDH23o1oRIgR4sB51NEL
+  test clocks LEFT BEHIND at your request: clock_1UGPWnH23o1oRIgR5FuWIUzU
   Delete them in the Stripe sandbox dashboard when you are done.

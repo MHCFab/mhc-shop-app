@@ -367,7 +367,7 @@ async function main() {
   // printed; delete it in the sandbox dashboard when you are done.
   // -------------------------------------------------------------------
   if (portalOnly) {
-    await portalLink(priceIds);
+    await portalLink();
     return;
   }
 
@@ -789,7 +789,7 @@ async function commitOne(subs, priceIds) {
 // schedule_at_period_end conditions are evaluated by the PORTAL, not by the
 // subscription API, so the only way to find out what they catch is to click.
 // ---------------------------------------------------------------------------
-async function portalLink(priceIds) {
+async function portalLink() {
   const plan = argValue("--plan") || "band_1_15";
   const interval = argValue("--interval") || "monthly";
 
@@ -831,6 +831,29 @@ async function portalLink(priceIds) {
   }
   out("");
 
+  // ⚠️ RESOLVE THE PRICE THIS SHOP NEEDS, do not reach into priceIds.
+  // priceIds only ever holds the handful of prices the SCENARIOS above
+  // mention - four of the twelve. Asking for --plan band_51_150 used to find
+  // nothing there, hand Stripe `price: undefined`, and come back as "You must
+  // pass one of plan, price, or price_data", which reads like a bug in the
+  // script rather than a plan it was never told to look up. Every plan and
+  // interval this file advertises now works.
+  const wantedKey = lookupKey(plan, interval);
+  const wantedPrice = await stripe.prices.list({
+    lookup_keys: [wantedKey],
+    active: true,
+    limit: 1,
+  });
+
+  if (!wantedPrice.data[0]) {
+    throw new Error(
+      "No active price with the lookup key " + wantedKey + " in this account. " +
+        "Run: node scripts/stripe-setup.mjs --apply --sandbox"
+    );
+  }
+
+  const wantedPriceId = wantedPrice.data[0].id;
+
   const clock = await stripe.testHelpers.testClocks.create({
     frozen_time: Math.floor(Date.now() / 1000) - 60,
     name: "shopworks portal click-through",
@@ -854,7 +877,7 @@ async function portalLink(priceIds) {
 
   const sub = await stripe.subscriptions.create({
     customer: customer.id,
-    items: [{ price: priceIds[lookupKey(plan, interval)], quantity: 1 }],
+    items: [{ price: wantedPriceId, quantity: 1 }],
     billing_mode: { type: "flexible" },
     default_payment_method: pm.id,
     payment_behavior: "error_if_incomplete",

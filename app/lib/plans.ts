@@ -120,6 +120,33 @@ export function lookupKey(plan: PlanId, interval: IntervalId): string {
   return "shopworks_" + plan + "_" + interval;
 }
 
+/**
+ * The reverse of lookupKey(): which band and interval does this Stripe price
+ * belong to?
+ *
+ * Used when we are holding a price that Stripe gave US - a plan change the
+ * customer has SCHEDULED for the end of their paid period, which lives in a
+ * Stripe subscription schedule and nowhere in our database until the day it
+ * takes effect.
+ *
+ * It compares against every key this file can generate rather than taking the
+ * string apart, so a band id that ever contains an interval word cannot fool
+ * it, and an unrecognised key returns null instead of a half-right guess.
+ */
+export function planFromLookupKey(
+  key: string | null | undefined
+): { planId: PlanId; intervalId: IntervalId } | null {
+  if (!key) return null;
+  for (const plan of PLANS) {
+    for (const interval of INTERVALS) {
+      if (lookupKey(plan.id, interval.id) === key) {
+        return { planId: plan.id, intervalId: interval.id };
+      }
+    }
+  }
+  return null;
+}
+
 export function priceFor(plan: PlanId, interval: IntervalId): number {
   const p = planById(plan);
   return p ? p.prices[interval] : 0;

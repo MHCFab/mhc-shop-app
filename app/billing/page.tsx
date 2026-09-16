@@ -24,7 +24,11 @@ import { createServerSupabaseClient } from "../lib/supabase-server";
 import { getShopAccess } from "../lib/shop-access";
 import PlanPicker from "./PlanPicker";
 import ManageBillingButton from "./ManageBillingButton";
-import { isTestMode } from "../lib/stripe";
+import {
+  isTestMode,
+  pendingPlanChange,
+  type PendingPlanChange,
+} from "../lib/stripe";
 import {
   planById,
   intervalById,
@@ -150,6 +154,55 @@ export default async function BillingPage({
 
   const hasSubscription = summary?.has_subscription === true;
 
+  // ⚠️ A SCHEDULED PLAN CHANGE LIVES ONLY IN STRIPE.
+  // A downgrade - a smaller band, or yearly back to monthly - is deliberately
+  // held until the end of the period they have already paid for. Stripe does
+  // that by parking it in a subscription schedule and touching nothing, so no
+  // webhook fires and this shop's row still says the old plan until the day it
+  // lands. Without the call below, somebody who downgraded would see the old
+  // plan here for months and reasonably conclude it had not saved.
+  //
+  // The subscription id is read through the caller's own permissions - an
+  // admin can read their own shop's row and companies_self_read makes sure it
+  // is the only row they can read. my_billing_summary() deliberately does not
+  // hand out Stripe ids, and that is left alone.
+  let pending: PendingPlanChange | null = null;
+
+  if (hasSubscription && summary?.company_id) {
+    const { data: companyRow } = await supabase
+      .from("companies")
+      .select("stripe_subscription_id")
+      .eq("id", summary.company_id)
+      .maybeSingle();
+
+    pending = await pendingPlanChange(
+      (companyRow?.stripe_subscription_id as string) || null
+    );
+  }
+
+  // Built here rather than in the markup so the page renders one plain
+  // sentence or nothing at all.
+  let pendingNote: string | null = null;
+
+  if (pending) {
+    const nextPlan = planById(pending.planId);
+    const nextInterval = intervalById(pending.intervalId);
+    const nextDate = longDate(pending.startsAt);
+
+    if (nextPlan && nextInterval && nextDate) {
+      pendingNote =
+        "Changing to " +
+        nextPlan.label +
+        ", billed " +
+        nextInterval.label.toLowerCase() +
+        " (" +
+        priceLabel(nextPlan.id, nextInterval.id) +
+        "), on " +
+        nextDate +
+        ".";
+    }
+  }
+
   // The pre-Stripe "this is the plan we want" note. Only worth showing if they
   // left one and have not since subscribed.
   const requested = planById(summary?.requested_plan);
@@ -248,6 +301,15 @@ export default async function BillingPage({
               renews && (
                 <p className="mt-2 text-sm text-gray-500">Renews {renews}.</p>
               )
+            )}
+
+            {pendingNote && (
+              <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                {pendingNote} Nothing is charged today and nothing changes
+                before then — you keep the plan above, and everyone who can log
+                in now still can. If you did not mean to do this, you can call
+                it off in Manage billing.
+              </p>
             )}
 
             {hasSubscription && (

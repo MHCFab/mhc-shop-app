@@ -17,6 +17,8 @@
 // ---------------------------------------------------------------------------
 
 import Stripe from "stripe";
+import { planFromLookupKey } from "./plans";
+import type { PlanId, IntervalId } from "./plans";
 
 let client: Stripe | null = null;
 
@@ -161,4 +163,90 @@ export function periodEndOf(sub: Stripe.Subscription): number | null {
 export function toIso(seconds: number | null | undefined): string | null {
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
   return new Date(seconds * 1000).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// A plan change the customer has SCHEDULED but not yet had applied.
+//
+// ⚠️ WHY THIS EXISTS AT ALL. Our billing portal configuration deliberately
+// makes a downgrade - a smaller band, or yearly back to monthly - wait until
+// the end of the period they have already paid for. Stripe honours that by
+// putting the change in a SUBSCRIPTION SCHEDULE and leaving the subscription
+// itself completely untouched until the day it lands. Nothing happens, so no
+// customer.subscription.updated event fires, so our webhook never runs, so
+// companies.plan_id still says the old plan - for up to a year.
+//
+// The customer sees their pending downgrade in Stripe's portal and nowhere in
+// ShopWorks, which reads as "my change did not save". This is the only way to
+// know about it: ask Stripe, at the moment the billing page is drawn.
+//
+// ⚠️ IT SWALLOWS ITS OWN ERRORS ON PURPOSE. /billing is the page a locked-out
+// shop uses to start paying again. A Stripe outage, a stale subscription id or
+// a rate limit must cost us this one line of text and nothing else - it must
+// never be able to take down the page that takes the money.
+// ---------------------------------------------------------------------------
+export type PendingPlanChange = {
+  planId: PlanId;
+  intervalId: IntervalId;
+  /** ISO. The moment the new plan starts - the end of what they paid for. */
+  startsAt: string;
+};
+
+export async function pendingPlanChange(
+  subscriptionId: string | null | undefined
+): Promise<PendingPlanChange | null> {
+  if (!subscriptionId || !stripeConfigured()) return null;
+
+  try {
+    const stripe = getStripe();
+
+    const sub = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ["schedule"],
+    });
+
+    const schedule = sub.schedule;
+    if (!schedule || typeof schedule === "string") return null;
+
+    // A completed, released or cancelled schedule is history, not a plan.
+    if (schedule.status !== "active" && schedule.status !== "not_started") {
+      return null;
+    }
+
+    // Phase 0 is what they are on now. Anything starting in the future is the
+    // change they are waiting for; the earliest one is the next thing to
+    // happen to them.
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const upcoming = (schedule.phases || [])
+      .filter((phase) => phase.start_date > nowSeconds)
+      .sort((a, b) => a.start_date - b.start_date)[0];
+
+    if (!upcoming) return null;
+
+    const priceRef = upcoming.items?.[0]?.price;
+    const priceId =
+      typeof priceRef === "string" ? priceRef : priceRef ? priceRef.id : null;
+    if (!priceId) return null;
+
+    // ⚠️ If the phase is on the price they are ALREADY on, nothing is
+    // changing and saying so would be worse than saying nothing. This happens
+    // with schedules that exist only to carry a cancellation.
+    const currentPriceId = sub.items?.data?.[0]?.price?.id || null;
+    if (currentPriceId && currentPriceId === priceId) return null;
+
+    const price = await stripe.prices.retrieve(priceId);
+    const match = planFromLookupKey(price.lookup_key);
+    if (!match) return null;
+
+    return {
+      planId: match.planId,
+      intervalId: match.intervalId,
+      startsAt: new Date(upcoming.start_date * 1000).toISOString(),
+    };
+  } catch (e) {
+    console.error(
+      "Could not read the scheduled plan change for " + subscriptionId + ":",
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
 }
