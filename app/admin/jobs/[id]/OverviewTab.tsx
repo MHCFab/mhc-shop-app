@@ -5,6 +5,7 @@ import Link from "next/link";
 import { createClient } from "../../../lib/supabase";
 import { recomputeJobPlan } from "../../../lib/job-generation";
 import { syncEstimatedJobAllocations } from "../../../lib/inventory";
+import ChecklistCard from "./ChecklistCard";
 
 type LineItem = {
   id: string;
@@ -214,6 +215,8 @@ export default function OverviewTab({
 
   return (
     <div className="space-y-6">
+      <ChecklistCard jobId={jobId} />
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Line items</div>

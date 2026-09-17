@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "../../lib/supabase";
+import ChecklistDefaults from "./ChecklistDefaults";
 
 export default function SettingsPage() {
   const supabase = createClient();
@@ -243,6 +244,8 @@ export default function SettingsPage() {
           </button>
         </div>
       </form>
+
+      <ChecklistDefaults companyId={companyId} />
     </div>
   );
 }
