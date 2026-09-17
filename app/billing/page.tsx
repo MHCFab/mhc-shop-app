@@ -333,17 +333,77 @@ export default async function BillingPage({
                 ? "1 day left"
                 : daysLeft + " days left"}
             </p>
-            {trialEnds && (
-              <p className="mb-4 text-gray-600">
-                Your trial runs until {trialEnds}.
-              </p>
+
+            {/* ------------------------------------------------------------- */}
+            {/* ⚠️ A SHOP CAN SUBSCRIBE WHILE IT IS STILL ON TRIAL.                */}
+            {/* Stripe is handed trial_end = trial_ends_at, so the            */}
+            {/* subscription sits in "trialing" and this page still says      */}
+            {/* trial. Without the branch below they would see nothing at all */}
+            {/* about the plan they just bought and no way to reach the       */}
+            {/* portal, so a card that needs changing mid-trial could not be  */}
+            {/* changed - and the first they would know of it is the payment  */}
+            {/* failing on the day the trial ends.                            */}
+            {/* ------------------------------------------------------------- */}
+            {hasSubscription ? (
+              <>
+                {plan && interval ? (
+                  <p className="mb-2 text-gray-600">
+                    You are subscribed to {plan.label}, billed{" "}
+                    {interval.label.toLowerCase()} (
+                    {priceLabel(plan.id as PlanId, interval.id)}).
+                  </p>
+                ) : (
+                  <p className="mb-2 text-gray-600">
+                    Your subscription is set up.
+                  </p>
+                )}
+
+                <p className="text-gray-600">
+                  Nothing is charged until{" "}
+                  {trialEnds ? trialEnds : "your trial ends"} — the rest of
+                  your trial is still yours, and your card is charged for the
+                  first time that day.
+                </p>
+
+                {summary?.cancel_at_period_end && (
+                  <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    This subscription is set to end
+                    {renews ? " on " + renews : ""}, so your card will not be
+                    charged. The app pauses when your trial runs out unless you
+                    turn the cancellation off again in Manage billing. Nothing
+                    is deleted either way.
+                  </p>
+                )}
+
+                {pendingNote && (
+                  <p className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                    {pendingNote} Nothing is charged today and nothing changes
+                    before then.
+                  </p>
+                )}
+
+                <div className="mt-4">
+                  <ManageBillingButton tone="quiet" />
+                  <p className="mt-2 text-sm text-gray-500">
+                    Update your card, download invoices, change plan or cancel.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {trialEnds && (
+                  <p className="mb-4 text-gray-600">
+                    Your trial runs until {trialEnds}.
+                  </p>
+                )}
+                <p className="text-gray-600">
+                  Everything is switched on during the trial — there is no
+                  cut-down version. When it ends, the app pauses until a
+                  subscription starts. Nothing is deleted: your jobs, material
+                  and hours stay exactly where they are and come straight back.
+                </p>
+              </>
             )}
-            <p className="text-gray-600">
-              Everything is switched on during the trial — there is no cut-down
-              version. When it ends, the app pauses until a subscription
-              starts. Nothing is deleted: your jobs, material and hours stay
-              exactly where they are and come straight back.
-            </p>
           </div>
         )}
 
