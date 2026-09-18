@@ -1,0 +1,59 @@
+
+===========================================================================
+  FAILED CARD -> GRACE -> LOCK: what Stripe really does
+===========================================================================
+  account      : acct_1UEaUKH23o1oRIgR   Shopworks sandbox
+  mode         : SANDBOX (sk_test_)
+  started      : 2026-09-18 11:39:25 UTC
+
+  price        : price_1UEanhH23o1oRIgRzpdiOQSd   shopworks_band_1_15_monthly   $149.00 / month
+  test clock   : clock_1UH08YH23o1oRIgRg9rqCNq5   frozen at 2026-09-18 11:39 UTC
+  customer     : cus_VHZHMdQBII3jU7
+  subscription : sub_1UH08ZH23o1oRIgRUUoKPNsk   status active
+  first invoice: in_1UH08ZH23o1oRIgR0F5CfQOS   paid   $149.00
+  renews       : 2026-10-18 11:39 UTC
+
+  card swapped : pm_1UH08bH23o1oRIgR9p92jTMH   (4000 0000 0000 0341 - attaches, then declines)
+
+  ---------------------------------------------------------------------
+  WINDING THE CLOCK
+  ---------------------------------------------------------------------
+  2026-10-18 12:39 UTC  sub past_due  invoice open      attempts 1   next try 2026-10-19 12:56 UTC
+  2026-10-19 13:56 UTC  sub past_due  invoice open      attempts 2   next try 2026-10-19 12:56 UTC
+  2026-10-19 13:56 UTC  sub past_due  invoice open      attempts 2   next try 2026-10-22 14:14 UTC
+  2026-10-22 15:14 UTC  sub past_due  invoice open      attempts 3   next try 2026-10-22 14:14 UTC
+  2026-10-22 15:14 UTC  sub past_due  invoice open      attempts 3   next try 2026-10-25 14:56 UTC
+  2026-10-25 15:56 UTC  sub canceled  invoice open      attempts 4   next try (none)
+
+  ---------------------------------------------------------------------
+  WHAT STRIPE DID
+  ---------------------------------------------------------------------
+  first failed payment : 2026-10-18 12:39 UTC
+  retries observed     : 5
+  ended as             : subscription canceled, invoice open
+  days from first fail : 7
+
+  ⚠️ READ THIS AGAINST OUR OWN RULE. ShopWorks does NOT wait for Stripe to
+     give up. my_shop_access() locks the shop the moment grace_ends_at is
+     in the past - seven days after the FIRST failure. Stripe's retries
+     carry on after that, and if one of them goes through the shop comes
+     back on by itself. The two clocks are independent and that is fine;
+     what matters is that the first failure is what starts ours.
+
+  ---------------------------------------------------------------------
+  SAVED
+  ---------------------------------------------------------------------
+  scripts/dunning-events.json   7 events, source: events.list
+  scripts/stripe-dunning-output.txt
+
+  ⚠️ STILL STANDING IN THE SANDBOX, on purpose - the next step replays
+     these events into the handler, and the handler retrieves the
+     subscription from Stripe, so it has to still exist.
+
+     customer     : cus_VHZHMdQBII3jU7
+     subscription : sub_1UH08ZH23o1oRIgRUUoKPNsk
+     test clock   : clock_1UH08YH23o1oRIgRg9rqCNq5
+
+     When you are done:
+       node scripts/stripe-dunning.mjs --clean clock_1UH08YH23o1oRIgRg9rqCNq5
+

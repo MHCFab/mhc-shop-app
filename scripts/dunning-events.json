@@ -1,0 +1,1420 @@
+{
+  "account": "acct_1UEaUKH23o1oRIgR",
+  "generatedAt": "2026-09-18T11:40:34.748Z",
+  "testClock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+  "customer": "cus_VHZHMdQBII3jU7",
+  "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+  "priceLookupKey": "shopworks_band_1_15_monthly",
+  "eventSource": "events.list",
+  "timeline": [
+    {
+      "label": "renewal attempted",
+      "clockTime": 1792327165,
+      "clockTimeReadable": "2026-10-18 12:39 UTC",
+      "subscriptionStatus": "past_due",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 1,
+      "amountDue": 14900,
+      "nextPaymentAttempt": 1792414590
+    },
+    {
+      "label": "retry 1",
+      "clockTime": 1792418190,
+      "clockTimeReadable": "2026-10-19 13:56 UTC",
+      "subscriptionStatus": "past_due",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 2,
+      "amountDue": 14900,
+      "nextPaymentAttempt": 1792414590
+    },
+    {
+      "label": "retry 2",
+      "clockTime": 1792418190,
+      "clockTimeReadable": "2026-10-19 13:56 UTC",
+      "subscriptionStatus": "past_due",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 2,
+      "amountDue": 14900,
+      "nextPaymentAttempt": 1792678447
+    },
+    {
+      "label": "retry 3",
+      "clockTime": 1792682047,
+      "clockTimeReadable": "2026-10-22 15:14 UTC",
+      "subscriptionStatus": "past_due",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 3,
+      "amountDue": 14900,
+      "nextPaymentAttempt": 1792678447
+    },
+    {
+      "label": "retry 4",
+      "clockTime": 1792682047,
+      "clockTimeReadable": "2026-10-22 15:14 UTC",
+      "subscriptionStatus": "past_due",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 3,
+      "amountDue": 14900,
+      "nextPaymentAttempt": 1792940216
+    },
+    {
+      "label": "retry 5",
+      "clockTime": 1792943816,
+      "clockTimeReadable": "2026-10-25 15:56 UTC",
+      "subscriptionStatus": "canceled",
+      "cancelAtPeriodEnd": false,
+      "invoiceId": "in_1UH08hH23o1oRIgR1XTP1J5g",
+      "invoiceStatus": "open",
+      "invoiceAttempts": 4,
+      "amountDue": 14900,
+      "nextPaymentAttempt": null
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_1UH09RH23o1oRIgRAX7h8LMX",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731618,
+      "data": {
+        "object": {
+          "id": "in_1UH08hH23o1oRIgR1XTP1J5g",
+          "object": "invoice",
+          "account_country": "US",
+          "account_name": "Shopworks sandbox",
+          "account_tax_ids": null,
+          "amount_due": 14900,
+          "amount_overpaid": 0,
+          "amount_paid": 0,
+          "amount_remaining": 14900,
+          "amount_shipping": 0,
+          "application": null,
+          "attempt_count": 3,
+          "attempted": true,
+          "auto_advance": true,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null,
+            "provider": null,
+            "status": null
+          },
+          "automatically_finalizes_at": null,
+          "billing_reason": "subscription_cycle",
+          "collection_method": "charge_automatically",
+          "created": 1792323565,
+          "currency": "usd",
+          "custom_fields": null,
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "customer_address": null,
+          "customer_email": "dunning+1789731565@example.com",
+          "customer_name": "dunning test shop",
+          "customer_phone": null,
+          "customer_shipping": null,
+          "customer_tax_exempt": "none",
+          "customer_tax_ids": [],
+          "default_payment_method": null,
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "due_date": null,
+          "effective_at": 1792327165,
+          "ending_balance": 0,
+          "footer": null,
+          "from_invoice": null,
+          "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjQyMQ02005HyMVK13?s=ap",
+          "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjQyMQ02005HyMVK13/pdf?s=ap",
+          "issuer": {
+            "type": "self"
+          },
+          "last_finalization_error": null,
+          "latest_revision": null,
+          "lines": {
+            "object": "list",
+            "data": [
+              {
+                "id": "il_1URsQzH23o1oRIgRg8RyPflb",
+                "object": "line_item",
+                "amount": 14900,
+                "currency": "usd",
+                "description": "1 × ShopWorks — 1 to 15 shop logins (at $149.00 / month)",
+                "discount_amounts": [],
+                "discountable": true,
+                "discounts": [],
+                "invoice": "in_1UH08hH23o1oRIgR1XTP1J5g",
+                "livemode": false,
+                "metadata": {
+                  "billing_interval": "monthly",
+                  "plan_id": "band_1_15"
+                },
+                "parent": {
+                  "invoice_item_details": null,
+                  "subscription_item_details": {
+                    "invoice_item": null,
+                    "proration": false,
+                    "proration_details": {
+                      "credited_items": null
+                    },
+                    "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                    "subscription_item": "si_VHZH9vdgKpfdLq"
+                  },
+                  "type": "subscription_item_details"
+                },
+                "period": {
+                  "end": 1795001965,
+                  "start": 1792323565
+                },
+                "pretax_credit_amounts": [],
+                "pricing": {
+                  "price_details": {
+                    "price": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                    "product": "prod_VF4xEVMh7gAlGf"
+                  },
+                  "type": "price_details",
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "quantity_decimal": "1",
+                "subtotal": 14900,
+                "taxes": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/invoices/in_1UH08hH23o1oRIgR1XTP1J5g/lines"
+          },
+          "livemode": false,
+          "metadata": {},
+          "next_payment_attempt": 1792940216,
+          "number": "L4ABLHOE-0002",
+          "on_behalf_of": null,
+          "parent": {
+            "quote_details": null,
+            "subscription_details": {
+              "metadata": {
+                "billing_interval": "monthly",
+                "plan_id": "band_1_15"
+              },
+              "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk"
+            },
+            "type": "subscription_details"
+          },
+          "payment_settings": {
+            "default_mandate": null,
+            "payment_method_options": null,
+            "payment_method_types": null
+          },
+          "period_end": 1792323565,
+          "period_start": 1789731565,
+          "post_payment_credit_notes_amount": 0,
+          "pre_payment_credit_notes_amount": 0,
+          "receipt_number": null,
+          "rendering": null,
+          "shipping_cost": null,
+          "shipping_details": null,
+          "starting_balance": 0,
+          "statement_descriptor": null,
+          "status": "open",
+          "status_transitions": {
+            "finalized_at": 1792327165,
+            "marked_uncollectible_at": null,
+            "paid_at": null,
+            "voided_at": null
+          },
+          "subtotal": 14900,
+          "subtotal_excluding_tax": 14900,
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "total": 14900,
+          "total_discount_amounts": [],
+          "total_excluding_tax": 14900,
+          "total_pretax_credit_amounts": [],
+          "total_taxes": [],
+          "webhooks_delivered_at": 1792323565
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "invoice.payment_failed"
+    },
+    {
+      "id": "evt_1UH099H23o1oRIgRRvm18gFZ",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731600,
+      "data": {
+        "object": {
+          "id": "in_1UH08hH23o1oRIgR1XTP1J5g",
+          "object": "invoice",
+          "account_country": "US",
+          "account_name": "Shopworks sandbox",
+          "account_tax_ids": null,
+          "amount_due": 14900,
+          "amount_overpaid": 0,
+          "amount_paid": 0,
+          "amount_remaining": 14900,
+          "amount_shipping": 0,
+          "application": null,
+          "attempt_count": 2,
+          "attempted": true,
+          "auto_advance": true,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null,
+            "provider": null,
+            "status": null
+          },
+          "automatically_finalizes_at": null,
+          "billing_reason": "subscription_cycle",
+          "collection_method": "charge_automatically",
+          "created": 1792323565,
+          "currency": "usd",
+          "custom_fields": null,
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "customer_address": null,
+          "customer_email": "dunning+1789731565@example.com",
+          "customer_name": "dunning test shop",
+          "customer_phone": null,
+          "customer_shipping": null,
+          "customer_tax_exempt": "none",
+          "customer_tax_ids": [],
+          "default_payment_method": null,
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "due_date": null,
+          "effective_at": 1792327165,
+          "ending_balance": 0,
+          "footer": null,
+          "from_invoice": null,
+          "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjQwMw0200SuJgrnZ8?s=ap",
+          "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjQwMw0200SuJgrnZ8/pdf?s=ap",
+          "issuer": {
+            "type": "self"
+          },
+          "last_finalization_error": null,
+          "latest_revision": null,
+          "lines": {
+            "object": "list",
+            "data": [
+              {
+                "id": "il_1URsQzH23o1oRIgRg8RyPflb",
+                "object": "line_item",
+                "amount": 14900,
+                "currency": "usd",
+                "description": "1 × ShopWorks — 1 to 15 shop logins (at $149.00 / month)",
+                "discount_amounts": [],
+                "discountable": true,
+                "discounts": [],
+                "invoice": "in_1UH08hH23o1oRIgR1XTP1J5g",
+                "livemode": false,
+                "metadata": {
+                  "billing_interval": "monthly",
+                  "plan_id": "band_1_15"
+                },
+                "parent": {
+                  "invoice_item_details": null,
+                  "subscription_item_details": {
+                    "invoice_item": null,
+                    "proration": false,
+                    "proration_details": {
+                      "credited_items": null
+                    },
+                    "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                    "subscription_item": "si_VHZH9vdgKpfdLq"
+                  },
+                  "type": "subscription_item_details"
+                },
+                "period": {
+                  "end": 1795001965,
+                  "start": 1792323565
+                },
+                "pretax_credit_amounts": [],
+                "pricing": {
+                  "price_details": {
+                    "price": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                    "product": "prod_VF4xEVMh7gAlGf"
+                  },
+                  "type": "price_details",
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "quantity_decimal": "1",
+                "subtotal": 14900,
+                "taxes": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/invoices/in_1UH08hH23o1oRIgR1XTP1J5g/lines"
+          },
+          "livemode": false,
+          "metadata": {},
+          "next_payment_attempt": 1792678447,
+          "number": "L4ABLHOE-0002",
+          "on_behalf_of": null,
+          "parent": {
+            "quote_details": null,
+            "subscription_details": {
+              "metadata": {
+                "billing_interval": "monthly",
+                "plan_id": "band_1_15"
+              },
+              "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk"
+            },
+            "type": "subscription_details"
+          },
+          "payment_settings": {
+            "default_mandate": null,
+            "payment_method_options": null,
+            "payment_method_types": null
+          },
+          "period_end": 1792323565,
+          "period_start": 1789731565,
+          "post_payment_credit_notes_amount": 0,
+          "pre_payment_credit_notes_amount": 0,
+          "receipt_number": null,
+          "rendering": null,
+          "shipping_cost": null,
+          "shipping_details": null,
+          "starting_balance": 0,
+          "statement_descriptor": null,
+          "status": "open",
+          "status_transitions": {
+            "finalized_at": 1792327165,
+            "marked_uncollectible_at": null,
+            "paid_at": null,
+            "voided_at": null
+          },
+          "subtotal": 14900,
+          "subtotal_excluding_tax": 14900,
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "total": 14900,
+          "total_discount_amounts": [],
+          "total_excluding_tax": 14900,
+          "total_pretax_credit_amounts": [],
+          "total_taxes": [],
+          "webhooks_delivered_at": 1792323565
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "invoice.payment_failed"
+    },
+    {
+      "id": "evt_1UH08rH23o1oRIgR8QBQrpzG",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731582,
+      "data": {
+        "object": {
+          "id": "in_1UH08hH23o1oRIgR1XTP1J5g",
+          "object": "invoice",
+          "account_country": "US",
+          "account_name": "Shopworks sandbox",
+          "account_tax_ids": null,
+          "amount_due": 14900,
+          "amount_overpaid": 0,
+          "amount_paid": 0,
+          "amount_remaining": 14900,
+          "amount_shipping": 0,
+          "application": null,
+          "attempt_count": 1,
+          "attempted": true,
+          "auto_advance": true,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null,
+            "provider": null,
+            "status": null
+          },
+          "automatically_finalizes_at": null,
+          "billing_reason": "subscription_cycle",
+          "collection_method": "charge_automatically",
+          "created": 1792323565,
+          "currency": "usd",
+          "custom_fields": null,
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "customer_address": null,
+          "customer_email": "dunning+1789731565@example.com",
+          "customer_name": "dunning test shop",
+          "customer_phone": null,
+          "customer_shipping": null,
+          "customer_tax_exempt": "none",
+          "customer_tax_ids": [],
+          "default_payment_method": null,
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "due_date": null,
+          "effective_at": 1792327165,
+          "ending_balance": 0,
+          "footer": null,
+          "from_invoice": null,
+          "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjM4NQ0200i1pEPmjF?s=ap",
+          "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIcm9mT2g3czJqUEtsakk2MTFEeVk2SWNIOGhGLDE4MDI3MjM4NQ0200i1pEPmjF/pdf?s=ap",
+          "issuer": {
+            "type": "self"
+          },
+          "last_finalization_error": null,
+          "latest_revision": null,
+          "lines": {
+            "object": "list",
+            "data": [
+              {
+                "id": "il_1URsQzH23o1oRIgRg8RyPflb",
+                "object": "line_item",
+                "amount": 14900,
+                "currency": "usd",
+                "description": "1 × ShopWorks — 1 to 15 shop logins (at $149.00 / month)",
+                "discount_amounts": [],
+                "discountable": true,
+                "discounts": [],
+                "invoice": "in_1UH08hH23o1oRIgR1XTP1J5g",
+                "livemode": false,
+                "metadata": {
+                  "billing_interval": "monthly",
+                  "plan_id": "band_1_15"
+                },
+                "parent": {
+                  "invoice_item_details": null,
+                  "subscription_item_details": {
+                    "invoice_item": null,
+                    "proration": false,
+                    "proration_details": {
+                      "credited_items": null
+                    },
+                    "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                    "subscription_item": "si_VHZH9vdgKpfdLq"
+                  },
+                  "type": "subscription_item_details"
+                },
+                "period": {
+                  "end": 1795001965,
+                  "start": 1792323565
+                },
+                "pretax_credit_amounts": [],
+                "pricing": {
+                  "price_details": {
+                    "price": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                    "product": "prod_VF4xEVMh7gAlGf"
+                  },
+                  "type": "price_details",
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "quantity_decimal": "1",
+                "subtotal": 14900,
+                "taxes": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/invoices/in_1UH08hH23o1oRIgR1XTP1J5g/lines"
+          },
+          "livemode": false,
+          "metadata": {},
+          "next_payment_attempt": 1792414590,
+          "number": "L4ABLHOE-0002",
+          "on_behalf_of": null,
+          "parent": {
+            "quote_details": null,
+            "subscription_details": {
+              "metadata": {
+                "billing_interval": "monthly",
+                "plan_id": "band_1_15"
+              },
+              "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk"
+            },
+            "type": "subscription_details"
+          },
+          "payment_settings": {
+            "default_mandate": null,
+            "payment_method_options": null,
+            "payment_method_types": null
+          },
+          "period_end": 1792323565,
+          "period_start": 1789731565,
+          "post_payment_credit_notes_amount": 0,
+          "pre_payment_credit_notes_amount": 0,
+          "receipt_number": null,
+          "rendering": null,
+          "shipping_cost": null,
+          "shipping_details": null,
+          "starting_balance": 0,
+          "statement_descriptor": null,
+          "status": "open",
+          "status_transitions": {
+            "finalized_at": 1792327165,
+            "marked_uncollectible_at": null,
+            "paid_at": null,
+            "voided_at": null
+          },
+          "subtotal": 14900,
+          "subtotal_excluding_tax": 14900,
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "total": 14900,
+          "total_discount_amounts": [],
+          "total_excluding_tax": 14900,
+          "total_pretax_credit_amounts": [],
+          "total_taxes": [],
+          "webhooks_delivered_at": 1792323565
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "invoice.payment_failed"
+    },
+    {
+      "id": "evt_1UH08nH23o1oRIgR7Vx7PWO2",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731581,
+      "data": {
+        "object": {
+          "id": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+          "object": "subscription",
+          "application": null,
+          "application_fee_percent": null,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null
+          },
+          "billing_cycle_anchor": 1789731565,
+          "billing_cycle_anchor_config": null,
+          "billing_mode": {
+            "flexible": {
+              "proration_discounts": "included"
+            },
+            "type": "flexible",
+            "updated_at": 1789731565
+          },
+          "billing_schedules": [],
+          "billing_thresholds": null,
+          "cancel_at": null,
+          "cancel_at_period_end": false,
+          "canceled_at": null,
+          "cancellation_details": {
+            "comment": null,
+            "feedback": null,
+            "feedback_option": null,
+            "reason": null
+          },
+          "collection_method": "charge_automatically",
+          "created": 1789731565,
+          "currency": "usd",
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "days_until_due": null,
+          "default_payment_method": "pm_1UH08bH23o1oRIgR9p92jTMH",
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "ended_at": null,
+          "invoice_settings": {
+            "account_tax_ids": null,
+            "custom_fields": null,
+            "description": null,
+            "footer": null,
+            "issuer": {
+              "type": "self"
+            }
+          },
+          "items": {
+            "object": "list",
+            "data": [
+              {
+                "id": "si_VHZH9vdgKpfdLq",
+                "object": "subscription_item",
+                "billing_thresholds": null,
+                "created": 1789731565,
+                "current_period_end": 1795001965,
+                "current_period_start": 1792323565,
+                "current_trial": null,
+                "discounts": [],
+                "metadata": {},
+                "plan": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "plan",
+                  "active": true,
+                  "amount": 14900,
+                  "amount_decimal": "14900",
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "interval": "month",
+                  "interval_count": 1,
+                  "livemode": false,
+                  "metadata": {},
+                  "meter": null,
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "tiers_mode": null,
+                  "transform_usage": null,
+                  "trial_period_days": null,
+                  "usage_type": "licensed"
+                },
+                "price": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "price",
+                  "active": true,
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "custom_unit_amount": null,
+                  "livemode": false,
+                  "lookup_key": "shopworks_band_1_15_monthly",
+                  "metadata": {},
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "recurring": {
+                    "interval": "month",
+                    "interval_count": 1,
+                    "meter": null,
+                    "trial_period_days": null,
+                    "usage_type": "licensed"
+                  },
+                  "tax_behavior": "unspecified",
+                  "tiers_mode": null,
+                  "transform_quantity": null,
+                  "type": "recurring",
+                  "unit_amount": 14900,
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                "tax_rates": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/subscription_items?subscription=sub_1UH08ZH23o1oRIgRUUoKPNsk"
+          },
+          "latest_invoice": "in_1UH08hH23o1oRIgR1XTP1J5g",
+          "livemode": false,
+          "managed_payments": {
+            "enabled": false
+          },
+          "metadata": {
+            "billing_interval": "monthly",
+            "plan_id": "band_1_15"
+          },
+          "next_pending_invoice_item_invoice": null,
+          "on_behalf_of": null,
+          "pause_collection": null,
+          "payment_settings": {
+            "payment_method_options": null,
+            "payment_method_types": null,
+            "save_default_payment_method": "off"
+          },
+          "pending_invoice_item_interval": null,
+          "pending_setup_intent": null,
+          "pending_update": null,
+          "plan": {
+            "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+            "object": "plan",
+            "active": true,
+            "amount": 14900,
+            "amount_decimal": "14900",
+            "billing_scheme": "per_unit",
+            "created": 1789157517,
+            "currency": "usd",
+            "interval": "month",
+            "interval_count": 1,
+            "livemode": false,
+            "metadata": {},
+            "meter": null,
+            "nickname": "1 to 15 shop logins — monthly",
+            "product": "prod_VF4xEVMh7gAlGf",
+            "tiers_mode": null,
+            "transform_usage": null,
+            "trial_period_days": null,
+            "usage_type": "licensed"
+          },
+          "quantity": 1,
+          "schedule": null,
+          "start_date": 1789731565,
+          "status": "past_due",
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "transfer_data": null,
+          "trial_end": null,
+          "trial_settings": {
+            "end_behavior": {
+              "billing_cycle_anchor": "now",
+              "missing_payment_method": "create_invoice"
+            }
+          },
+          "trial_start": null
+        },
+        "previous_attributes": {
+          "status": "active"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "customer.subscription.updated"
+    },
+    {
+      "id": "evt_1UH08iH23o1oRIgRtydTxzMg",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731576,
+      "data": {
+        "object": {
+          "id": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+          "object": "subscription",
+          "application": null,
+          "application_fee_percent": null,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null
+          },
+          "billing_cycle_anchor": 1789731565,
+          "billing_cycle_anchor_config": null,
+          "billing_mode": {
+            "flexible": {
+              "proration_discounts": "included"
+            },
+            "type": "flexible",
+            "updated_at": 1789731565
+          },
+          "billing_schedules": [],
+          "billing_thresholds": null,
+          "cancel_at": null,
+          "cancel_at_period_end": false,
+          "canceled_at": null,
+          "cancellation_details": {
+            "comment": null,
+            "feedback": null,
+            "feedback_option": null,
+            "reason": null
+          },
+          "collection_method": "charge_automatically",
+          "created": 1789731565,
+          "currency": "usd",
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "days_until_due": null,
+          "default_payment_method": "pm_1UH08bH23o1oRIgR9p92jTMH",
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "ended_at": null,
+          "invoice_settings": {
+            "account_tax_ids": null,
+            "custom_fields": null,
+            "description": null,
+            "footer": null,
+            "issuer": {
+              "type": "self"
+            }
+          },
+          "items": {
+            "object": "list",
+            "data": [
+              {
+                "id": "si_VHZH9vdgKpfdLq",
+                "object": "subscription_item",
+                "billing_thresholds": null,
+                "created": 1789731565,
+                "current_period_end": 1795001965,
+                "current_period_start": 1792323565,
+                "current_trial": null,
+                "discounts": [],
+                "metadata": {},
+                "plan": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "plan",
+                  "active": true,
+                  "amount": 14900,
+                  "amount_decimal": "14900",
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "interval": "month",
+                  "interval_count": 1,
+                  "livemode": false,
+                  "metadata": {},
+                  "meter": null,
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "tiers_mode": null,
+                  "transform_usage": null,
+                  "trial_period_days": null,
+                  "usage_type": "licensed"
+                },
+                "price": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "price",
+                  "active": true,
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "custom_unit_amount": null,
+                  "livemode": false,
+                  "lookup_key": "shopworks_band_1_15_monthly",
+                  "metadata": {},
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "recurring": {
+                    "interval": "month",
+                    "interval_count": 1,
+                    "meter": null,
+                    "trial_period_days": null,
+                    "usage_type": "licensed"
+                  },
+                  "tax_behavior": "unspecified",
+                  "tiers_mode": null,
+                  "transform_quantity": null,
+                  "type": "recurring",
+                  "unit_amount": 14900,
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                "tax_rates": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/subscription_items?subscription=sub_1UH08ZH23o1oRIgRUUoKPNsk"
+          },
+          "latest_invoice": "in_1UH08hH23o1oRIgR1XTP1J5g",
+          "livemode": false,
+          "managed_payments": {
+            "enabled": false
+          },
+          "metadata": {
+            "billing_interval": "monthly",
+            "plan_id": "band_1_15"
+          },
+          "next_pending_invoice_item_invoice": null,
+          "on_behalf_of": null,
+          "pause_collection": null,
+          "payment_settings": {
+            "payment_method_options": null,
+            "payment_method_types": null,
+            "save_default_payment_method": "off"
+          },
+          "pending_invoice_item_interval": null,
+          "pending_setup_intent": null,
+          "pending_update": null,
+          "plan": {
+            "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+            "object": "plan",
+            "active": true,
+            "amount": 14900,
+            "amount_decimal": "14900",
+            "billing_scheme": "per_unit",
+            "created": 1789157517,
+            "currency": "usd",
+            "interval": "month",
+            "interval_count": 1,
+            "livemode": false,
+            "metadata": {},
+            "meter": null,
+            "nickname": "1 to 15 shop logins — monthly",
+            "product": "prod_VF4xEVMh7gAlGf",
+            "tiers_mode": null,
+            "transform_usage": null,
+            "trial_period_days": null,
+            "usage_type": "licensed"
+          },
+          "quantity": 1,
+          "schedule": null,
+          "start_date": 1789731565,
+          "status": "active",
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "transfer_data": null,
+          "trial_end": null,
+          "trial_settings": {
+            "end_behavior": {
+              "billing_cycle_anchor": "now",
+              "missing_payment_method": "create_invoice"
+            }
+          },
+          "trial_start": null
+        },
+        "previous_attributes": {
+          "items": {
+            "data": [
+              {
+                "id": "si_VHZH9vdgKpfdLq",
+                "object": "subscription_item",
+                "billing_thresholds": null,
+                "created": 1789731565,
+                "current_period_end": 1792323565,
+                "current_period_start": 1789731565,
+                "current_trial": null,
+                "discounts": [],
+                "metadata": {},
+                "plan": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "plan",
+                  "active": true,
+                  "amount": 14900,
+                  "amount_decimal": "14900",
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "interval": "month",
+                  "interval_count": 1,
+                  "livemode": false,
+                  "metadata": {},
+                  "meter": null,
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "tiers_mode": null,
+                  "transform_usage": null,
+                  "trial_period_days": null,
+                  "usage_type": "licensed"
+                },
+                "price": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "price",
+                  "active": true,
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "custom_unit_amount": null,
+                  "livemode": false,
+                  "lookup_key": "shopworks_band_1_15_monthly",
+                  "metadata": {},
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "recurring": {
+                    "interval": "month",
+                    "interval_count": 1,
+                    "meter": null,
+                    "trial_period_days": null,
+                    "usage_type": "licensed"
+                  },
+                  "tax_behavior": "unspecified",
+                  "tiers_mode": null,
+                  "transform_quantity": null,
+                  "type": "recurring",
+                  "unit_amount": 14900,
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                "tax_rates": []
+              }
+            ]
+          },
+          "latest_invoice": "in_1UH08ZH23o1oRIgR0F5CfQOS"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": null,
+        "idempotency_key": null
+      },
+      "type": "customer.subscription.updated"
+    },
+    {
+      "id": "evt_1UH08dH23o1oRIgRdr8RPN3e",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731571,
+      "data": {
+        "object": {
+          "id": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+          "object": "subscription",
+          "application": null,
+          "application_fee_percent": null,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null
+          },
+          "billing_cycle_anchor": 1789731565,
+          "billing_cycle_anchor_config": null,
+          "billing_mode": {
+            "flexible": {
+              "proration_discounts": "included"
+            },
+            "type": "flexible",
+            "updated_at": 1789731565
+          },
+          "billing_schedules": [],
+          "billing_thresholds": null,
+          "cancel_at": null,
+          "cancel_at_period_end": false,
+          "canceled_at": null,
+          "cancellation_details": {
+            "comment": null,
+            "feedback": null,
+            "feedback_option": null,
+            "reason": null
+          },
+          "collection_method": "charge_automatically",
+          "created": 1789731565,
+          "currency": "usd",
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "days_until_due": null,
+          "default_payment_method": "pm_1UH08bH23o1oRIgR9p92jTMH",
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "ended_at": null,
+          "invoice_settings": {
+            "account_tax_ids": null,
+            "custom_fields": null,
+            "description": null,
+            "footer": null,
+            "issuer": {
+              "type": "self"
+            }
+          },
+          "items": {
+            "object": "list",
+            "data": [
+              {
+                "id": "si_VHZH9vdgKpfdLq",
+                "object": "subscription_item",
+                "billing_thresholds": null,
+                "created": 1789731565,
+                "current_period_end": 1792323565,
+                "current_period_start": 1789731565,
+                "current_trial": null,
+                "discounts": [],
+                "metadata": {},
+                "plan": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "plan",
+                  "active": true,
+                  "amount": 14900,
+                  "amount_decimal": "14900",
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "interval": "month",
+                  "interval_count": 1,
+                  "livemode": false,
+                  "metadata": {},
+                  "meter": null,
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "tiers_mode": null,
+                  "transform_usage": null,
+                  "trial_period_days": null,
+                  "usage_type": "licensed"
+                },
+                "price": {
+                  "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                  "object": "price",
+                  "active": true,
+                  "billing_scheme": "per_unit",
+                  "created": 1789157517,
+                  "currency": "usd",
+                  "custom_unit_amount": null,
+                  "livemode": false,
+                  "lookup_key": "shopworks_band_1_15_monthly",
+                  "metadata": {},
+                  "nickname": "1 to 15 shop logins — monthly",
+                  "product": "prod_VF4xEVMh7gAlGf",
+                  "recurring": {
+                    "interval": "month",
+                    "interval_count": 1,
+                    "meter": null,
+                    "trial_period_days": null,
+                    "usage_type": "licensed"
+                  },
+                  "tax_behavior": "unspecified",
+                  "tiers_mode": null,
+                  "transform_quantity": null,
+                  "type": "recurring",
+                  "unit_amount": 14900,
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                "tax_rates": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/subscription_items?subscription=sub_1UH08ZH23o1oRIgRUUoKPNsk"
+          },
+          "latest_invoice": "in_1UH08ZH23o1oRIgR0F5CfQOS",
+          "livemode": false,
+          "managed_payments": {
+            "enabled": false
+          },
+          "metadata": {
+            "billing_interval": "monthly",
+            "plan_id": "band_1_15"
+          },
+          "next_pending_invoice_item_invoice": null,
+          "on_behalf_of": null,
+          "pause_collection": null,
+          "payment_settings": {
+            "payment_method_options": null,
+            "payment_method_types": null,
+            "save_default_payment_method": "off"
+          },
+          "pending_invoice_item_interval": null,
+          "pending_setup_intent": null,
+          "pending_update": null,
+          "plan": {
+            "id": "price_1UEanhH23o1oRIgRzpdiOQSd",
+            "object": "plan",
+            "active": true,
+            "amount": 14900,
+            "amount_decimal": "14900",
+            "billing_scheme": "per_unit",
+            "created": 1789157517,
+            "currency": "usd",
+            "interval": "month",
+            "interval_count": 1,
+            "livemode": false,
+            "metadata": {},
+            "meter": null,
+            "nickname": "1 to 15 shop logins — monthly",
+            "product": "prod_VF4xEVMh7gAlGf",
+            "tiers_mode": null,
+            "transform_usage": null,
+            "trial_period_days": null,
+            "usage_type": "licensed"
+          },
+          "quantity": 1,
+          "schedule": null,
+          "start_date": 1789731565,
+          "status": "active",
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "transfer_data": null,
+          "trial_end": null,
+          "trial_settings": {
+            "end_behavior": {
+              "billing_cycle_anchor": "now",
+              "missing_payment_method": "create_invoice"
+            }
+          },
+          "trial_start": null
+        },
+        "previous_attributes": {
+          "default_payment_method": "pm_1UH08YH23o1oRIgRiEA5CbwV"
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": "req_M8L3w2kEYRh7OX",
+        "idempotency_key": "stripe-node-retry-eefb5c40-0bc4-499b-989e-eb6945447f9d"
+      },
+      "type": "customer.subscription.updated"
+    },
+    {
+      "id": "evt_1UH08bH23o1oRIgR8VNVcoWi",
+      "object": "event",
+      "api_version": "2026-08-26.dahlia",
+      "created": 1789731569,
+      "data": {
+        "object": {
+          "id": "in_1UH08ZH23o1oRIgR0F5CfQOS",
+          "object": "invoice",
+          "account_country": "US",
+          "account_name": "Shopworks sandbox",
+          "account_tax_ids": null,
+          "amount_due": 14900,
+          "amount_overpaid": 0,
+          "amount_paid": 14900,
+          "amount_remaining": 0,
+          "amount_shipping": 0,
+          "application": null,
+          "attempt_count": 1,
+          "attempted": true,
+          "auto_advance": false,
+          "automatic_tax": {
+            "disabled_reason": null,
+            "enabled": false,
+            "liability": null,
+            "provider": null,
+            "status": null
+          },
+          "automatically_finalizes_at": null,
+          "billing_reason": "subscription_create",
+          "collection_method": "charge_automatically",
+          "created": 1789731565,
+          "currency": "usd",
+          "custom_fields": null,
+          "customer": "cus_VHZHMdQBII3jU7",
+          "customer_account": null,
+          "customer_address": null,
+          "customer_email": "dunning+1789731565@example.com",
+          "customer_name": "dunning test shop",
+          "customer_phone": null,
+          "customer_shipping": null,
+          "customer_tax_exempt": "none",
+          "customer_tax_ids": [],
+          "default_payment_method": null,
+          "default_source": null,
+          "default_tax_rates": [],
+          "description": null,
+          "discounts": [],
+          "due_date": null,
+          "effective_at": 1789731565,
+          "ending_balance": 0,
+          "footer": null,
+          "from_invoice": null,
+          "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIbncxZEN2eE5IQjd3YUlNQW1QYlBZemtrdmdULDE4MDI3MjM2OQ0200zun9gb7x?s=ap",
+          "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UEaUKH23o1oRIgR/test_YWNjdF8xVUVhVUtIMjNvMW9SSWdSLF9WSFpIbncxZEN2eE5IQjd3YUlNQW1QYlBZemtrdmdULDE4MDI3MjM2OQ0200zun9gb7x/pdf?s=ap",
+          "issuer": {
+            "type": "self"
+          },
+          "last_finalization_error": null,
+          "latest_revision": null,
+          "lines": {
+            "object": "list",
+            "data": [
+              {
+                "id": "il_1UH08XH23o1oRIgRRI1vaFfF",
+                "object": "line_item",
+                "amount": 14900,
+                "currency": "usd",
+                "description": "1 × ShopWorks — 1 to 15 shop logins (at $149.00 / month)",
+                "discount_amounts": [],
+                "discountable": true,
+                "discounts": [],
+                "invoice": "in_1UH08ZH23o1oRIgR0F5CfQOS",
+                "livemode": false,
+                "metadata": {
+                  "billing_interval": "monthly",
+                  "plan_id": "band_1_15"
+                },
+                "parent": {
+                  "invoice_item_details": null,
+                  "subscription_item_details": {
+                    "invoice_item": null,
+                    "proration": false,
+                    "proration_details": {
+                      "credited_items": null
+                    },
+                    "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk",
+                    "subscription_item": "si_VHZH9vdgKpfdLq"
+                  },
+                  "type": "subscription_item_details"
+                },
+                "period": {
+                  "end": 1792323565,
+                  "start": 1789731565
+                },
+                "pretax_credit_amounts": [],
+                "pricing": {
+                  "price_details": {
+                    "price": "price_1UEanhH23o1oRIgRzpdiOQSd",
+                    "product": "prod_VF4xEVMh7gAlGf"
+                  },
+                  "type": "price_details",
+                  "unit_amount_decimal": "14900"
+                },
+                "quantity": 1,
+                "quantity_decimal": "1",
+                "subtotal": 14900,
+                "taxes": []
+              }
+            ],
+            "has_more": false,
+            "total_count": 1,
+            "url": "/v1/invoices/in_1UH08ZH23o1oRIgR0F5CfQOS/lines"
+          },
+          "livemode": false,
+          "metadata": {},
+          "next_payment_attempt": null,
+          "number": "L4ABLHOE-0001",
+          "on_behalf_of": null,
+          "parent": {
+            "quote_details": null,
+            "subscription_details": {
+              "metadata": {
+                "billing_interval": "monthly",
+                "plan_id": "band_1_15"
+              },
+              "subscription": "sub_1UH08ZH23o1oRIgRUUoKPNsk"
+            },
+            "type": "subscription_details"
+          },
+          "payment_settings": {
+            "default_mandate": null,
+            "payment_method_options": null,
+            "payment_method_types": null
+          },
+          "period_end": 1789731565,
+          "period_start": 1789731565,
+          "post_payment_credit_notes_amount": 0,
+          "pre_payment_credit_notes_amount": 0,
+          "receipt_number": null,
+          "rendering": null,
+          "shipping_cost": null,
+          "shipping_details": null,
+          "starting_balance": 0,
+          "statement_descriptor": null,
+          "status": "paid",
+          "status_transitions": {
+            "finalized_at": 1789731565,
+            "marked_uncollectible_at": null,
+            "paid_at": 1789731565,
+            "voided_at": null
+          },
+          "subtotal": 14900,
+          "subtotal_excluding_tax": 14900,
+          "test_clock": "clock_1UH08YH23o1oRIgRg9rqCNq5",
+          "total": 14900,
+          "total_discount_amounts": [],
+          "total_excluding_tax": 14900,
+          "total_pretax_credit_amounts": [],
+          "total_taxes": [],
+          "webhooks_delivered_at": 1789731565
+        }
+      },
+      "livemode": false,
+      "pending_webhooks": 1,
+      "request": {
+        "id": "req_0rv3CganNgx0Bu",
+        "idempotency_key": "stripe-node-retry-358379a5-317d-4846-8e4d-7c0db23300da"
+      },
+      "type": "invoice.paid"
+    }
+  ]
+}
