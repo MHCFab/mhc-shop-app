@@ -22,9 +22,64 @@ import type { PlanId, IntervalId } from "./plans";
 
 let client: Stripe | null = null;
 
+// ---------------------------------------------------------------------------
+// WHICH KEY.
+//
+// Normally STRIPE_SECRET_KEY, which is the LIVE key on this deployment and in
+// .env.local since 14 September.
+//
+// ⚠️ THE ONE EXCEPTION IS LOCAL TESTING. Exercising a failed card, a lapse or
+// a cancellation means pointing the app at the sandbox. The obvious way to do
+// that - editing STRIPE_SECRET_KEY in .env.local and putting it back
+// afterwards - is exactly how a test key ends up deployed to real customers,
+// so it is not the way this works.
+//
+// Instead: set STRIPE_USE_SANDBOX=1 and the app reads the SEPARATE
+// STRIPE_SANDBOX_SECRET_KEY line. Nothing has to be swapped, and there is
+// nothing to put back.
+//
+// Three things make this safe to have in the code at all:
+//   * it does nothing unless STRIPE_USE_SANDBOX is set, and it is set nowhere
+//     except by hand in a terminal;
+//   * it refuses outright when NODE_ENV is production, which is what Vercel
+//     builds and runs with - so it cannot fire on a deployment;
+//   * it refuses a key that is not sk_test_, so a sandbox line holding a live
+//     key by mistake fails loudly instead of quietly taking real money.
+// ---------------------------------------------------------------------------
+function secretKey(): string {
+  const live = (process.env.STRIPE_SECRET_KEY || "").trim();
+
+  if ((process.env.STRIPE_USE_SANDBOX || "").trim() !== "1") return live;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "STRIPE_USE_SANDBOX is set on a production build. Refusing to run: " +
+        "this switch is for local testing only."
+    );
+  }
+
+  const sandbox = (process.env.STRIPE_SANDBOX_SECRET_KEY || "").trim();
+
+  if (!sandbox) {
+    throw new Error(
+      "STRIPE_USE_SANDBOX=1 but STRIPE_SANDBOX_SECRET_KEY is missing from " +
+        ".env.local."
+    );
+  }
+
+  if (!sandbox.startsWith("sk_test_")) {
+    throw new Error(
+      "STRIPE_USE_SANDBOX=1 but STRIPE_SANDBOX_SECRET_KEY is not a test key. " +
+        "Refusing to run rather than pointing a local server at real money."
+    );
+  }
+
+  return sandbox;
+}
+
 /** Is Stripe set up on this deployment at all? */
 export function stripeConfigured(): boolean {
-  return !!(process.env.STRIPE_SECRET_KEY || "").trim();
+  return !!secretKey();
 }
 
 /**
@@ -32,7 +87,7 @@ export function stripeConfigured(): boolean {
  * the routes turn into "billing is not switched on yet" rather than a 500.
  */
 export function getStripe(): Stripe {
-  const key = (process.env.STRIPE_SECRET_KEY || "").trim();
+  const key = secretKey();
   if (!key) {
     throw new Error(
       "Stripe is not set up on this deployment: STRIPE_SECRET_KEY is missing."
@@ -46,7 +101,7 @@ export function getStripe(): Stripe {
 
 /** True when the key in use is a test-mode key. Shown on the billing page. */
 export function isTestMode(): boolean {
-  return (process.env.STRIPE_SECRET_KEY || "").trim().startsWith("sk_test_");
+  return secretKey().startsWith("sk_test_");
 }
 
 // ---------------------------------------------------------------------------
