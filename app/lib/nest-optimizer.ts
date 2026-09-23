@@ -64,6 +64,12 @@ export type CutStockInput = {
   costPerFoot?: number | null;
   /** raw_material_id. */
   material: string;
+  /**
+   * A length you DON'T have yet but can buy. The nest only plans on these
+   * after everything on the rack is used up, so whatever lands on them is
+   * exactly what has to be ordered. qty is ignored - you can always buy more.
+   */
+  toOrder?: boolean;
 };
 
 export type NestSettings = {
@@ -112,6 +118,16 @@ export type NestStick = {
   trimStart: number;
   trimEnd: number;
   pieces: PlacedPiece[];
+  /** Planned on steel that still has to be ordered. Absent on nests made before 2026-09-23. */
+  toOrder?: boolean;
+};
+
+/** One line of the shopping list: buy `qty` sticks `length` inches long. */
+export type OrderLine = {
+  material: string;
+  /** Inches. */
+  length: number;
+  qty: number;
 };
 
 export type UnplacedPiece = {
@@ -137,6 +153,9 @@ export type NestSummary = {
   yieldWithDrops: number;
   cuts: number;
   sharedCuts: number;
+  /** How many of `sticks` are to order, and their total length in inches. */
+  orderSticks?: number;
+  orderTotal?: number;
 };
 
 export type NestResult = {
@@ -145,6 +164,10 @@ export type NestResult = {
   errors: NestError[];
   settings: NestSettings;
   summary: NestSummary;
+  /** What has to be bought to cut this nest. Empty when the rack covers it. */
+  order?: OrderLine[];
+  /** The order lengths the nest was allowed to plan on, inches. */
+  orderLengths?: number[];
 };
 
 /* ------------------------------------------------------------------ */
@@ -518,12 +541,15 @@ type StockRow = {
   qty: number;
   costPerFoot: number | null;
   height: number;
+  toOrder: boolean;
 };
 
 type Group = {
   key: string;
   pieces: Piece[];
   stock: StockRow[];
+  /** Lengths that can be bought if the rack runs short. */
+  order: StockRow[];
   height: number;
 };
 
@@ -539,7 +565,7 @@ function buildGroups(
   const g = (key: string): Group => {
     let grp = groups.get(key);
     if (!grp) {
-      grp = { key, pieces: [], stock: [], height: 0 };
+      grp = { key, pieces: [], stock: [], order: [], height: 0 };
       groups.set(key, grp);
     }
     return grp;
@@ -548,6 +574,23 @@ function buildGroups(
   for (const st of stock) {
     const len = Number(st.length);
     if (!isFinite(len) || len <= 0) continue;
+    if (st.toOrder) {
+      const grp = g(st.material);
+      if (!grp.order.some((o) => Math.abs(o.length - len) < 1e-9)) {
+        grp.order.push({
+          id: st.id,
+          label: st.label || formatLength(len),
+          length: len,
+          qty: Infinity,
+          costPerFoot:
+            st.costPerFoot === undefined || st.costPerFoot === null ? null : Number(st.costPerFoot),
+          height: Number(st.height) || 0,
+          toOrder: true,
+        });
+      }
+      grp.height = Math.max(grp.height, Number(st.height) || 0);
+      continue;
+    }
     const qty = st.qty === null || st.qty === undefined ? Infinity : Number(st.qty);
     if (qty <= 0) continue;
     const grp = g(st.material);
@@ -559,6 +602,7 @@ function buildGroups(
       costPerFoot:
         st.costPerFoot === undefined || st.costPerFoot === null ? null : Number(st.costPerFoot),
       height: Number(st.height) || 0,
+      toOrder: false,
     });
     grp.height = Math.max(grp.height, Number(st.height) || 0);
   }
@@ -722,25 +766,28 @@ function solveGroup(
   group: Group,
   settings: NestSettings,
   rnd: () => number,
-  greedy: boolean
+  greedy: boolean,
+  orderRows: StockRow[]
 ): { sticks: NestStick[]; unplaced: PreparedPiece[] } {
   const pool = group.pieces.map((p) => prepPiece(p, group.height));
   const sticks: NestStick[] = [];
   const avail = group.stock.map((s) => ({ ...s, left: s.qty }));
+  const buy = orderRows.map((s) => ({ ...s, left: Infinity }));
   const leftover = new Set<number>(pool.map((_, i) => i));
   let guard = 0;
 
-  while (leftover.size && guard++ < 10000) {
-    const idxList = Array.from(leftover);
-    const live = idxList.map((i) => pool[i]);
-    let bestStick: {
-      st: (typeof avail)[number];
-      res: FillResult;
-      score: number;
-      ctx: { kerf: number; height: number; trimStart: number; trimEnd: number };
-    } | null = null;
+  type Avail = (typeof avail)[number];
+  type Pick = {
+    st: Avail;
+    res: FillResult;
+    score: number;
+    ctx: { kerf: number; height: number; trimStart: number; trimEnd: number };
+  };
 
-    for (const st of avail) {
+  /** The best next stick from `rows`, or null when none of them takes a piece. */
+  const bestFrom = (rows: Avail[], live: PreparedPiece[]): Pick | null => {
+    let bestStick: Pick | null = null;
+    for (const st of rows) {
       if (st.left <= 0) continue;
       const ctx = {
         kerf: settings.kerf,
@@ -762,8 +809,17 @@ function solveGroup(
         bestStick = { st, res, score, ctx };
       }
     }
+    return bestStick;
+  };
 
-    if (!bestStick) break; // nothing left fits any available stock
+  while (leftover.size && guard++ < 10000) {
+    const idxList = Array.from(leftover);
+    const live = idxList.map((i) => pool[i]);
+
+    // Everything on the rack gets used before any steel is planned that has to
+    // be bought. So whatever lands on a to-order stick is the real shortfall.
+    const bestStick = bestFrom(avail, live) || bestFrom(buy, live);
+    if (!bestStick) break; // nothing left fits any stock, on hand or to order
 
     bestStick.st.left -= 1;
     // fillStick indexed into `live`; map those back to pool indices
@@ -784,6 +840,7 @@ function solveGroup(
       trimStart: settings.trimStart,
       trimEnd: settings.trimEnd,
       pieces: bestStick.res.seq,
+      toOrder: bestStick.st.toOrder,
     });
   }
 
@@ -804,10 +861,32 @@ export function optimizeNest(input: {
 
   const sticks: NestStick[] = [];
   const unplaced: UnplacedPiece[] = [];
+  const order: OrderLine[] = [];
+  const offered = new Set<number>();
+
+  type Candidate = {
+    sticks: NestStick[];
+    unplaced: PreparedPiece[];
+    net: number;
+    ordered: number;
+    n: number;
+    cuts: number;
+    unplacedN: number;
+  };
+  const tol = (d: number) => (Math.abs(d) < 1e-7 ? 0 : d);
+  // Place everything; then buy as little steel as possible; then burn as
+  // little as possible; then fewest sticks; then fewest cuts.
+  const cmp = (a: Candidate, b: Candidate) =>
+    a.unplacedN - b.unplacedN ||
+    tol(a.ordered - b.ordered) ||
+    tol(a.net - b.net) ||
+    a.n - b.n ||
+    a.cuts - b.cuts;
 
   for (const group of groups) {
+    for (const o of group.order) offered.add(o.length);
     if (!group.pieces.length) continue;
-    if (!group.stock.length) {
+    if (!group.stock.length && !group.order.length) {
       for (const p of group.pieces) {
         unplaced.push({
           label: p.label,
@@ -819,53 +898,54 @@ export function optimizeNest(input: {
       continue;
     }
 
-    let best: {
-      sticks: NestStick[];
-      unplaced: PreparedPiece[];
-      net: number;
-      n: number;
-      cuts: number;
-      unplacedN: number;
-    } | null = null;
+    // With a choice of order lengths, try each one on its own and all of them
+    // mixed, and keep whichever buys the least steel. With one or none, that
+    // is the only option.
+    const options: StockRow[][] =
+      group.order.length > 1 ? [...group.order.map((o) => [o]), group.order] : [group.order];
+    const budget = cfg.timeBudgetMs / options.length;
 
-    const started = Date.now();
-    for (let it = 0; it < cfg.iterations; it++) {
-      const rnd = mulberry32(cfg.seed + it * 7919);
-      const res = solveGroup(group, cfg, rnd, it === 0);
-      const net = res.sticks.reduce(
-        (a, s) => a + s.stockLength - (s.usableDrop ? s.drop * cfg.dropCredit : 0),
-        0
-      );
-      const cand = {
-        ...res,
-        net,
-        n: res.sticks.length,
-        cuts: res.sticks.reduce((a, s) => a + s.cuts, 0),
-        unplacedN: res.unplaced.length,
-      };
-      const better =
-        !best ||
-        cand.unplacedN < best.unplacedN ||
-        (cand.unplacedN === best.unplacedN && cand.net < best.net - 1e-7) ||
-        (cand.unplacedN === best.unplacedN &&
-          Math.abs(cand.net - best.net) < 1e-7 &&
-          cand.n < best.n) ||
-        (cand.unplacedN === best.unplacedN &&
-          Math.abs(cand.net - best.net) < 1e-7 &&
-          cand.n === best.n &&
-          cand.cuts < best.cuts);
-      if (better) best = cand;
-      if (Date.now() - started > cfg.timeBudgetMs) break;
+    let best: Candidate | null = null;
+    for (const option of options) {
+      const started = Date.now();
+      for (let it = 0; it < cfg.iterations; it++) {
+        const rnd = mulberry32(cfg.seed + it * 7919);
+        const res = solveGroup(group, cfg, rnd, it === 0, option);
+        const cand: Candidate = {
+          ...res,
+          net: res.sticks.reduce(
+            (a, s) => a + s.stockLength - (s.usableDrop ? s.drop * cfg.dropCredit : 0),
+            0
+          ),
+          ordered: res.sticks.reduce((a, s) => a + (s.toOrder ? s.stockLength : 0), 0),
+          n: res.sticks.length,
+          cuts: res.sticks.reduce((a, s) => a + s.cuts, 0),
+          unplacedN: res.unplaced.length,
+        };
+        if (!best || cmp(cand, best) < 0) best = cand;
+        if (Date.now() - started > budget) break;
+      }
     }
 
     if (!best) continue;
     sticks.push(...best.sticks);
+
+    const perLen = new Map<number, number>();
+    for (const s of best.sticks) {
+      if (s.toOrder) perLen.set(s.stockLength, (perLen.get(s.stockLength) || 0) + 1);
+    }
+    for (const [length, qty] of Array.from(perLen.entries()).sort((a, b) => b[0] - a[0])) {
+      order.push({ material: group.key, length, qty });
+    }
+
     for (const p of best.unplaced) {
       unplaced.push({
         label: p.label,
         length: p.length,
         material: group.key,
-        reason: "Too long for the stock on hand, or the stock ran out.",
+        reason: group.order.length
+          ? "Longer than any stick on hand or to order."
+          : "Too long for the stock on hand, or the stock ran out.",
       });
     }
   }
@@ -876,12 +956,18 @@ export function optimizeNest(input: {
   let usableDropTotal = 0;
   let cuts = 0;
   let shared = 0;
+  let orderSticks = 0;
+  let orderTotal = 0;
   for (const s of sticks) {
     stockTotal += s.stockLength;
     dropTotal += s.drop + s.trimStart + s.trimEnd;
     if (s.usableDrop) usableDropTotal += s.drop;
     cuts += s.cuts;
     shared += s.sharedCuts;
+    if (s.toOrder) {
+      orderSticks += 1;
+      orderTotal += s.stockLength;
+    }
     for (const p of s.pieces) partTotal += p.length;
   }
 
@@ -901,7 +987,11 @@ export function optimizeNest(input: {
       yieldWithDrops: stockTotal ? (partTotal + usableDropTotal) / stockTotal : 0,
       cuts,
       sharedCuts: shared,
+      orderSticks,
+      orderTotal,
     },
+    order,
+    orderLengths: Array.from(offered).sort((a, b) => a - b),
   };
 }
 
@@ -934,6 +1024,13 @@ export type InventoryOps = {
  * 37.4999" would sit in stock as two different things.
  */
 export function planToInventoryOps(result: NestResult, denom = 16): InventoryOps {
+  // A to-order stick is not on the rack, and pulling it would drive stock
+  // negative. The panel blocks Apply before it gets here; this is the backstop.
+  if (result.sticks.some((s) => s.toOrder)) {
+    throw new Error(
+      "This nest includes sticks that still have to be ordered. Receive the material and re-optimize before applying it."
+    );
+  }
   const pullMap = new Map<string, InventoryOp>();
   const dropMap = new Map<string, InventoryOp>();
 

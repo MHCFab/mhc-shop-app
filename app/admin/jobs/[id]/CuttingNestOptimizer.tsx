@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "../../../lib/supabase";
 import { pullSticks, saveDrop } from "../../../lib/inventory";
 import NestSticksView from "../../../components/NestSticksView";
@@ -59,6 +60,37 @@ const DEFAULT_SETTINGS: NestSettingsRow = {
   effort: "normal",
   depth: "",
 };
+
+/**
+ * Stick lengths the nest can plan on when the rack runs short, in inches.
+ * "auto" tries both and keeps whichever buys the least steel.
+ */
+const ORDER_CHOICES: Record<string, number[]> = {
+  auto: [240, 288],
+  "240": [240],
+  "288": [288],
+};
+
+/**
+ * The paper cut sheet is rendered into document.body and printed with the
+ * browser's own print. On paper, everything else on the page is hidden, so it
+ * works no matter what layout the panel sits in.
+ */
+const PRINT_CSS = `
+#nest-print-root { display: none; }
+@media print {
+  body > *:not(#nest-print-root) { display: none !important; }
+  #nest-print-root { display: block; }
+  #nest-print-root, #nest-print-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #nest-print-root .nest-stick { break-inside: avoid; page-break-inside: avoid; }
+  @page { margin: 0.4in; }
+}
+`;
+
+/** 288 -> 24'-0" */
+function feetText(v: number) {
+  return formatLength(v);
+}
 
 function newRowId() {
   return "new-" + Math.random().toString(36).slice(2, 10);
@@ -182,6 +214,10 @@ export default function CuttingNestOptimizer({
   const [note, setNote] = useState<string | null>(null);
   const [showPaste, setShowPaste] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  /** Which lengths to plan on when the rack runs short - a key of ORDER_CHOICES. */
+  const [orderChoice, setOrderChoice] = useState<string>("auto");
+  /** Set when Print is pressed; the cut sheet exists only while this is set. */
+  const [printedAt, setPrintedAt] = useState<string | null>(null);
 
   const suggested = useMemo(() => depthCandidates(shape, size), [shape, size]);
 
@@ -239,6 +275,9 @@ export default function CuttingNestOptimizer({
       });
       setPlan((nest.result as NestResult | null) || null);
       setAppliedAt((nest.applied_at as string | null) || null);
+      // Put the order-length picker back the way it was when this nest was made.
+      const offered = (nest.result as NestResult | null)?.orderLengths || [];
+      setOrderChoice(offered.length === 1 && ORDER_CHOICES[String(offered[0])] ? String(offered[0]) : "auto");
     } else {
       setNestId(null);
       setSettings({
@@ -249,6 +288,7 @@ export default function CuttingNestOptimizer({
       });
       setPlan(null);
       setAppliedAt(null);
+      setOrderChoice("auto");
     }
     setDirty(false);
     setLoading(false);
@@ -257,6 +297,18 @@ export default function CuttingNestOptimizer({
   useEffect(() => {
     load();
   }, [load]);
+
+  // Print once the cut sheet has rendered, and take it away again afterwards.
+  useEffect(() => {
+    if (!printedAt) return;
+    const done = () => setPrintedAt(null);
+    window.addEventListener("afterprint", done, { once: true });
+    const t = window.setTimeout(() => window.print(), 150);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("afterprint", done);
+    };
+  }, [printedAt]);
 
   function patchRow(id: string, patch: Partial<CutRow>) {
     // Touching a line that came from a product template makes it YOURS: it
@@ -378,6 +430,20 @@ export default function CuttingNestOptimizer({
       costPerFoot,
       material: rawMaterialId,
     }));
+    // Lengths that can be bought. The optimizer only plans on these once the
+    // rack is used up, so whatever lands on them is what has to be ordered.
+    for (const len of ORDER_CHOICES[orderChoice] || ORDER_CHOICES.auto) {
+      stock.push({
+        id: rawMaterialId + "-order-" + len,
+        label: feetText(len) + " (to order)",
+        length: len,
+        qty: null,
+        height: parseLength(settings.depth) ?? 0,
+        costPerFoot,
+        material: rawMaterialId,
+        toOrder: true,
+      });
+    }
     const [iterations, timeBudgetMs] = NEST_EFFORT[settings.effort] || NEST_EFFORT.normal;
     return {
       parts,
@@ -396,10 +462,6 @@ export default function CuttingNestOptimizer({
   }
 
   async function runOptimize() {
-    if (!availableLengths.length) {
-      setError("There's no " + materialLabel + " in stock to nest against.");
-      return;
-    }
     setBusy(true);
     setError(null);
     setNote(null);
@@ -438,7 +500,29 @@ export default function CuttingNestOptimizer({
 
   async function applyPlan() {
     if (!plan || !plan.sticks.length) return;
+    if (plan.sticks.some((st) => st.toOrder)) {
+      setError(
+        "Part of this nest is planned on material you still have to order. Once it's received, " +
+          "Re-optimize, then Apply."
+      );
+      return;
+    }
     const ops = planToInventoryOps(plan);
+    // The rack can change between Optimize and Apply (another job pulls from
+    // it). Never pull a stick that isn't there - that is what drives a length
+    // negative. Make them re-run the nest against what's really on hand.
+    const short = ops.pulls.filter((p) => {
+      const have = availableLengths.find((l) => Math.abs(l.length - p.lengthFeet) < 1e-6)?.sticks ?? 0;
+      return have < p.quantity;
+    });
+    if (short.length) {
+      setError(
+        "Stock has changed since this nest was made - not enough on hand at " +
+          short.map((p) => inches(p.lengthFeet * 12)).join(", ") +
+          ". Re-optimize, then Apply."
+      );
+      return;
+    }
     const pullCount = ops.pulls.reduce((a, p) => a + p.quantity, 0);
     const dropCount = trackDrops ? ops.drops.reduce((a, d) => a + d.quantity, 0) : 0;
     const msg =
@@ -496,7 +580,12 @@ export default function CuttingNestOptimizer({
   // The drawing's vertical units are inches of profile depth. With no depth
   // recorded every cut is square, so any positive number gives flat rectangles.
   const vbDepth = depthNum > 0 ? depthNum : 1;
-  const stockTotalSticks = availableLengths.reduce((a, l) => a + l.sticks, 0);
+  const orderLines = plan?.order || [];
+  const needsOrder = !!plan && plan.sticks.some((st) => st.toOrder);
+  const orderSticks = plan ? plan.sticks.filter((st) => st.toOrder).length : 0;
+  const orderFeet = orderLines.reduce((a, o) => a + (o.length * o.qty) / 12, 0);
+  const pieceCount = plan ? plan.sticks.reduce((a, st) => a + st.pieces.length, 0) : 0;
+  const planDepth = plan?.sticks[0]?.height || 0;
 
   return (
     <div className="space-y-4">
@@ -691,7 +780,9 @@ export default function CuttingNestOptimizer({
         <div className="bg-gray-50 border border-gray-200 rounded-md p-3">
           <p className="text-sm font-medium text-gray-900 mb-2">Stock it can cut from</p>
           {availableLengths.length === 0 ? (
-            <p className="text-sm text-gray-600">Nothing on hand for this material.</p>
+            <p className="text-sm text-gray-600">
+              Nothing on hand for this material. Optimize will plan the whole list on sticks to order.
+            </p>
           ) : (
             <table className="w-full text-sm">
               <tbody>
@@ -707,7 +798,16 @@ export default function CuttingNestOptimizer({
           <p className="text-xs text-gray-500 mt-2">
             Shortest lengths get used first, so remnants come off the rack before full sticks.
           </p>
-          <button onClick={runOptimize} disabled={busy || stockTotalSticks === 0}
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-700 mb-1">If there isn&apos;t enough, plan the rest on</label>
+            <select value={orderChoice} onChange={(e) => setOrderChoice(e.target.value)}
+              className="w-full px-2 py-1.5 border border-gray-300 rounded text-gray-900 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="auto">20&apos; or 24&apos; sticks &mdash; whichever buys less</option>
+              <option value="240">20&apos; sticks</option>
+              <option value="288">24&apos; sticks</option>
+            </select>
+          </div>
+          <button onClick={runOptimize} disabled={busy}
             className="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-md font-medium text-sm hover:bg-blue-700 disabled:opacity-50">
             {busy ? "Working..." : plan ? "Re-optimize" : "Optimize"}
           </button>
@@ -721,22 +821,34 @@ export default function CuttingNestOptimizer({
             <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
               The nest {appliedAt ? "(applied)" : "(not applied yet)"}
             </span>
-            {appliedAt ? (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                Applied to inventory
-              </span>
-            ) : (
-              <button onClick={applyPlan} disabled={busy || !plan.sticks.length}
-                className="px-4 py-1.5 bg-green-600 text-white rounded-md font-medium text-sm hover:bg-green-700 disabled:opacity-50">
-                Apply to inventory
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => setPrintedAt(new Date().toLocaleString())} disabled={!plan.sticks.length}
+                className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-100 disabled:opacity-50">
+                Print cut sheet
               </button>
-            )}
+              {appliedAt ? (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                  Applied to inventory
+                </span>
+              ) : needsOrder ? (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800"
+                  title="Receive the material, Re-optimize, then Apply">
+                  Order material before applying
+                </span>
+              ) : (
+                <button onClick={applyPlan} disabled={busy || !plan.sticks.length}
+                  className="px-4 py-1.5 bg-green-600 text-white rounded-md font-medium text-sm hover:bg-green-700 disabled:opacity-50">
+                  Apply to inventory
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-3 text-sm border-b border-gray-200">
             <div>
               <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Sticks</div>
               <div className="font-mono text-gray-900 mt-1">{s.sticks}</div>
+              {orderSticks > 0 && <div className="text-xs text-red-700">{orderSticks} to order</div>}
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-gray-500 font-medium">Stock used</div>
@@ -759,11 +871,30 @@ export default function CuttingNestOptimizer({
             </div>
           </div>
 
+          {orderLines.length > 0 && (
+            <div className="px-3 py-3 bg-red-50 border-b border-red-200 text-sm text-red-800">
+              <div className="font-semibold">Not enough {materialLabel} on hand. Order before cutting:</div>
+              <ul className="mt-1 font-mono">
+                {orderLines.map((o) => (
+                  <li key={o.length}>
+                    {o.qty} &times; {feetText(o.length)} stick{o.qty === 1 ? "" : "s"} ({((o.length * o.qty) / 12).toFixed(0)} ft)
+                  </li>
+                ))}
+              </ul>
+              <div className="text-xs mt-1">
+                {orderFeet.toFixed(0)} ft total, about ${(orderFeet * costPerFoot).toFixed(2)} at the current cost.
+                Sticks tagged TO ORDER below are planned on steel you don&apos;t have yet. Apply stays off until
+                it&apos;s received and you Re-optimize.
+              </div>
+            </div>
+          )}
+
           {plan.unplaced.length > 0 && (
             <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800">
-              <b>{plan.unplaced.length}</b> piece{plan.unplaced.length === 1 ? "" : "s"} wouldn&apos;t fit the stock on
-              hand: {plan.unplaced.slice(0, 4).map((u) => u.label + " " + inches(u.length)).join(", ")}
-              {plan.unplaced.length > 4 ? "..." : ""}. Buy longer stock or shorten the list.
+              <b>{plan.unplaced.length}</b> piece{plan.unplaced.length === 1 ? "" : "s"} wouldn&apos;t fit any
+              stick: {plan.unplaced.slice(0, 4).map((u) => u.label + " " + inches(u.length)).join(", ")}
+              {plan.unplaced.length > 4 ? "..." : ""}. They&apos;re longer than the longest stock &mdash; splice them
+              or shorten the list.
             </div>
           )}
 
@@ -776,6 +907,55 @@ export default function CuttingNestOptimizer({
           <NestSticksView sticks={plan.sticks} fallbackDepth={vbDepth} />
         </div>
       )}
+
+      {/* ---------- the paper cut sheet (only exists while printing) ---------- */}
+      {printedAt && plan && typeof document !== "undefined" &&
+        createPortal(
+          <div id="nest-print-root" className="bg-white text-gray-900">
+            <style>{PRINT_CSS}</style>
+            <div className="flex items-start justify-between gap-4 border-b-2 border-gray-900 pb-2 mb-2">
+              <div>
+                <div className="text-xl font-bold">Cut sheet &mdash; Job {jobNumber}</div>
+                <div className="text-base mt-0.5">{materialLabel}</div>
+              </div>
+              <div className="text-right text-xs text-gray-600">
+                <div>Printed {printedAt}</div>
+                <div>{appliedAt ? "Applied to inventory" : "Plan only - not applied to inventory"}</div>
+              </div>
+            </div>
+            <div className="text-sm mb-1">
+              {plan.sticks.length} stick{plan.sticks.length === 1 ? "" : "s"} ({plan.sticks.length - orderSticks} from
+              the rack{orderSticks ? ", " + orderSticks + " to order" : ""}) &middot; {pieceCount} piece
+              {pieceCount === 1 ? "" : "s"} &middot; {planDepth ? inches(planDepth) + " deep in the saw" : "square cuts"}
+              &nbsp;&middot; kerf {plan.settings.kerf}&quot;
+            </div>
+            <p className="text-xs text-gray-600 mb-3">
+              Lengths are LONG POINT, in inches. Where two pieces meet on one line, that is one blade pass &mdash;
+              do not cut it twice. Tick each piece as it comes off the saw.
+            </p>
+            {orderLines.length > 0 && (
+              <div className="border-2 border-red-700 rounded p-2 mb-3 text-sm">
+                <div className="font-bold text-red-800">MATERIAL TO ORDER</div>
+                {orderLines.map((o) => (
+                  <div key={o.length} className="font-mono">
+                    {o.qty} &times; {feetText(o.length)} {materialLabel}
+                  </div>
+                ))}
+                <div className="text-xs mt-1">
+                  Sticks tagged TO ORDER are planned on this steel. Don&apos;t cut them until it&apos;s in.
+                </div>
+              </div>
+            )}
+            {plan.unplaced.length > 0 && (
+              <div className="border border-amber-600 rounded p-2 mb-3 text-sm">
+                Not on this sheet (longer than any stick):{" "}
+                {plan.unplaced.map((u) => u.label + " " + inches(u.length)).join(", ")}
+              </div>
+            )}
+            <NestSticksView sticks={plan.sticks} fallbackDepth={vbDepth} showAngles large printable />
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

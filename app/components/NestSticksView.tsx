@@ -33,6 +33,7 @@ export default function NestSticksView({
   fallbackDepth = 1,
   showAngles = false,
   large = false,
+  printable = false,
 }: {
   sticks: NestStick[];
   /** Used for the drawing's vertical scale when a stick carries no depth. */
@@ -41,6 +42,8 @@ export default function NestSticksView({
   showAngles?: boolean;
   /** Bigger type and a taller bar, for a phone in the shop. */
   large?: boolean;
+  /** Paper cut sheet: a tick box on every cut and a note on where each stick comes from. */
+  printable?: boolean;
 }) {
   return (
     <div className="divide-y divide-gray-100">
@@ -50,7 +53,8 @@ export default function NestSticksView({
         // only when the plan was made with no depth recorded.
         const vbDepth = st.height > 0 ? st.height : fallbackDepth > 0 ? fallbackDepth : 1;
         return (
-          <div key={i} className={large ? "p-4" : "p-3"}>
+          // "nest-stick" lets the print sheet keep a stick from splitting across pages.
+          <div key={i} className={(large ? "p-4" : "p-3") + " nest-stick"}>
             <div className="flex items-baseline gap-3 flex-wrap mb-2">
               <span className={(large ? "text-base " : "text-sm ") + "font-semibold text-gray-900"}>
                 Stick {i + 1}
@@ -58,6 +62,13 @@ export default function NestSticksView({
               <span className={(large ? "text-base " : "text-sm ") + "text-gray-600 font-mono"}>
                 {inches(st.stockLength)}
               </span>
+              {st.toOrder ? (
+                <span className="px-1.5 py-0.5 rounded border border-red-300 bg-red-100 text-xs font-semibold uppercase tracking-wide text-red-800">
+                  To order
+                </span>
+              ) : printable ? (
+                <span className="text-xs text-gray-500">from the rack</span>
+              ) : null}
               <span className="ml-auto text-xs font-mono text-gray-500">
                 used {inches(st.consumed)} &middot; drop {inches(st.drop)}{" "}
                 {st.usableDrop ? (
@@ -126,6 +137,11 @@ export default function NestSticksView({
                   const trail = showAngles ? angleText(p.sTrail, st.height) : "";
                   return (
                     <tr key={j} className="border-t border-gray-100 first:border-t-0">
+                      {printable && (
+                        <td className="py-1.5 pr-2 w-6">
+                          <span className="inline-block h-4 w-4 rounded-sm border border-gray-500 align-middle" />
+                        </td>
+                      )}
                       {large && <td className="py-1.5 pr-2 font-mono text-gray-400 w-6">{j + 1}</td>}
                       <td className={(large ? "py-1.5 " : "py-1 ") + "text-gray-900"}>{p.label}</td>
                       <td className={(large ? "py-1.5 " : "py-1 ") + "font-mono text-gray-700"}>
