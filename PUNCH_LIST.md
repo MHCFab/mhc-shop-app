@@ -36,6 +36,27 @@ Decide whether fabricated cost should instead use true LIFO/actual consumed cost
 consumption costing. (Note: if #1 makes catalog cost = latest purchase cost, current-cost and LIFO largely
 converge.)
 
+## Inventory integrity (raised 2026-09-23, from the false stock-problem banner)
+
+### 7. A cutting nest can pull a length it doesn't have in stock  *(bug)*
+`pullSticks` (`app/lib/inventory.ts`) inserts a negative `raw_material_inventory` row at whatever length
+the nest pulls, with no check that stock exists at that length. So a nest can drive a single length below
+zero on its own, and nothing tells anyone at the time it happens.
+
+Real case: 1.5 x .095 ERW went to −1 stick at 52.08 in when job 955's nest recorded a pull on 9/08 with no
+matching stock at that length; the drop saved on 9/09 brought it back to net 0, which then tripped the
+red "stock problem" banner on the material page. That false banner is fixed (the trap check now requires a
+manual adjustment to have caused the negative), but the underlying over-pull is not.
+
+Options, in rough order of preference:
+- Warn at pull time when a nest is about to pull more sticks of a length than are on hand, and make the
+  user confirm. Cheapest, catches it while the person who knows is standing there.
+- Block the pull outright. Safer but could stop real work on the floor when the data is behind reality.
+- Leave the pull alone and surface the negative on the material page only (today's behaviour).
+
+Worth checking as part of this: whether the nest offers a length as available stock when it has none, which
+would mean the over-pull starts upstream of `pullSticks`.
+
 ## Fabricated sub-assemblies — remaining phases
 
 ### 5. Phase 2 — jobs pull finished sub-assemblies from fabricated stock  *(DONE, pending deploy)*
