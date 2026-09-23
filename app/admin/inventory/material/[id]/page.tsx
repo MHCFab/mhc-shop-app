@@ -202,31 +202,40 @@ export default function MaterialDetailPage() {
 
   // Flag a length when either:
   //  - its net stick count is below zero (physically impossible), or
-  //  - a saved drop landed while the running balance was already below zero — i.e. a
-  //    stock removal (a manual adjustment or an over-pull) happened BEFORE the drop
-  //    existed, so the drop is filling a pre-existing hole instead of adding real stock.
-  // A drop that's later removed because it got used is fine: at the moment the drop was
-  // saved the balance wasn't negative, so it isn't flagged. On same-day ties we apply
-  // additions before removals, which errs toward NOT flagging.
+  //  - a saved drop landed in a hole that a MANUAL ADJUSTMENT had already made: at the
+  //    moment the drop was saved the running balance was negative, and it was negative
+  //    only because of adjustments -- purchases, pulls and drops on their own were still
+  //    balanced. That is the stale-adjustment trap, where a real piece sits on the rack
+  //    but the length reads zero.
+  // Deliberately NOT flagged: a cutting nest that pulls a length and then saves a drop at
+  // that same length, even when the pull is dated a day earlier -- those are two halves of
+  // one nest operation and net to zero correctly. Nor is a drop that is later cut and
+  // pulled. On same-day ties we apply additions before removals, which errs toward NOT
+  // flagging.
+  const STICK_EPS = 0.001;
   const flaggedLengths = Array.from(rowsByLength.entries())
     .map(([length, rows]) => {
       const net = rows.reduce((s, r) => s + r.qty, 0);
       const ordered = [...rows].sort((a, b) => a.date.localeCompare(b.date) || b.qty - a.qty);
       let running = 0;
-      let dropIntoNegative = false;
+      let runningNoAdjust = 0;
+      let dropIntoAdjustmentHole = false;
       for (const r of ordered) {
-        if (r.type === "drop" && r.qty > 0 && running < 0) dropIntoNegative = true;
+        if (r.type === "drop" && r.qty > 0 && running < -STICK_EPS && runningNoAdjust >= -STICK_EPS) {
+          dropIntoAdjustmentHole = true;
+        }
         running += r.qty;
+        if (r.type !== "adjustment") runningNoAdjust += r.qty;
       }
-      return { length, net, dropIntoNegative };
+      return { length, net, dropIntoAdjustmentHole };
     })
-    .filter((d) => d.net < 0 || (d.net <= 0 && d.dropIntoNegative))
+    .filter((d) => d.net < -STICK_EPS || (Math.abs(d.net) <= STICK_EPS && d.dropIntoAdjustmentHole))
     .map((d) => ({
       length: d.length,
       net: d.net,
-      reason: d.net < 0
+      reason: d.net < -STICK_EPS
         ? "net stock is below zero"
-        : "a saved drop was cancelled by a stock removal made before the drop existed",
+        : "a saved drop was cancelled by a manual adjustment made before the drop existed",
     }))
     .sort((a, b) => a.net - b.net);
 
@@ -505,7 +514,7 @@ export default function MaterialDetailPage() {
                 Stock problem &mdash; something&apos;s off here
               </h3>
               <p className="text-sm text-red-700 mt-1">
-                {flaggedLengths.length === 1 ? "A length below has" : "The lengths below have"} a stock problem: either the net stick count has gone below zero, or a saved drop was swallowed by a stock removal that happened before the drop existed. Open <span className="font-medium">Purchase &amp; price history</span> below to find and fix (or delete) the entry that&apos;s causing it.
+                {flaggedLengths.length === 1 ? "A length below has" : "The lengths below have"} a stock problem: either the net stick count has gone below zero, or a saved drop was swallowed by a manual adjustment made before the drop existed. Open <span className="font-medium">Purchase &amp; price history</span> below to find and fix (or delete) the entry that&apos;s causing it.
               </p>
               <ul className="mt-2 space-y-1">
                 {flaggedLengths.map((g) => (
