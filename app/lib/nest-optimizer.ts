@@ -34,6 +34,9 @@
 
 export type MiterDir = 1 | -1;
 
+/** Another job's nest that a drop is coming from - the drop doesn't exist until that nest is applied. */
+export type PlannedSource = { nestId: string; jobNumber: string };
+
 /** One line of a cut list: a mark, a length, how many, and both ends. */
 export type CutPartInput = {
   id: string;
@@ -70,6 +73,8 @@ export type CutStockInput = {
    * exactly what has to be ordered. qty is ignored - you can always buy more.
    */
   toOrder?: boolean;
+  /** A drop another job's unapplied nest is going to leave. Used like stock on hand. */
+  plannedFrom?: PlannedSource;
 };
 
 export type NestSettings = {
@@ -120,6 +125,8 @@ export type NestStick = {
   pieces: PlacedPiece[];
   /** Planned on steel that still has to be ordered. Absent on nests made before 2026-09-23. */
   toOrder?: boolean;
+  /** Cut from a drop another job's nest hasn't produced yet. */
+  plannedFrom?: PlannedSource;
 };
 
 /** One line of the shopping list: buy `qty` sticks `length` inches long. */
@@ -168,6 +175,12 @@ export type NestResult = {
   order?: OrderLine[];
   /** The order lengths the nest was allowed to plan on, inches. */
   orderLengths?: number[];
+  /**
+   * The other jobs' unapplied nests this one was planned around (their sticks
+   * held back, their drops offered), as they stood at the time. If any of them
+   * is re-optimized afterwards, this nest is out of date.
+   */
+  basedOn?: { nestId: string; jobNumber: string; optimizedAt: string | null }[];
 };
 
 /* ------------------------------------------------------------------ */
@@ -542,6 +555,7 @@ type StockRow = {
   costPerFoot: number | null;
   height: number;
   toOrder: boolean;
+  plannedFrom?: PlannedSource;
 };
 
 type Group = {
@@ -603,6 +617,7 @@ function buildGroups(
         st.costPerFoot === undefined || st.costPerFoot === null ? null : Number(st.costPerFoot),
       height: Number(st.height) || 0,
       toOrder: false,
+      plannedFrom: st.plannedFrom,
     });
     grp.height = Math.max(grp.height, Number(st.height) || 0);
   }
@@ -841,6 +856,7 @@ function solveGroup(
       trimEnd: settings.trimEnd,
       pieces: bestStick.res.seq,
       toOrder: bestStick.st.toOrder,
+      plannedFrom: bestStick.st.plannedFrom,
     });
   }
 
@@ -1052,5 +1068,81 @@ export function planToInventoryOps(result: NestResult, denom = 16): InventoryOps
   return {
     pulls: Array.from(pullMap.values()),
     drops: Array.from(dropMap.values()),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Sharing stock with other jobs' nests that aren't applied yet        */
+/* ------------------------------------------------------------------ */
+
+/** An unapplied nest on the same material, in the order it gets first claim. */
+export type PlannedNest = { nestId: string; jobNumber: string; result: NestResult };
+
+/** A drop an unapplied nest is going to leave. Length in INCHES. */
+export type PlannedDrop = { nestId: string; jobNumber: string; length: number; qty: number };
+
+/**
+ * What is really free for the next nest on a material, given the nests ahead
+ * of it that are planned but not applied yet.
+ *
+ * `rackFeet` is the rack as getAvailableLengths reports it (FEET). `earlier`
+ * are the other nests, oldest first - the older nest always gets first claim,
+ * so two nests can never both plan on the same stick.
+ *
+ * Walking them in order:
+ *   - a stick one of them pulls off the rack is taken off the rack;
+ *   - a stick it cuts from an even earlier nest's drop is taken off that drop;
+ *   - each usable drop it leaves is offered to the nests after it, at the
+ *     length it will really be saved at (rounded DOWN to 1/16", exactly as
+ *     planToInventoryOps saves it), so it matches inventory once it's real.
+ * To-order sticks come from steel that isn't here yet, so they take nothing
+ * off the rack - but their drops are offered like any other.
+ *
+ * Returns the rack that's left (FEET) and the planned drops (INCHES).
+ */
+export function reservePlannedStock(
+  rackFeet: { length: number; sticks: number }[],
+  earlier: PlannedNest[],
+  trackDrops: boolean,
+  denom = 16
+): { rack: { length: number; sticks: number }[]; planned: PlannedDrop[] } {
+  const near = (a: number, b: number) => Math.abs(a - b) <= 1 / 32;
+  const rack = rackFeet.map((l) => ({ length: l.length, sticks: l.sticks }));
+  const pool: PlannedDrop[] = [];
+  const seen = new Set<string>();
+
+  for (const n of earlier) {
+    const sticks = (n.result && Array.isArray(n.result.sticks) ? n.result.sticks : []) as NestStick[];
+    for (const s of sticks) {
+      if (s.toOrder) continue;
+      if (s.plannedFrom && seen.has(s.plannedFrom.nestId)) {
+        const p = pool.find((x) => x.nestId === s.plannedFrom!.nestId && near(x.length, s.stockLength));
+        if (p) p.qty = Math.max(0, p.qty - 1);
+        continue;
+      }
+      // Off the rack - including a drop whose nest has been applied since, so
+      // the drop is real inventory now.
+      let best: { length: number; sticks: number } | null = null;
+      for (const r of rack) {
+        if (!near(r.length * 12, s.stockLength)) continue;
+        if (!best || Math.abs(r.length * 12 - s.stockLength) < Math.abs(best.length * 12 - s.stockLength)) best = r;
+      }
+      if (best) best.sticks = Math.max(0, best.sticks - 1);
+    }
+    seen.add(n.nestId);
+    if (!trackDrops) continue;
+    for (const s of sticks) {
+      if (!s.usableDrop || !(s.drop > 0)) continue;
+      const len = Math.floor(s.drop * denom) / denom;
+      if (len <= 0) continue;
+      const p = pool.find((x) => x.nestId === n.nestId && Math.abs(x.length - len) < 1e-9);
+      if (p) p.qty += 1;
+      else pool.push({ nestId: n.nestId, jobNumber: n.jobNumber, length: len, qty: 1 });
+    }
+  }
+
+  return {
+    rack: rack.filter((r) => r.sticks > 0),
+    planned: pool.filter((p) => p.qty > 0),
   };
 }

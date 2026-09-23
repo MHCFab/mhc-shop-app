@@ -13,6 +13,8 @@ import {
   NEST_EFFORT,
   depthCandidates,
   depthHint,
+  reservePlannedStock,
+  type PlannedDrop,
   type CutPartInput,
   type CutStockInput,
   type NestResult,
@@ -39,6 +41,18 @@ type CutRow = {
   /** Which product template a filled line came off. Kept for provenance. */
   productTemplateId?: string | null;
 };
+
+/** Another job's nest on the same material that's planned but not applied yet. */
+type OtherNest = {
+  id: string;
+  jobNumber: string;
+  createdAt: string;
+  optimizedAt: string | null;
+  result: NestResult;
+};
+
+/** Job statuses that are still open - same list the Jobs page uses. */
+const OPEN_JOB_STATUSES = ["pending", "ordered", "ready", "in_progress"];
 
 type NestSettingsRow = {
   kerf: string;
@@ -218,8 +232,51 @@ export default function CuttingNestOptimizer({
   const [orderChoice, setOrderChoice] = useState<string>("auto");
   /** Set when Print is pressed; the cut sheet exists only while this is set. */
   const [printedAt, setPrintedAt] = useState<string | null>(null);
+  /** Other jobs' unapplied nests on this material, oldest first. */
+  const [others, setOthers] = useState<OtherNest[]>([]);
+  /** When this nest's row was first made - decides which nests come ahead of it. */
+  const [myCreatedAt, setMyCreatedAt] = useState<string | null>(null);
+  /** Nests this plan leaned on that have been APPLIED since - their drops are real now. */
+  const [appliedRefs, setAppliedRefs] = useState<string[]>([]);
 
   const suggested = useMemo(() => depthCandidates(shape, size), [shape, size]);
+
+  /**
+   * Every other open job's nest on this material that has a plan but hasn't
+   * been applied. Their sticks are spoken for and their drops are coming.
+   */
+  const fetchOthers = useCallback(async (): Promise<OtherNest[]> => {
+    const { data } = await supabase
+      .from("job_cut_nests")
+      .select("id, created_at, optimized_at, result, jobs(job_number, status, cutting_nest_finalized_at)")
+      .eq("raw_material_id", rawMaterialId)
+      .neq("job_id", jobId)
+      .eq("enabled", true)
+      .is("applied_at", null)
+      .not("result", "is", null);
+    type JobBit = { job_number: string | number; status: string; cutting_nest_finalized_at: string | null };
+    type Row = {
+      id: string;
+      created_at: string;
+      optimized_at: string | null;
+      result: NestResult | null;
+      jobs: JobBit | JobBit[] | null;
+    };
+    const out: OtherNest[] = [];
+    for (const r of (data || []) as unknown as Row[]) {
+      const j = Array.isArray(r.jobs) ? r.jobs[0] : r.jobs;
+      if (!j || !OPEN_JOB_STATUSES.includes(j.status) || j.cutting_nest_finalized_at) continue;
+      if (!r.result || !Array.isArray(r.result.sticks) || !r.result.sticks.length) continue;
+      out.push({
+        id: r.id,
+        jobNumber: String(j.job_number),
+        createdAt: r.created_at,
+        optimizedAt: r.optimized_at,
+        result: r.result,
+      });
+    }
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [supabase, jobId, rawMaterialId]);
 
   const load = useCallback(async () => {
     // Referenced on purpose. reloadKey carries no information -- the parent
@@ -259,6 +316,24 @@ export default function CuttingNestOptimizer({
     setRows(loaded.length ? loaded : [blankRow()]);
 
     const nest = nestRes.data;
+
+    // Other jobs' planned nests, and which of the ones this plan leaned on
+    // have been applied since (so their drops are real inventory now).
+    const oth = await fetchOthers();
+    setOthers(oth);
+    setMyCreatedAt((nest?.created_at as string | undefined) ?? null);
+    const saved = (nest?.result as NestResult | null) || null;
+    const refs = new Set<string>();
+    for (const b of saved?.basedOn || []) refs.add(b.nestId);
+    for (const st of saved?.sticks || []) if (st.plannedFrom) refs.add(st.plannedFrom.nestId);
+    const missing = Array.from(refs).filter((id) => !oth.some((o) => o.id === id));
+    let applied: string[] = [];
+    if (missing.length) {
+      const { data: ap } = await supabase.from("job_cut_nests").select("id, applied_at").in("id", missing);
+      applied = (ap || []).filter((a) => a.applied_at).map((a) => a.id as string);
+    }
+    setAppliedRefs(applied);
+
     if (nest) {
       setNestId(nest.id as string);
       setSettings({
@@ -292,7 +367,7 @@ export default function CuttingNestOptimizer({
     }
     setDirty(false);
     setLoading(false);
-  }, [supabase, jobId, rawMaterialId, companyKerf, companyMinDrop, materialDepth, suggested, reloadKey]);
+  }, [supabase, jobId, rawMaterialId, companyKerf, companyMinDrop, materialDepth, suggested, reloadKey, fetchOthers]);
 
   useEffect(() => {
     load();
@@ -309,6 +384,60 @@ export default function CuttingNestOptimizer({
       window.removeEventListener("afterprint", done);
     };
   }, [printedAt]);
+
+  // ---- sharing stock with other jobs' planned nests ----
+  // The older nest always gets first claim. A nest with no row yet is newer
+  // than all of them.
+  const earlier = others.filter((o) => !myCreatedAt || o.createdAt < myCreatedAt);
+  const held = reservePlannedStock(
+    availableLengths,
+    earlier.map((o) => ({ nestId: o.id, jobNumber: o.jobNumber, result: o.result })),
+    trackDrops
+  );
+
+  /** Why this plan is out of date because of another job's nest, or null. */
+  function staleReason(): string | null {
+    if (!plan || !plan.basedOn || appliedAt) return null;
+    for (const b of plan.basedOn) {
+      const cur = earlier.find((o) => o.id === b.nestId);
+      if (cur) {
+        if (cur.optimizedAt !== b.optimizedAt) return "Job " + b.jobNumber + "'s nest was re-optimized";
+      } else if (
+        !appliedRefs.includes(b.nestId) &&
+        plan.sticks.some((st) => st.plannedFrom?.nestId === b.nestId)
+      ) {
+        return "Job " + b.jobNumber + "'s nest was removed or turned off, and this one uses its drop";
+      }
+    }
+    for (const o of earlier) {
+      if (!plan.basedOn.some((b) => b.nestId === o.id)) return "Job " + o.jobNumber + "'s nest now comes ahead of this one";
+    }
+    return null;
+  }
+  const staleMsg = staleReason();
+
+  /** Jobs whose drop this plan cuts from and that haven't been applied yet. */
+  const waitingOn =
+    plan && !appliedAt
+      ? Array.from(
+          new Set(
+            plan.sticks
+              .filter((st) => st.plannedFrom && !appliedRefs.includes(st.plannedFrom.nestId))
+              .map((st) => "Job " + st.plannedFrom!.jobNumber)
+          )
+        )
+      : [];
+
+  /** Later jobs that are counting on a drop from THIS nest. */
+  const dependents = nestId
+    ? Array.from(
+        new Set(
+          others
+            .filter((o) => o.result.sticks.some((st) => st.plannedFrom?.nestId === nestId))
+            .map((o) => "Job " + o.jobNumber)
+        )
+      )
+    : [];
 
   function patchRow(id: string, patch: Partial<CutRow>) {
     // Touching a line that came from a product template makes it YOURS: it
@@ -407,7 +536,7 @@ export default function CuttingNestOptimizer({
     return true;
   }
 
-  function buildInputs() {
+  function buildInputs(rack: { length: number; sticks: number }[], planned: PlannedDrop[]) {
     const parts: CutPartInput[] = usableRows().map((r) => ({
       id: r.id,
       label: r.mark.trim() || "Part",
@@ -421,7 +550,7 @@ export default function CuttingNestOptimizer({
       material: rawMaterialId,
     }));
     // getAvailableLengths gives FEET; the optimizer works in inches.
-    const stock: CutStockInput[] = availableLengths.map((l) => ({
+    const stock: CutStockInput[] = rack.map((l) => ({
       id: rawMaterialId + "-" + l.length,
       label: inches(l.length * 12),
       length: l.length * 12,
@@ -430,6 +559,19 @@ export default function CuttingNestOptimizer({
       costPerFoot,
       material: rawMaterialId,
     }));
+    // Drops other jobs' nests are going to leave - used just like stock on hand.
+    for (const p of planned) {
+      stock.push({
+        id: "planned-" + p.nestId + "-" + p.length,
+        label: inches(p.length) + " (Job " + p.jobNumber + " drop)",
+        length: p.length,
+        qty: p.qty,
+        height: parseLength(settings.depth) ?? 0,
+        costPerFoot,
+        material: rawMaterialId,
+        plannedFrom: { nestId: p.nestId, jobNumber: p.jobNumber },
+      });
+    }
     // Lengths that can be bought. The optimizer only plans on these once the
     // rack is used up, so whatever lands on them is what has to be ordered.
     for (const len of ORDER_CHOICES[orderChoice] || ORDER_CHOICES.auto) {
@@ -467,9 +609,20 @@ export default function CuttingNestOptimizer({
     setNote(null);
     try {
       if (dirty && !(await saveCutList())) return;
-      const result = optimizeNest(buildInputs());
+      // Read the other jobs' nests fresh - one may have changed in another tab.
+      const fresh = await fetchOthers();
+      setOthers(fresh);
+      const ahead = fresh.filter((o) => !myCreatedAt || o.createdAt < myCreatedAt);
+      const hold = reservePlannedStock(
+        availableLengths,
+        ahead.map((o) => ({ nestId: o.id, jobNumber: o.jobNumber, result: o.result })),
+        trackDrops
+      );
+      const result = optimizeNest(buildInputs(hold.rack, hold.planned));
+      result.basedOn = ahead.map((o) => ({ nestId: o.id, jobNumber: o.jobNumber, optimizedAt: o.optimizedAt }));
       setPlan(result);
       setAppliedAt(null);
+      setAppliedRefs([]);
 
       const row = {
         company_id: companyId,
@@ -490,8 +643,11 @@ export default function CuttingNestOptimizer({
       if (nestId) {
         await supabase.from("job_cut_nests").update(row).eq("id", nestId);
       } else {
-        const { data } = await supabase.from("job_cut_nests").insert(row).select("id").single();
-        if (data) setNestId(data.id as string);
+        const { data } = await supabase.from("job_cut_nests").insert(row).select("id, created_at").single();
+        if (data) {
+          setNestId(data.id as string);
+          setMyCreatedAt(data.created_at as string);
+        }
       }
     } finally {
       setBusy(false);
@@ -507,14 +663,33 @@ export default function CuttingNestOptimizer({
       );
       return;
     }
+    if (staleMsg) {
+      setError(staleMsg + " since this nest was made. Re-optimize, then Apply.");
+      return;
+    }
+    if (waitingOn.length) {
+      setError(
+        "This nest cuts from a drop that " + waitingOn.join(", ") + " hasn't cut yet. Apply " +
+          waitingOn.join(", ") + "'s nest first, then come back and Apply this one."
+      );
+      return;
+    }
     const ops = planToInventoryOps(plan);
     // The rack can change between Optimize and Apply (another job pulls from
     // it). Never pull a stick that isn't there - that is what drives a length
     // negative. Make them re-run the nest against what's really on hand.
-    const short = ops.pulls.filter((p) => {
-      const have = availableLengths.find((l) => Math.abs(l.length - p.lengthFeet) < 1e-6)?.sticks ?? 0;
-      return have < p.quantity;
+    // Each pull is snapped to the length inventory actually holds (within
+    // 1/32"), so a drop another job saved nets against the right rack line.
+    const TOL_FEET = 1 / 32 / 12;
+    const snapped = ops.pulls.map((p) => {
+      let best: { length: number; sticks: number } | null = null;
+      for (const l of availableLengths) {
+        const d = Math.abs(l.length - p.lengthFeet);
+        if (d <= TOL_FEET && (!best || d < Math.abs(best.length - p.lengthFeet))) best = l;
+      }
+      return { ...p, lengthFeet: best ? best.length : p.lengthFeet, have: best ? best.sticks : 0 };
     });
+    const short = snapped.filter((p) => p.have < p.quantity);
     if (short.length) {
       setError(
         "Stock has changed since this nest was made - not enough on hand at " +
@@ -535,7 +710,7 @@ export default function CuttingNestOptimizer({
     setBusy(true);
     setError(null);
     try {
-      for (const p of ops.pulls) {
+      for (const p of snapped) {
         await pullSticks({
           companyId,
           jobId,
@@ -779,17 +954,34 @@ export default function CuttingNestOptimizer({
 
         <div className="bg-gray-50 border border-gray-200 rounded-md p-3">
           <p className="text-sm font-medium text-gray-900 mb-2">Stock it can cut from</p>
-          {availableLengths.length === 0 ? (
+          {availableLengths.length === 0 && held.planned.length === 0 ? (
             <p className="text-sm text-gray-600">
               Nothing on hand for this material. Optimize will plan the whole list on sticks to order.
             </p>
           ) : (
             <table className="w-full text-sm">
               <tbody>
-                {availableLengths.map((l) => (
-                  <tr key={l.length} className="border-t border-gray-200 first:border-t-0">
-                    <td className="py-1 font-mono text-gray-900">{inches(l.length * 12)}</td>
-                    <td className="py-1 text-gray-600 text-right">{l.sticks} on hand</td>
+                {availableLengths.map((l) => {
+                  const free = held.rack.find((r) => Math.abs(r.length - l.length) < 1e-9)?.sticks ?? 0;
+                  const spoken = l.sticks - free;
+                  return (
+                    <tr key={l.length} className="border-t border-gray-200 first:border-t-0">
+                      <td className="py-1 font-mono text-gray-900">{inches(l.length * 12)}</td>
+                      <td className="py-1 text-gray-600 text-right">
+                        {free} free
+                        {spoken > 0 && (
+                          <span className="text-xs text-gray-500"> &middot; {spoken} held for other jobs&apos; nests</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {held.planned.map((p) => (
+                  <tr key={p.nestId + "-" + p.length} className="border-t border-gray-200 first:border-t-0">
+                    <td className="py-1 font-mono text-purple-800">{inches(p.length)}</td>
+                    <td className="py-1 text-purple-800 text-right">
+                      {p.qty} &middot; drop from Job {p.jobNumber} <span className="text-xs">(not cut yet)</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -829,6 +1021,16 @@ export default function CuttingNestOptimizer({
               {appliedAt ? (
                 <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                   Applied to inventory
+                </span>
+              ) : staleMsg ? (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
+                  title={staleMsg}>
+                  Re-optimize before applying
+                </span>
+              ) : waitingOn.length > 0 ? (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800"
+                  title="Apply that job's nest first">
+                  Waiting on {waitingOn.join(", ")}
                 </span>
               ) : needsOrder ? (
                 <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800"
@@ -870,6 +1072,27 @@ export default function CuttingNestOptimizer({
               <div className="text-xs text-gray-500">{s.sharedCuts} shared cuts</div>
             </div>
           </div>
+
+          {staleMsg && (
+            <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800">
+              {staleMsg} since this nest was made, so the stock it planned on may not be right any more.
+              Re-optimize this one before you print or apply it.
+            </div>
+          )}
+
+          {waitingOn.length > 0 && !staleMsg && (
+            <div className="px-3 py-2 bg-purple-50 border-b border-purple-200 text-sm text-purple-800">
+              Some sticks below are drops {waitingOn.join(", ")} will leave (tagged in purple). They don&apos;t
+              exist yet &mdash; cut and Apply {waitingOn.join(", ")} first, then Apply this one.
+            </div>
+          )}
+
+          {dependents.length > 0 && !appliedAt && (
+            <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 text-sm text-blue-800">
+              {dependents.join(", ")} {dependents.length === 1 ? "is" : "are"} planned on a drop from this nest.
+              If you re-optimize here, {dependents.length === 1 ? "that nest" : "those nests"} will need re-optimizing too.
+            </div>
+          )}
 
           {orderLines.length > 0 && (
             <div className="px-3 py-3 bg-red-50 border-b border-red-200 text-sm text-red-800">

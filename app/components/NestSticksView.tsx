@@ -66,6 +66,10 @@ export default function NestSticksView({
                 <span className="px-1.5 py-0.5 rounded border border-red-300 bg-red-100 text-xs font-semibold uppercase tracking-wide text-red-800">
                   To order
                 </span>
+              ) : st.plannedFrom ? (
+                <span className="px-1.5 py-0.5 rounded border border-purple-300 bg-purple-100 text-xs font-semibold text-purple-800">
+                  Drop from Job {st.plannedFrom.jobNumber}
+                </span>
               ) : printable ? (
                 <span className="text-xs text-gray-500">from the rack</span>
               ) : null}
