@@ -14,15 +14,23 @@ const SHAPES_MAP: Record<string, string> = {
   flat_bar: "Flat Bar",
 };
 
+// One-off items are either Material or Parts - that is all the Cost tab
+// needs ("material" -> Material bucket, anything else -> Parts bucket).
 const CUSTOM_CATEGORIES: { value: string; label: string }[] = [
   { value: "material", label: "Material" },
-  { value: "laser_part", label: "Laser part" },
-  { value: "powdercoat", label: "Powdercoat" },
-  { value: "hardware", label: "Hardware" },
+  { value: "parts", label: "Parts" },
 ];
 
+// Older one-offs were saved with finer categories; keep showing their names.
+const LEGACY_CUSTOM_CATEGORY_LABELS: Record<string, string> = {
+  laser_part: "Laser part",
+  powdercoat: "Powdercoat",
+  hardware: "Hardware",
+};
+
 function customCategoryLabel(value: string | null) {
-  return CUSTOM_CATEGORIES.find((c) => c.value === value)?.label || "Other";
+  if (!value) return "Other";
+  return CUSTOM_CATEGORIES.find((c) => c.value === value)?.label || LEGACY_CUSTOM_CATEGORY_LABELS[value] || "Other";
 }
 
 type PickListItem = {
