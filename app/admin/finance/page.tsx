@@ -134,7 +134,7 @@ const SCALARS: { key: keyof RateConfig; label: string; kind: "$" | "%" }[] = [
 
 type RateDraft = {
   crew: { name: string; rate: string; hours: string; shop: boolean }[];
-  debts: { name: string; amount: string }[];
+  debts: { name: string; amount: string; outsideQb: boolean }[];
   fields: Record<string, string>;
 };
 
@@ -146,7 +146,7 @@ function rateToDraft(r: RateConfig): RateDraft {
   }
   return {
     crew: r.crew.map((p) => ({ name: p.name, rate: String(p.rate), hours: String(p.hours), shop: p.shop })),
-    debts: r.debts.map((d) => ({ name: d.name, amount: d.amount.toLocaleString("en-US", { maximumFractionDigits: 2 }) })),
+    debts: r.debts.map((d) => ({ name: d.name, amount: d.amount.toLocaleString("en-US", { maximumFractionDigits: 2 }), outsideQb: !!d.outsideQb })),
     fields,
   };
 }
@@ -154,7 +154,7 @@ function rateToDraft(r: RateConfig): RateDraft {
 function draftToRate(d: RateDraft): RateConfig {
   const r = normaliseRate({});
   r.crew = d.crew.map((p) => ({ name: p.name.trim(), rate: parseNum(p.rate), hours: parseNum(p.hours), shop: p.shop }));
-  r.debts = d.debts.map((x) => ({ name: x.name.trim(), amount: parseNum(x.amount) }));
+  r.debts = d.debts.map((x) => (x.outsideQb ? { name: x.name.trim(), amount: parseNum(x.amount), outsideQb: true } : { name: x.name.trim(), amount: parseNum(x.amount) }));
   for (const s of SCALARS) {
     const v = parseNum(d.fields[s.key]);
     (r as unknown as Record<string, number>)[s.key] = s.kind === "%" ? v / 100 : v;
@@ -466,7 +466,9 @@ export default function FinancePage() {
       return;
     }
     const snap = j.snapshot as QbSnapshot;
-    const fill = monthFromReports(snap.pl, snap.cf, liveBudget);
+    // Loans ticked "paid outside QuickBooks" on the SAVED shop rate.
+    const outside = (rate?.debts || []).filter((d) => d.outsideQb && d.amount);
+    const fill = monthFromReports(snap.pl, snap.cf, liveBudget, outside);
     const next = { ...monthDraft };
     for (const [k, v] of Object.entries(fill.values)) {
       next[k as MonthField] = (v as number).toLocaleString("en-US", { maximumFractionDigits: 2 });
@@ -1005,6 +1007,10 @@ export default function FinancePage() {
                     <div key={i} className="flex gap-2 items-center">
                       <input aria-label="Loan name" value={d.name} onChange={(e) => set({ name: e.target.value })} className={inputCls} />
                       <input aria-label="Monthly payment" inputMode="decimal" value={d.amount} onChange={(e) => set({ amount: e.target.value })} className={inputCls + " max-w-[9rem]"} />
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 whitespace-nowrap cursor-pointer" title="Added to loan payments when a month is filled from QuickBooks">
+                        <input type="checkbox" checked={d.outsideQb} onChange={(e) => set({ outsideQb: e.target.checked })} className="h-4 w-4 rounded border-gray-300" />
+                        Paid outside QuickBooks
+                      </label>
                       <button
                         type="button"
                         onClick={() => setRateDraft({ ...rateDraft, debts: rateDraft.debts.filter((_, j) => j !== i) })}
@@ -1018,7 +1024,7 @@ export default function FinancePage() {
               </div>
               <button
                 type="button"
-                onClick={() => setRateDraft({ ...rateDraft, debts: [...rateDraft.debts, { name: "New loan", amount: "0" }] })}
+                onClick={() => setRateDraft({ ...rateDraft, debts: [...rateDraft.debts, { name: "New loan", amount: "0", outsideQb: false }] })}
                 className="mt-3 px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Add loan

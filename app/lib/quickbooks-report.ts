@@ -254,8 +254,15 @@ export type MonthFill = {
 };
 
 // The month form's boxes, from a P&L and cash flow for that month. Crew hours
-// are never filled - they are not in QuickBooks.
-export function monthFromReports(pl: QbReport, cf: QbReport, budget: BudgetConfig): MonthFill {
+// are never filled - they are not in QuickBooks. `outside` is the loans on the
+// Shop rate tab ticked "paid outside QuickBooks" (an SBA loan paid through its
+// servicer, say): their monthly payment is added to loan payments.
+export function monthFromReports(
+  pl: QbReport,
+  cf: QbReport,
+  budget: BudgetConfig,
+  outside: { name: string; amount: number }[] = []
+): MonthFill {
   const costs = costNodes(pl);
   const costTotal = COST_GROUPS.reduce((a, g) => a + groupTotal(pl, g), 0);
 
@@ -278,6 +285,9 @@ export function monthFromReports(pl: QbReport, cf: QbReport, budget: BudgetConfi
     else if (l.amount < 0) debt -= l.amount;
     else borrowing += l.amount;
   }
+  const outsideTotal = outside.reduce((a, d) => a + (Number.isFinite(d.amount) ? d.amount : 0), 0);
+  debt += outsideTotal;
+
   let equipment = 0;
   for (const l of leaves(cf.groups.InvestingActivities?.children || [])) {
     if (l.amount < 0) equipment -= l.amount;
@@ -285,7 +295,11 @@ export function monthFromReports(pl: QbReport, cf: QbReport, budget: BudgetConfi
 
   const round = (v: number) => Math.round(v * 100) / 100;
   const notes = [
-    "Loan payments only count what went through QuickBooks. Add anything paid outside it, like an SBA loan through its servicer.",
+    outside.length
+      ? "Loan payments include " +
+        outside.map((d) => d.name + " $" + d.amount.toLocaleString("en-US", { maximumFractionDigits: 2 })).join(", ") +
+        " paid outside QuickBooks (from the Shop rate tab). Change it here if a payment was different this month."
+      : "Loan payments only count what went through QuickBooks. On the Shop rate tab, tick any loan paid outside it (like an SBA loan) and it gets added automatically.",
     "A loan you both paid and drew on in the same month shows as the difference, on whichever side it landed.",
     "Crew hours are not in QuickBooks. Enter them from payroll.",
   ];

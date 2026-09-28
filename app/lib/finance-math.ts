@@ -13,7 +13,7 @@ export type CrewMember = {
   shop: boolean; // do their hours count as billable shop hours?
 };
 
-export type Debt = { name: string; amount: number };
+export type Debt = { name: string; amount: number; outsideQb?: boolean }; // outsideQb: paid outside QuickBooks, added to QuickBooks fills
 
 // The Shop rate tab. Stored as one jsonb blob in finance_settings.rate.
 // Percentages are stored as fractions: 0.0782 means 7.82%.
@@ -109,7 +109,11 @@ export function normaliseRate(raw: unknown): RateConfig {
       hours: n(p?.hours),
       shop: !!p?.shop,
     })),
-    debts: debts.map((d: Record<string, unknown>) => ({ name: String(d?.name ?? ""), amount: n(d?.amount) })),
+    debts: debts.map((d: Record<string, unknown>) => {
+      const out: Debt = { name: String(d?.name ?? ""), amount: n(d?.amount) };
+      if (d?.outsideQb === true) out.outsideQb = true;
+      return out;
+    }),
     taxPct: r.taxPct == null ? EMPTY_RATE.taxPct : n(r.taxPct),
     match: n(r.match),
     fees: n(r.fees),
