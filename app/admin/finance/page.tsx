@@ -20,6 +20,13 @@
 //     the person to check. NOTHING is saved until they press Save month, and
 //     the button is not offered on a month already marked final.
 // The account-name matching lives in app/lib/quickbooks-report.ts.
+//
+// TARGET CARD (FINANCE-TARGET-V1, 2026-09-28): revenue needed for a monthly
+// profit target. Erik's decisions: fixed costs come from the SAVED shop rate
+// (plan, not actuals); the target is profit kept AFTER his draw and loans;
+// one saved target, stored as rate.targetProfit (no schema change). It also
+// shows the margin before draws at that target, next to what the last 3 final
+// months actually achieved. Math is targetPlan() in finance-math.ts.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -45,9 +52,11 @@ import {
   normaliseRate,
   parseNum,
   pct,
+  steelShare,
   sumMonths,
+  targetPlan,
 } from "../../lib/finance-math";
-import { budgetLine, monthFromReports, unmatchedAccounts, type QbSnapshot } from "../../lib/quickbooks-report";
+import { budgetLine, monthFromReports, monthShare, unmatchedAccounts, type QbSnapshot } from "../../lib/quickbooks-report";
 
 type Tab = "months" | "rate" | "budget" | "how";
 type Access = "checking" | "yes" | "no" | "off" | "missing";
@@ -285,6 +294,8 @@ export default function FinancePage() {
   const [monthMsg, setMonthMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [rateMsg, setRateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [targetText, setTargetText] = useState("0");
+  const [targetMsg, setTargetMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [qb, setQb] = useState<QbStatus | null>(null);
   const [qbSnap, setQbSnap] = useState<QbSnapshot | null>(null);
@@ -346,6 +357,7 @@ export default function FinancePage() {
     const r = normaliseRate(setRes.data?.rate);
     setRate(r);
     setRateDraft(rateToDraft(r));
+    setTargetText(r.targetProfit.toLocaleString("en-US", { maximumFractionDigits: 2 }));
     setBudgetDraft(budgetToDraft(normaliseBudget(setRes.data?.budget)));
     const map: Record<string, MonthRow> = {};
     for (const row of (monRes.data || []) as unknown as Record<string, unknown>[]) {
@@ -513,7 +525,8 @@ export default function FinancePage() {
 
   async function saveRate() {
     if (!companyId || !rateDraft) return;
-    const r = draftToRate(rateDraft);
+    // The shop rate form doesn't hold the target, so carry the saved one over.
+    const r = { ...draftToRate(rateDraft), targetProfit: rate?.targetProfit ?? 0 };
     setBusy(true);
     setRateMsg(null);
     const { data, error } = await supabase
@@ -528,6 +541,27 @@ export default function FinancePage() {
     setRate(r);
     setRateDraft(rateToDraft(r));
     setRateMsg({ ok: true, text: "Saved. Fully loaded rate is " + money(burden(r).full, 2) + " / hr." });
+  }
+
+  // The Target card's Save: the SAVED shop rate with the new target. Unsaved
+  // edits on the Shop rate tab are left alone (they stay a draft).
+  async function saveTarget() {
+    if (!companyId || !rate) return;
+    const r = { ...rate, targetProfit: parseNum(targetText) };
+    setBusy(true);
+    setTargetMsg(null);
+    const { data, error } = await supabase
+      .from("finance_settings")
+      .upsert({ company_id: companyId, rate: r, updated_at: new Date().toISOString(), updated_by: userId }, { onConflict: "company_id" })
+      .select("company_id");
+    setBusy(false);
+    if (error || !data || data.length === 0) {
+      setTargetMsg({ ok: false, text: "Didn't save" + (error ? ": " + error.message : " - the database refused it.") });
+      return;
+    }
+    setRate(r);
+    setTargetText(r.targetProfit.toLocaleString("en-US", { maximumFractionDigits: 2 }));
+    setTargetMsg({ ok: true, text: "Target saved." });
   }
 
   // "Fill from actuals": the Shop rate's cost boxes from the average of the
@@ -748,6 +782,126 @@ export default function FinancePage() {
         </div>
         <RateRuler marks={marks} band={band} />
       </section>
+
+      {rate && (() => {
+        const steel = steelShare(finalIds.map((id) => months[id]));
+        const target = parseNum(targetText);
+        const plan = targetPlan(rate, steel.pct, target);
+        const be = targetPlan(rate, steel.pct, 0);
+        // Over = the target needs more per shop hour than the quoted rate.
+        const over = Number.isFinite(plan.rateNeeded) && rate.quoted > 0 && plan.rateNeeded > rate.quoted + 0.005;
+        const snapNow = qbSnap && qbSnap.start.slice(0, 7) === monthId(today) ? qbSnap : null;
+        const income = snapNow ? snapNow.pl.groups["Income"]?.amount ?? 0 : 0;
+        const share = snapNow ? monthShare(snapNow.end) : 0;
+        const due = plan.revenue * share;
+        const onPace = income >= due;
+        const endDay = snapNow ? new Date(snapNow.end + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+        const saved = Math.abs(target - rate.targetProfit) < 0.005;
+        return (
+          <section className="bg-white border border-gray-200 rounded-lg p-5 mb-5" aria-label="Target">
+            <div className="flex flex-wrap items-end gap-3 mb-4">
+              <h2 className="text-xl font-bold text-gray-900 mr-4">Target</h2>
+              <div>
+                <label htmlFor="target-profit" className="block text-sm font-medium text-gray-700 mb-1">
+                  Profit to keep each month, after your draw and loans
+                </label>
+                <input
+                  id="target-profit"
+                  inputMode="decimal"
+                  value={targetText}
+                  onChange={(e) => setTargetText(e.target.value)}
+                  className={inputCls + " max-w-[10rem]"}
+                />
+              </div>
+              <button
+                onClick={saveTarget}
+                disabled={busy || saved}
+                className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                Save target
+              </button>
+              <Msg m={targetMsg} />
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-4 mb-4">
+              <div>
+                <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(plan.revenue)}</div>
+                <div className="text-sm text-gray-600">Revenue needed / month</div>
+              </div>
+              <div>
+                <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(plan.afterSteel)}</div>
+                <div className="text-sm text-gray-600">Revenue after steel needed</div>
+              </div>
+              <div>
+                <div className={"text-3xl font-semibold tabular-nums " + (over ? "text-red-600" : "text-gray-900")}>
+                  {money(plan.rateNeeded, 2)}
+                  <span className="text-lg font-normal text-gray-500"> /hr</span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  To recover per shop hour, after steel ({hrs(plan.capacity)} hrs / month)
+                  {last3Calc && Number.isFinite(last3Calc.rec) && (
+                    <span className="block">
+                      Last 3 final months recovered{" "}
+                      <span className={last3Calc.rec >= plan.rateNeeded ? "text-green-700" : "text-red-600"}>{money(last3Calc.rec, 2)}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(be.revenue)}</div>
+                <div className="text-sm text-gray-600">Break-even revenue (draw paid, nothing kept)</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-[auto_auto] sm:grid-cols-[auto_auto_auto] justify-start gap-x-8 gap-y-1 text-sm tabular-nums text-gray-800 border-t border-gray-200 pt-3">
+              <div>Margin after everything, at target</div>
+              <div className="text-right">{pct(plan.marginAfter)}</div>
+              <div className="text-gray-500 hidden sm:block">{money(target)} kept</div>
+              <div>Margin before draws, at target</div>
+              <div className="text-right">{pct(plan.marginPre)}</div>
+              <div className="text-gray-500 hidden sm:block">{money(plan.preDraw)} with your {money(rate.drawTarget)} draw</div>
+              <div>Margin before draws, achieved (last 3 final months)</div>
+              <div className={"text-right " + (last3Calc && Number.isFinite(plan.marginPre) ? (last3Calc.prePct >= plan.marginPre ? "text-green-700" : "text-red-600") : "")}>
+                {pct(last3Calc?.prePct)}
+              </div>
+              <div className="text-gray-500 hidden sm:block">{last3Calc ? money(last3Calc.pre / last3.length) + " a month on average" : "no final months yet"}</div>
+            </div>
+
+            {snapNow ? (
+              <p className={"mt-3 text-sm " + (onPace ? "text-green-700" : "text-red-600")}>
+                This month so far: {money(income)} of the {money(due)} needed by {endDay} to be on pace for {money(plan.revenue)}
+                {share > 0 && " (heading for " + money(income / share) + ")"}. From QuickBooks, pulled {new Date(snapNow.at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.
+                {qb?.connected && (
+                  <button onClick={pullMonthToDate} disabled={qbBusy} className="ml-3 text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">
+                    {qbBusy ? "Pulling..." : "Pull again"}
+                  </button>
+                )}
+              </p>
+            ) : qb?.connected ? (
+              <p className="mt-3 text-sm text-gray-600">
+                No QuickBooks pull for this month yet.
+                <button onClick={pullMonthToDate} disabled={qbBusy} className="ml-2 text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">
+                  {qbBusy ? "Pulling..." : "Pull month to date"}
+                </button>{" "}
+                to see this month&apos;s pace.
+              </p>
+            ) : null}
+
+            {over && (
+              <p className="mt-2 text-sm text-red-600">
+                That is more than your quoted {money(rate.quoted)} / hr. Even with every shop hour sold at the quoted rate, the most a month keeps is {money(plan.maxProfit)}.
+                Raise the rate or add hours.
+              </p>
+            )}
+            <p className="mt-2 text-xs text-gray-500">
+              Fixed costs {money(plan.fixed)} / month from the saved Shop rate: payroll, overhead, shop supplies, loans and your draw target. Steel runs {pct(steel.pct)} of
+              revenue across {steel.count} final month{steel.count === 1 ? "" : "s"}. Revenue needed = (fixed costs + target) / (1 - steel share). Per shop hour = revenue after
+              steel / the crew&apos;s shop hours from the Shop rate, the same measure as Recovered / hr in the tracker. At {money(rate.quoted)} / hr that is{" "}
+              {hrs(plan.hours)} hours to sell; fully booked, the most a month keeps is {money(plan.maxProfit)}.
+            </p>
+          </section>
+        );
+      })()}
 
       <nav className="flex gap-1 border-b-2 border-gray-800 mb-4 overflow-x-auto" role="tablist">
         {tabs.map((t) => (
@@ -1374,6 +1528,7 @@ export default function FinancePage() {
             ["Profit after everything", "The same, minus your draws too. New borrowing is left out, since borrowed money isn't profit. Margin is that profit as a share of revenue."],
             ["Draw it supports", "Operating profit, less the tax reserve, loan payments and the equipment fund from the Shop rate tab. Your draw shows red when it was more than that."],
             ["Fill from QuickBooks", "With QuickBooks connected (Budget tab), the month form has a Fill from QuickBooks button. It reads that month's Profit and Loss and Statement of Cash Flows and fills every box except crew hours, using the same rules as above and the account names on the Budget tab. Check the numbers, add anything paid outside QuickBooks and the crew hours, then Save month. It is not offered on a month already marked final."],
+            ["Target", "The card above the tabs. Type the profit you want to keep each month after your draw and loans, and it shows the revenue that takes, the revenue after steel, and what each shop hour has to recover after steel (compare it with Recovered / hr in the tracker). Fixed costs come from the saved Shop rate, so update that first. The steel share is worked out from your final months. Shop supplies are already in the fixed costs, so they are not taken off again. The margins show what the target means as a share of sales, before and after your draw, next to what the last 3 final months achieved before draws."],
             ["Month is final", "Tick it once the numbers are complete. The banner at the top checks for it, and only final months count toward the recovered rate."],
           ].map(([t, d]) => (
             <div key={t}>

@@ -31,6 +31,7 @@ export type RateConfig = {
   quoted: number;
   taxReserve: number;
   equipFund: number;
+  targetProfit: number; // the Target card: profit to keep each month AFTER draw + loans
 };
 
 export type BudgetCategory = {
@@ -89,6 +90,7 @@ export const EMPTY_RATE: RateConfig = {
   quoted: 0,
   taxReserve: 0.2,
   equipFund: 0,
+  targetProfit: 0,
 };
 
 const n = (v: unknown) => {
@@ -125,6 +127,7 @@ export function normaliseRate(raw: unknown): RateConfig {
     quoted: n(r.quoted),
     taxReserve: r.taxReserve == null ? EMPTY_RATE.taxReserve : n(r.taxReserve),
     equipFund: n(r.equipFund),
+    targetProfit: n(r.targetProfit),
   };
 }
 
@@ -228,6 +231,57 @@ export function calcMonth(m: Totals, rate: RateConfig | null): MonthCalc {
     profit,
     pct: m.revenue ? profit / m.revenue : NaN,
     supports,
+  };
+}
+
+// ---- the Target card (FINANCE-TARGET-V1, 2026-09-28) --------------------------
+// Revenue needed for a profit target:
+//   revenue = (fixed monthly costs + target profit) / (1 - steel share)
+// Fixed costs are the SAVED shop rate's monthly total: payroll all-in,
+// overhead, shop supplies, loan payments and the draw target. Shop supplies are
+// already in there, so they are NOT taken off as a share of sales as well -
+// that would count them twice. The target is what is left in the business
+// after the draw and loans, so a target of 0 is break-even with the draw paid.
+
+// Steel (materials) as a share of revenue across the given months.
+export function steelShare(list: MonthRow[]): { pct: number; count: number } {
+  const rev = list.reduce((a, m) => a + m.revenue, 0);
+  const mat = list.reduce((a, m) => a + m.materials, 0);
+  return { pct: rev > 0 ? mat / rev : NaN, count: list.length };
+}
+
+export type TargetPlan = {
+  fixed: number; // everything out that isn't steel, per month
+  revenue: number; // revenue needed
+  afterSteel: number; // revenue after steel needed (= fixed + target)
+  hours: number; // shop hours to sell at the quoted rate
+  capacity: number; // shop hours the crew actually works in a month
+  maxProfit: number; // kept if every shop hour is sold at the quoted rate
+  rateNeeded: number; // $/hr needed to hit the target on capacity alone
+  marginAfter: number; // target / revenue: margin after draw, loans, everything
+  preDraw: number; // profit before the draw at the target (target + draw target)
+  marginPre: number; // preDraw / revenue - same basis as the tracker's "Margin before draws"
+};
+
+export function targetPlan(c: RateConfig, steelPct: number, target: number): TargetPlan {
+  const b = burden(c);
+  const fixed = b.monthlyTotal;
+  const afterSteel = fixed + target;
+  const keep = 1 - steelPct;
+  const cap = b.hours || NaN;
+  const revenue = keep > 0 ? afterSteel / keep : NaN;
+  const preDraw = target + c.drawTarget;
+  return {
+    fixed,
+    revenue,
+    afterSteel,
+    hours: c.quoted ? afterSteel / c.quoted : NaN,
+    capacity: b.hours,
+    maxProfit: c.quoted * cap - fixed,
+    rateNeeded: afterSteel / cap,
+    marginAfter: revenue ? target / revenue : NaN,
+    preDraw,
+    marginPre: revenue ? preDraw / revenue : NaN,
   };
 }
 
