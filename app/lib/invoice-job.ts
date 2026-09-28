@@ -22,7 +22,16 @@ export type InvoiceableJob = {
   completed_at: string | null;
   notes: string | null;
   customers: { name: string } | null;
+  is_build_order?: boolean | null; // saved on the archive row so Finances can leave build orders out of COGS
 };
+
+// Today in the shop's own time zone (the browser's), as 'YYYY-MM-DD'.
+// toISOString() is UTC, which after 8pm Eastern is already tomorrow - and on
+// the last day of a month that put a job in the wrong month on Finances.
+function localDate(): string {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
 
 export async function markJobInvoiced(job: InvoiceableJob): Promise<void> {
   const supabase = createClient();
@@ -47,7 +56,8 @@ export async function markJobInvoiced(job: InvoiceableJob): Promise<void> {
       customer_name: job.customers?.name || null,
       customer_po: job.customer_po,
       completed_on: job.completed_at ? job.completed_at.slice(0, 10) : null,
-      invoiced_on: new Date().toISOString().slice(0, 10),
+      invoiced_on: localDate(),
+      is_build_order: !!job.is_build_order, // SW-COGS-V1 (sw-cogs.sql adds the column)
       labor_cost: report.laborCost,
       material_cost: report.materialActualCost,
       parts_cost: report.partsActualCost,
@@ -124,7 +134,7 @@ export async function markJobInvoiced(job: InvoiceableJob): Promise<void> {
   // stamp them with the job number and task names so they can still be
   // labeled after the job row is deleted (job_id / job_task_id null out
   // automatically when the job goes).
-  const invoicedOnStr = new Date().toISOString().slice(0, 10);
+  const invoicedOnStr = localDate();
   await supabase
     .from("time_entries")
     .update({ archived_job_number: job.job_number, invoiced_on: invoicedOnStr })
@@ -170,7 +180,7 @@ export async function markJobInvoiced(job: InvoiceableJob): Promise<void> {
         quantity: recipeQty,
         unit_price: customLine?.unit_price ?? null,
         job_notes: job.notes,
-        invoiced_on: new Date().toISOString().slice(0, 10),
+        invoiced_on: localDate(),
       })
       .select("id")
       .single();

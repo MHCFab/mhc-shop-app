@@ -27,6 +27,16 @@
 // one saved target, stored as rate.targetProfit (no schema change). It also
 // shows the margin before draws at that target, next to what the last 3 final
 // months actually achieved. Math is targetPlan() in finance-math.ts.
+//
+// SW COGS (SW-COGS-V1, 2026-09-28): ShopWorks' own cost of goods sold for a
+// month = every job marked invoiced that month (completed_jobs_archive), its
+// frozen actual cost minus labor: material, parts, one-off items, fabricated
+// units. Build orders are left out (is_build_order, sw-cogs.sql) - their cost
+// counts when the units go out on a customer job. Erik's call: ALL the month
+// math uses SW COGS (it is what was actually sold; QuickBooks COGS includes
+// steel bought for stock and bills dated a month late). QB COGS is still
+// stored and shown beside it. rate.swCogsFrom picks the first month that uses
+// SW ("auto" = first month with any ShopWorks data); earlier months use QB.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -103,7 +113,7 @@ async function postJson(url: string, body?: unknown) {
 
 const MONTH_INPUTS: { key: MonthField; label: string; hint?: string }[] = [
   { key: "revenue", label: "Revenue" },
-  { key: "materials", label: "Materials (steel COGS)" },
+  { key: "materials", label: "QB COGS (materials)" },
   { key: "supplies", label: "Shop supplies" },
   { key: "payroll", label: "Payroll all-in", hint: "Wages + taxes + retirement + fees" },
   { key: "overhead", label: "Other overhead" },
@@ -295,6 +305,9 @@ export default function FinancePage() {
   const [rateMsg, setRateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [targetText, setTargetText] = useState("0");
+  // ShopWorks COGS by 'YYYY-MM' (see SW COGS above). null = not loaded / failed.
+  const [swCogs, setSwCogs] = useState<Record<string, { cost: number; jobs: number }> | null>(null);
+  const [swError, setSwError] = useState<string | null>(null);
   const [targetMsg, setTargetMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [qb, setQb] = useState<QbStatus | null>(null);
@@ -365,6 +378,26 @@ export default function FinancePage() {
       map[m.month] = m;
     }
     setMonths(map);
+
+    // ShopWorks COGS: the frozen cost of every job marked invoiced, less labor.
+    const arch = await supabase
+      .from("completed_jobs_archive")
+      .select("invoiced_on, total_actual, labor_cost, is_build_order")
+      .eq("company_id", cid);
+    if (arch.error) {
+      setSwError(arch.error.message);
+    } else {
+      const byMonth: Record<string, { cost: number; jobs: number }> = {};
+      for (const a of (arch.data || []) as unknown as { invoiced_on: string | null; total_actual: number | null; labor_cost: number | null; is_build_order: boolean | null }[]) {
+        if (!a.invoiced_on || a.is_build_order) continue;
+        const id = String(a.invoiced_on).slice(0, 7);
+        const cost = Number(a.total_actual || 0) - Number(a.labor_cost || 0);
+        const b = (byMonth[id] = byMonth[id] || { cost: 0, jobs: 0 });
+        b.cost += Number.isFinite(cost) ? cost : 0;
+        b.jobs += 1;
+      }
+      setSwCogs(byMonth);
+    }
     setAccess("yes");
 
     // QuickBooks: the last month-to-date pull, then whether we are connected.
@@ -407,7 +440,18 @@ export default function FinancePage() {
 
   const ids = useMemo(() => Object.keys(months).sort(), [months]);
   const finalIds = ids.filter((id) => months[id].is_final);
-  const last3 = finalIds.slice(-3).map((id) => months[id]);
+
+  // Which months use ShopWorks COGS, and each month with its COGS swapped in.
+  // months[] keeps the QuickBooks figure in .materials; eff[] is what every
+  // calculation on this page uses.
+  const swIds = swCogs ? Object.keys(swCogs).sort() : [];
+  const swSetting = rate?.swCogsFrom ?? "auto";
+  const swFrom = !swCogs ? "" : swSetting === "auto" ? swIds[0] || "" : swSetting;
+  const usesSw = (id: string) => !!swFrom && id >= swFrom;
+  const swOf = (id: string) => swCogs?.[id]?.cost ?? 0;
+  const eff: Record<string, MonthRow> = {};
+  for (const id of ids) eff[id] = usesSw(id) ? { ...months[id], materials: swOf(id) } : months[id];
+  const last3 = finalIds.slice(-3).map((id) => eff[id]);
   const last3Calc = last3.length ? calcMonth(sumMonths(last3), rate) : null;
 
   const prevId = monthId(new Date(today.getFullYear(), today.getMonth() - 1, 1));
@@ -526,7 +570,7 @@ export default function FinancePage() {
   async function saveRate() {
     if (!companyId || !rateDraft) return;
     // The shop rate form doesn't hold the target, so carry the saved one over.
-    const r = { ...draftToRate(rateDraft), targetProfit: rate?.targetProfit ?? 0 };
+    const r = { ...draftToRate(rateDraft), targetProfit: rate?.targetProfit ?? 0, swCogsFrom: rate?.swCogsFrom ?? "auto" };
     setBusy(true);
     setRateMsg(null);
     const { data, error } = await supabase
@@ -562,6 +606,23 @@ export default function FinancePage() {
     setRate(r);
     setTargetText(r.targetProfit.toLocaleString("en-US", { maximumFractionDigits: 2 }));
     setTargetMsg({ ok: true, text: "Target saved." });
+  }
+
+  // "Use ShopWorks COGS from" - saved straight away, like the target.
+  async function saveSwFrom(value: string) {
+    if (!companyId || !rate) return;
+    const r = { ...rate, swCogsFrom: value };
+    setBusy(true);
+    const { data, error } = await supabase
+      .from("finance_settings")
+      .upsert({ company_id: companyId, rate: r, updated_at: new Date().toISOString(), updated_by: userId }, { onConflict: "company_id" })
+      .select("company_id");
+    setBusy(false);
+    if (error || !data || data.length === 0) {
+      setMonthMsg({ ok: false, text: "Didn't save" + (error ? ": " + error.message : " - the database refused it.") });
+      return;
+    }
+    setRate(r);
   }
 
   // "Fill from actuals": the Shop rate's cost boxes from the average of the
@@ -643,19 +704,20 @@ export default function FinancePage() {
 
   function downloadCsv() {
     const head = [
-      "Month", "Revenue", "Materials", "Shop supplies", "Payroll all-in", "Other overhead", "Loan payments",
-      "Owner draws", "Equipment buys", "New borrowing", "Crew hours", "Final", "Revenue after steel",
-      "Out not materials", "Cost per hr", "Recovered per hr", "Margin per hr", "Profit before draws",
+      "Month", "Revenue", "QB COGS", "SW COGS", "COGS used", "Shop supplies", "Payroll all-in", "Other overhead", "Loan payments",
+      "Owner draws", "Equipment buys", "New borrowing", "Crew hours", "Final", "Revenue after COGS",
+      "Out not COGS", "Cost per hr", "Recovered per hr", "Margin per hr", "Profit before draws",
       "Margin before draws", "Profit after everything", "Margin after", "Draw it supports",
     ];
     const num = (v: number) => (Number.isFinite(v) ? String(Math.round(v * 100) / 100) : "");
     const lines = [head.join(",")];
     for (const id of ids) {
       const m = months[id];
-      const c = calcMonth(m, rate);
+      const c = calcMonth(eff[id], rate);
       lines.push(
         [
-          monthLabel(id), ...MONTH_FIELDS.map((f) => num(m[f])), m.is_final ? "Y" : "N",
+          monthLabel(id), num(m.revenue), num(m.materials), swCogs ? num(swOf(id)) : "", usesSw(id) ? "SW" : "QB",
+          ...MONTH_FIELDS.filter((f) => f !== "revenue" && f !== "materials").map((f) => num(m[f])), m.is_final ? "Y" : "N",
           num(c.after), num(c.out), num(c.cost), num(c.rec), num(c.margin), num(c.pre), num(c.prePct),
           num(c.profit), num(c.pct), num(c.supports),
         ].join(",")
@@ -770,7 +832,7 @@ export default function FinancePage() {
               {money(last3Calc?.rec)}
               <span className="text-lg font-normal text-gray-500"> /hr</span>
             </div>
-            <div className="text-sm text-gray-600">Recovered after steel, last 3 final months</div>
+            <div className="text-sm text-gray-600">Recovered after COGS, last 3 final months</div>
           </div>
           <div>
             <div className="text-5xl font-semibold tabular-nums text-gray-900">
@@ -784,7 +846,7 @@ export default function FinancePage() {
       </section>
 
       {rate && (() => {
-        const steel = steelShare(finalIds.map((id) => months[id]));
+        const steel = steelShare(finalIds.map((id) => eff[id]));
         const target = parseNum(targetText);
         const plan = targetPlan(rate, steel.pct, target);
         const be = targetPlan(rate, steel.pct, 0);
@@ -830,7 +892,7 @@ export default function FinancePage() {
               </div>
               <div>
                 <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(plan.afterSteel)}</div>
-                <div className="text-sm text-gray-600">Revenue after steel needed</div>
+                <div className="text-sm text-gray-600">Revenue after COGS needed</div>
               </div>
               <div>
                 <div className={"text-3xl font-semibold tabular-nums " + (over ? "text-red-600" : "text-gray-900")}>
@@ -838,7 +900,7 @@ export default function FinancePage() {
                   <span className="text-lg font-normal text-gray-500"> /hr</span>
                 </div>
                 <div className="text-sm text-gray-600">
-                  To recover per shop hour, after steel ({hrs(plan.capacity)} hrs / month)
+                  To recover per shop hour, after COGS ({hrs(plan.capacity)} hrs / month)
                   {last3Calc && Number.isFinite(last3Calc.rec) && (
                     <span className="block">
                       Last 3 final months recovered{" "}
@@ -894,9 +956,9 @@ export default function FinancePage() {
               </p>
             )}
             <p className="mt-2 text-xs text-gray-500">
-              Fixed costs {money(plan.fixed)} / month from the saved Shop rate: payroll, overhead, shop supplies, loans and your draw target. Steel runs {pct(steel.pct)} of
-              revenue across {steel.count} final month{steel.count === 1 ? "" : "s"}. Revenue needed = (fixed costs + target) / (1 - steel share). Per shop hour = revenue after
-              steel / the crew&apos;s shop hours from the Shop rate, the same measure as Recovered / hr in the tracker. At {money(rate.quoted)} / hr that is{" "}
+              Fixed costs {money(plan.fixed)} / month from the saved Shop rate: payroll, overhead, shop supplies, loans and your draw target. COGS runs {pct(steel.pct)} of
+              revenue across {steel.count} final month{steel.count === 1 ? "" : "s"}{swFrom ? " (ShopWorks COGS from " + monthLabel(swFrom) + ")" : ""}. Revenue needed = (fixed costs + target) / (1 - COGS share). Per shop hour = revenue after
+              COGS / the crew&apos;s shop hours from the Shop rate, the same measure as Recovered / hr in the tracker. At {money(rate.quoted)} / hr that is{" "}
               {hrs(plan.hours)} hours to sell; fully booked, the most a month keeps is {money(plan.maxProfit)}.
             </p>
           </section>
@@ -929,9 +991,10 @@ export default function FinancePage() {
                 <tr className="text-gray-600 text-right align-bottom">
                   <th className="text-left px-3 py-2 font-semibold">Month</th>
                   <th className="px-3 py-2 font-semibold">Revenue</th>
-                  <th className="px-3 py-2 font-semibold">Steel</th>
-                  <th className="px-3 py-2 font-semibold">Revenue<br />after steel</th>
-                  <th className="px-3 py-2 font-semibold">Out, not<br />materials</th>
+                  <th className="px-3 py-2 font-semibold">QB<br />COGS</th>
+                  <th className="px-3 py-2 font-semibold">SW<br />COGS</th>
+                  <th className="px-3 py-2 font-semibold">Revenue<br />after COGS</th>
+                  <th className="px-3 py-2 font-semibold">Out, not<br />COGS</th>
                   <th className="px-3 py-2 font-semibold">Crew<br />hours</th>
                   <th className="px-3 py-2 font-semibold">Cost<br />/ hr</th>
                   <th className="px-3 py-2 font-semibold">Recovered<br />/ hr</th>
@@ -947,14 +1010,15 @@ export default function FinancePage() {
               <tbody className="tabular-nums">
                 {ids.length === 0 && (
                   <tr>
-                    <td colSpan={15} className="px-3 py-6 text-gray-600">
+                    <td colSpan={16} className="px-3 py-6 text-gray-600">
                       No months yet. Use Add next month to enter the first one.
                     </td>
                   </tr>
                 )}
                 {ids.map((id) => {
                   const m = months[id];
-                  const c = calcMonth(m, rate);
+                  const c = calcMonth(eff[id], rate);
+                  const sw = usesSw(id);
                   return (
                     <tr
                       key={id}
@@ -970,7 +1034,10 @@ export default function FinancePage() {
                         {!m.is_final && <span className="ml-2 px-1.5 border border-yellow-400 text-xs text-gray-800 rounded">open</span>}
                       </td>
                       <td className="px-3 py-2">{money(m.revenue)}</td>
-                      <td className="px-3 py-2">{money(m.materials)}</td>
+                      <td className={"px-3 py-2 " + (sw ? "text-gray-400" : "")}>{money(m.materials)}</td>
+                      <td className={"px-3 py-2 " + (sw ? "" : "text-gray-400")} title={swCogs?.[id] ? swCogs[id].jobs + " job" + (swCogs[id].jobs === 1 ? "" : "s") + " marked invoiced" : "No jobs marked invoiced"}>
+                        {swCogs ? money(swOf(id)) : "-"}
+                      </td>
                       <td className="px-3 py-2">{money(c.after)}</td>
                       <td className="px-3 py-2">{money(c.out)}</td>
                       <td className="px-3 py-2">{hrs(c.h)}</td>
@@ -987,18 +1054,21 @@ export default function FinancePage() {
                   );
                 })}
                 {[
-                  { name: "All final months", list: finalIds.map((id) => months[id]) },
-                  { name: "Last 3 final", list: last3 },
+                  { name: "All final months", ids: finalIds },
+                  { name: "Last 3 final", ids: finalIds.slice(-3) },
                 ]
-                  .filter((s) => s.list.length)
+                  .filter((s) => s.ids.length)
                   .map((s) => {
-                    const t = sumMonths(s.list);
+                    const t = sumMonths(s.ids.map((id) => eff[id]));
+                    const qbTotal = s.ids.reduce((a, id) => a + months[id].materials, 0);
+                    const swTotal = s.ids.reduce((a, id) => a + swOf(id), 0);
                     const c = calcMonth(t, rate);
                     return (
                       <tr key={s.name} className="bg-gray-100 font-semibold text-right border-b border-gray-200">
                         <td className="text-left px-3 py-2">{s.name}</td>
                         <td className="px-3 py-2">{money(t.revenue)}</td>
-                        <td className="px-3 py-2">{money(t.materials)}</td>
+                        <td className="px-3 py-2">{money(qbTotal)}</td>
+                        <td className="px-3 py-2">{swCogs ? money(swTotal) : "-"}</td>
                         <td className="px-3 py-2">{money(c.after)}</td>
                         <td className="px-3 py-2">{money(c.out)}</td>
                         <td className="px-3 py-2">{hrs(c.h)}</td>
@@ -1027,7 +1097,31 @@ export default function FinancePage() {
                 Download as spreadsheet (CSV)
               </button>
             )}
+            {swCogs && rate && (
+              <label className="flex items-center gap-2 text-sm text-gray-700 ml-auto">
+                Use ShopWorks COGS from
+                <select
+                  value={swSetting}
+                  disabled={busy}
+                  onChange={(e) => saveSwFrom(e.target.value)}
+                  className="px-2 py-1.5 border border-gray-300 rounded-md text-gray-900"
+                >
+                  <option value="auto">First month with jobs{swIds[0] ? " (" + monthLabel(swIds[0]) + ")" : ""}</option>
+                  {ids.map((id) => (
+                    <option key={id} value={id}>
+                      {monthLabel(id)}
+                    </option>
+                  ))}
+                  <option value="">Never - use QuickBooks</option>
+                </select>
+              </label>
+            )}
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            SW COGS is what ShopWorks recorded on the jobs marked invoiced that month: material, parts, one-off items and fabricated units, everything but labor
+            (build orders count when their units go out on a job). The greyed COGS column is the one not being used. Every figure after it uses the other.
+            {swError && <span className="text-red-600"> ShopWorks COGS couldn&apos;t load ({swError}), so QuickBooks COGS is used everywhere.</span>}
+          </p>
 
           {editing && monthDraft && (
             <form onSubmit={saveMonth} autoComplete="off" className="bg-white border border-gray-200 rounded-lg p-5 mt-5">
@@ -1050,6 +1144,12 @@ export default function FinancePage() {
                       className={inputCls}
                     />
                     {f.hint && <p className="text-xs text-gray-500 mt-1">{f.hint}</p>}
+                    {f.key === "materials" && swCogs && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        ShopWorks: {money(swOf(editing))} from {swCogs[editing]?.jobs ?? 0} job{swCogs[editing]?.jobs === 1 ? "" : "s"} marked invoiced
+                        {usesSw(editing) ? " - this is the one used." : " - not used for this month."}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1515,7 +1615,8 @@ export default function FinancePage() {
         <dl className="max-w-3xl bg-white border border-gray-200 rounded-lg p-5 space-y-3 text-sm">
           {[
             ["Revenue", "QuickBooks, Profit and Loss for last month: Total for Income."],
-            ["Materials (steel COGS)", "Same report: the Cost of Goods Sold line only, not labor or supplies."],
+            ["QB COGS (materials)", "Same report: the Cost of Goods Sold line only, not labor or supplies. Kept for comparison once ShopWorks COGS is in use."],
+            ["SW COGS", "Not typed in. ShopWorks adds up the jobs marked invoiced that month: their actual material, parts, one-off items and fabricated units, everything but labor. Build orders are left out; their cost counts when the units go out on a customer job. It matches the revenue it earned, where QuickBooks counts steel the month the bill is dated, including stock bought ahead. From the month chosen under the tracker (Use ShopWorks COGS from), every figure uses SW COGS. A job counts in the month it was marked invoiced, so mark jobs invoiced in ShopWorks the same month you invoice them in QuickBooks."],
             ["Shop supplies", "Same report: Shop Supplies."],
             ["Payroll all-in", "Total for Payroll Expenses, plus Cost of Labor if anything is still coded there."],
             ["Other overhead", "Total for Expenses minus Total for Payroll Expenses, plus any Other Expenses."],
@@ -1524,11 +1625,11 @@ export default function FinancePage() {
             ["Equipment / vehicle buys", "Statement of Cash Flows, investing section, entered as positive."],
             ["New borrowing", "Any money borrowed that month: line of credit draws or new loans."],
             ["Crew hours worked", "Payroll details for the month: regular plus overtime hours for hourly crew. Leave out PTO, holiday and salaried hours."],
-            ["Profit before draws", "Revenue minus steel, supplies, payroll, overhead, loan payments and equipment buys: what the business made before you took anything out."],
+            ["Profit before draws", "Revenue minus COGS, supplies, payroll, overhead, loan payments and equipment buys: what the business made before you took anything out."],
             ["Profit after everything", "The same, minus your draws too. New borrowing is left out, since borrowed money isn't profit. Margin is that profit as a share of revenue."],
             ["Draw it supports", "Operating profit, less the tax reserve, loan payments and the equipment fund from the Shop rate tab. Your draw shows red when it was more than that."],
             ["Fill from QuickBooks", "With QuickBooks connected (Budget tab), the month form has a Fill from QuickBooks button. It reads that month's Profit and Loss and Statement of Cash Flows and fills every box except crew hours, using the same rules as above and the account names on the Budget tab. Check the numbers, add anything paid outside QuickBooks and the crew hours, then Save month. It is not offered on a month already marked final."],
-            ["Target", "The card above the tabs. Type the profit you want to keep each month after your draw and loans, and it shows the revenue that takes, the revenue after steel, and what each shop hour has to recover after steel (compare it with Recovered / hr in the tracker). Fixed costs come from the saved Shop rate, so update that first. The steel share is worked out from your final months. Shop supplies are already in the fixed costs, so they are not taken off again. The margins show what the target means as a share of sales, before and after your draw, next to what the last 3 final months achieved before draws."],
+            ["Target", "The card above the tabs. Type the profit you want to keep each month after your draw and loans, and it shows the revenue that takes, the revenue after COGS, and what each shop hour has to recover after COGS (compare it with Recovered / hr in the tracker). Fixed costs come from the saved Shop rate, so update that first. The COGS share is worked out from your final months, using whichever COGS each month uses. Shop supplies are already in the fixed costs, so they are not taken off again. The margins show what the target means as a share of sales, before and after your draw, next to what the last 3 final months achieved before draws."],
             ["Month is final", "Tick it once the numbers are complete. The banner at the top checks for it, and only final months count toward the recovered rate."],
           ].map(([t, d]) => (
             <div key={t}>
