@@ -530,6 +530,37 @@ export default function FinancePage() {
     setRateMsg({ ok: true, text: "Saved. Fully loaded rate is " + money(burden(r).full, 2) + " / hr." });
   }
 
+  // "Fill from actuals": the Shop rate's cost boxes from the average of the
+  // last 6 FINAL months in the tracker (which come from QuickBooks, plus
+  // anything corrected by hand). Crew, loans, draw target and quoted rate stay
+  // as typed. Nothing is saved until Save shop rate. (Erik, 2026-09-28)
+  function fillRateFromActuals() {
+    if (!rateDraft) return;
+    const list = finalIds.slice(-6).map((id) => months[id]);
+    if (!list.length) {
+      setRateMsg({ ok: false, text: "No months are marked final yet, so there is nothing to average." });
+      return;
+    }
+    const avg = (f: MonthField) => list.reduce((a, m) => a + m[f], 0) / list.length;
+    const fmt = (v: number) => (Math.round(v * 100) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 });
+    const overhead = avg("overhead");
+    const supplies = avg("supplies");
+    const draws = avg("owner_draws");
+    const loans = avg("debt_payments");
+    const payroll = avg("payroll");
+    setRateDraft({ ...rateDraft, fields: { ...rateDraft.fields, overhead: fmt(overhead), supplies: fmt(supplies), drawActual: fmt(draws) } });
+    const span = list.length === 1 ? monthLabel(finalIds[finalIds.length - 1]) : monthLabel(finalIds[finalIds.length - list.length]) + " to " + monthLabel(finalIds[finalIds.length - 1]);
+    const planLoans = rateDraft.debts.reduce((a, d) => a + parseNum(d.amount), 0);
+    setRateMsg({
+      ok: true,
+      text:
+        "Filled from the average of " + list.length + " final month" + (list.length === 1 ? "" : "s") + " (" + span + "): overhead " + money(overhead) +
+        ", shop supplies " + money(supplies) + ", actual draw " + money(draws) + ". To compare, not changed: loan payments averaged " + money(loans) +
+        " against " + money(planLoans) + " on your loan list, and payroll averaged " + money(payroll) + " against " + money(liveBurden?.payroll) +
+        " from your crew list. Check it, then Save shop rate.",
+    });
+  }
+
   async function applyBurden() {
     if (!companyId || !savedBurden || !Number.isFinite(savedBurden.full)) return;
     const value = Math.round(savedBurden.full * 100) / 100;
@@ -1034,6 +1065,15 @@ export default function FinancePage() {
             <div className="flex flex-wrap items-center gap-3">
               <button onClick={saveRate} disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">
                 {busy ? "Saving..." : "Save shop rate"}
+              </button>
+              <button
+                type="button"
+                onClick={fillRateFromActuals}
+                disabled={busy || finalIds.length === 0}
+                title="Overhead, shop supplies and actual draw from the average of the last 6 final months"
+                className="px-4 py-2 border border-green-700 text-green-800 rounded-md font-medium hover:bg-green-50 disabled:opacity-50"
+              >
+                Fill from actuals (last 6 final months)
               </button>
               <Msg m={rateMsg} />
             </div>
