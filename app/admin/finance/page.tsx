@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // Finances: what an hour of shop time really costs, what it brings in, and
 // how each month closed. Moved into ShopWorks from the Claude tracker
-// artifact on 2026-09-28. FINANCE-PAGE-V1
+// artifact on 2026-09-28. FINANCE-PAGE-V2 (QuickBooks added 2026-09-28)
 //
 // WHO SEES IT: only an active admin whose membership has can_see_finances on,
 // and only when the shop has the page switched on in Settings. The database
@@ -11,9 +11,15 @@
 // Everything here can show a crew member's wage and the owner's draw, so it
 // must never lean on "they're an admin" alone.
 //
-// QuickBooks is NOT here yet. The Budget tab keeps its ceilings; the "spent"
-// and "on track for" columns come with the QuickBooks connection (next
-// session), which will read the P&L and cash flow reports through Intuit.
+// QUICKBOOKS: each shop connects its own QuickBooks company (the Budget tab).
+// The login tokens never reach the browser - the page talks to
+// /api/quickbooks/* and the server reads Intuit. Two uses:
+//   * Budget tab, "Pull month to date": P&L + cash flow for the 1st..today,
+//     kept in finance_settings.qb_snapshot, drives spent / left / on track.
+//   * Month form, "Fill from QuickBooks": fills the boxes for that month for
+//     the person to check. NOTHING is saved until they press Save month, and
+//     the button is not offered on a month already marked final.
+// The account-name matching lives in app/lib/quickbooks-report.ts.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -41,9 +47,48 @@ import {
   pct,
   sumMonths,
 } from "../../lib/finance-math";
+import { budgetLine, monthFromReports, unmatchedAccounts, type QbSnapshot } from "../../lib/quickbooks-report";
 
 type Tab = "months" | "rate" | "budget" | "how";
 type Access = "checking" | "yes" | "no" | "off" | "missing";
+
+type QbStatus = {
+  configured: boolean;
+  connected: boolean;
+  environment?: "sandbox" | "production";
+  companyName?: string | null;
+  connectedAt?: string | null;
+  staleEnvironment?: string | null;
+  error?: string;
+};
+
+function isoDate(d: Date) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+// The first and last day of a 'YYYY-MM' month, with the last day capped at
+// today so a month still under way reads "to date".
+function monthRange(id: string, today: Date): { start: string; end: string } {
+  const [y, m] = id.split("-").map(Number);
+  const last = new Date(y, m, 0);
+  const end = last > today ? today : last;
+  return { start: id + "-01", end: isoDate(end) };
+}
+
+async function postJson(url: string, body?: unknown) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let j: Record<string, unknown> = {};
+  try {
+    j = await res.json();
+  } catch {
+    // leave empty
+  }
+  return { ok: res.ok, status: res.status, j };
+}
 
 // ---- the month form --------------------------------------------------------
 
@@ -119,20 +164,25 @@ function draftToRate(d: RateDraft): RateConfig {
 
 // ---- the budget form -------------------------------------------------------
 
-type BudgetDraft = (BudgetCategory & { limitText: string; pctText: string })[];
+type BudgetDraft = (BudgetCategory & { limitText: string; pctText: string; matchText: string })[];
 
 function budgetToDraft(b: BudgetConfig): BudgetDraft {
   return b.categories.map((c) => ({
     ...c,
     limitText: c.untracked ? "" : c.limit.toLocaleString("en-US"),
     pctText: c.pctOfRevenue ? +(c.pctOfRevenue * 100).toFixed(2) + "%" : "",
+    matchText: c.match.join(", "),
   }));
 }
 
 function draftToBudget(d: BudgetDraft): BudgetConfig {
   return {
     categories: d.map((c) => {
-      const out: BudgetCategory = { name: c.name.trim(), limit: c.untracked ? 0 : parseNum(c.limitText), match: c.match };
+      const match = c.matchText
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const out: BudgetCategory = { name: c.name.trim(), limit: c.untracked ? 0 : parseNum(c.limitText), match };
       if (c.fixed) out.fixed = true;
       if (c.fromCashFlow) out.fromCashFlow = true;
       if (c.untracked) out.untracked = true;
@@ -236,6 +286,12 @@ export default function FinancePage() {
   const [rateMsg, setRateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const [qb, setQb] = useState<QbStatus | null>(null);
+  const [qbSnap, setQbSnap] = useState<QbSnapshot | null>(null);
+  const [qbBusy, setQbBusy] = useState(false);
+  const [qbMsg, setQbMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [fillNotes, setFillNotes] = useState<string[]>([]);
+
   const load = useCallback(async () => {
     const { data: userData } = await supabase.auth.getUser();
     const uid = userData.user?.id ?? null;
@@ -298,11 +354,38 @@ export default function FinancePage() {
     }
     setMonths(map);
     setAccess("yes");
+
+    // QuickBooks: the last month-to-date pull, then whether we are connected.
+    // Both are allowed to fail quietly - the rest of the page still works.
+    const snapRes = await supabase.from("finance_settings").select("qb_snapshot").eq("company_id", cid).maybeSingle();
+    if (!snapRes.error) setQbSnap((snapRes.data?.qb_snapshot as QbSnapshot | null) ?? null);
+    try {
+      const r = await fetch("/api/quickbooks/status", { cache: "no-store" });
+      const j = await r.json();
+      setQb(r.ok ? (j as QbStatus) : { configured: false, connected: false, error: String(j?.error || "") });
+    } catch {
+      setQb({ configured: false, connected: false, error: "Couldn't reach the server." });
+    }
   }, [supabase]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Coming back from Intuit's sign-in page: /admin/finance?qb=connected|error
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const flag = p.get("qb");
+    if (!flag) return;
+    const text = flag === "connected" ? "QuickBooks is connected. Pull month to date to fill the Budget." : p.get("msg") || "QuickBooks wasn't connected.";
+    window.history.replaceState(null, "", window.location.pathname);
+    // Deferred so it isn't a state change straight inside the effect.
+    const t = setTimeout(() => {
+      setTab("budget");
+      setQbMsg({ ok: flag === "connected", text });
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
 
   // ---- derived numbers -----------------------------------------------------
 
@@ -318,13 +401,82 @@ export default function FinancePage() {
   const prevId = monthId(new Date(today.getFullYear(), today.getMonth() - 1, 1));
   const prevDone = !!months[prevId]?.is_final;
 
+  const liveBudget = useMemo(() => draftToBudget(budgetDraft.filter((c) => c.name.trim())), [budgetDraft]);
+  const unmatched = useMemo(() => (qbSnap ? unmatchedAccounts(qbSnap, liveBudget) : []), [qbSnap, liveBudget]);
+
   // ---- actions -------------------------------------------------------------
 
   function openMonth(id: string) {
     setEditing(id);
     setMonthDraft(monthToDraft(months[id]));
     setMonthMsg(null);
+    setFillNotes([]);
     setTab("months");
+  }
+
+  // ---- QuickBooks ----------------------------------------------------------
+
+  function connectQb() {
+    window.location.assign("/api/quickbooks/connect");
+  }
+
+  async function pullMonthToDate() {
+    setQbBusy(true);
+    setQbMsg({ ok: true, text: "Asking QuickBooks..." });
+    const { start } = monthRange(monthId(today), today);
+    const { ok, j } = await postJson("/api/quickbooks/pull", { start, end: isoDate(today), save: true });
+    setQbBusy(false);
+    if (!ok) {
+      setQbMsg({ ok: false, text: String(j.error || "QuickBooks couldn't return the reports.") });
+      if (j.reconnect) setQb((q) => (q ? { ...q, connected: false } : q));
+      return;
+    }
+    setQbSnap(j.snapshot as QbSnapshot);
+    setQbMsg(j.warning ? { ok: false, text: String(j.warning) } : { ok: true, text: "Updated." });
+  }
+
+  async function disconnectQb() {
+    if (!confirm("Disconnect QuickBooks from ShopWorks? Nothing in QuickBooks changes. You can connect it again any time.")) return;
+    setQbBusy(true);
+    const { ok, j } = await postJson("/api/quickbooks/disconnect");
+    setQbBusy(false);
+    if (!ok) {
+      setQbMsg({ ok: false, text: String(j.error || "Couldn't disconnect.") });
+      return;
+    }
+    setQb((q) => (q ? { ...q, connected: false, companyName: null } : q));
+    setQbSnap(null);
+    setQbMsg({ ok: true, text: "QuickBooks disconnected." });
+  }
+
+  async function fillMonthFromQb() {
+    if (!editing || !monthDraft) return;
+    const { start, end } = monthRange(editing, today);
+    if (start > isoDate(today)) {
+      setMonthMsg({ ok: false, text: "That month hasn't started yet." });
+      return;
+    }
+    setBusy(true);
+    setMonthMsg({ ok: true, text: "Asking QuickBooks..." });
+    const { ok, j } = await postJson("/api/quickbooks/pull", { start, end });
+    setBusy(false);
+    if (!ok) {
+      setMonthMsg({ ok: false, text: String(j.error || "QuickBooks couldn't return the reports.") });
+      if (j.reconnect) setQb((q) => (q ? { ...q, connected: false } : q));
+      return;
+    }
+    const snap = j.snapshot as QbSnapshot;
+    const fill = monthFromReports(snap.pl, snap.cf, liveBudget);
+    const next = { ...monthDraft };
+    for (const [k, v] of Object.entries(fill.values)) {
+      next[k as MonthField] = (v as number).toLocaleString("en-US", { maximumFractionDigits: 2 });
+    }
+    setMonthDraft(next);
+    setFillNotes(fill.notes);
+    setMonthMsg({
+      ok: true,
+      text: "Filled from QuickBooks (" + start + " to " + end + "). Check the numbers, add crew hours, then Save month.",
+    });
   }
 
   function addNextMonth() {
@@ -714,7 +866,24 @@ export default function FinancePage() {
                   </div>
                 ))}
               </div>
+              {fillNotes.length > 0 && (
+                <ul className="mt-4 text-xs text-gray-600 list-disc pl-5 space-y-0.5">
+                  {fillNotes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              )}
               <div className="flex flex-wrap items-center gap-4 mt-5">
+                {qb?.connected && !months[editing]?.is_final && (
+                  <button
+                    type="button"
+                    onClick={fillMonthFromQb}
+                    disabled={busy}
+                    className="px-4 py-2 border border-green-700 text-green-800 rounded-md font-medium hover:bg-green-50 disabled:opacity-50"
+                  >
+                    Fill from QuickBooks
+                  </button>
+                )}
                 <label className="flex items-center gap-2 text-gray-800 cursor-pointer">
                   <input
                     type="checkbox"
@@ -732,6 +901,7 @@ export default function FinancePage() {
                   onClick={() => {
                     setEditing(null);
                     setMonthDraft(null);
+                    setFillNotes([]);
                   }}
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium"
                 >
@@ -912,50 +1082,139 @@ export default function FinancePage() {
       {/* ------------------------------------------------ Budget */}
       {tab === "budget" && (
         <section>
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-900 mb-4">
-            Monthly ceilings live here. What has been spent so far this month, and where the month is on track to land, fill in once QuickBooks is connected to ShopWorks.
+          {/* QuickBooks connection */}
+          <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+            {!qb ? (
+              <p className="text-sm text-gray-600">Checking QuickBooks...</p>
+            ) : !qb.configured ? (
+              <p className="text-sm text-gray-600">
+                QuickBooks isn&apos;t set up on this server yet{qb.error ? " (" + qb.error + ")" : ""}. Ceilings still work; spent and on-track fill in once it is.
+              </p>
+            ) : !qb.connected ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm text-gray-700">
+                  Connect your QuickBooks company to see what has been spent this month against each ceiling.
+                  {qb.staleEnvironment && " (The old connection was made to QuickBooks " + qb.staleEnvironment + " and needs connecting again.)"}
+                </span>
+                <button onClick={connectQb} className="ml-auto bg-green-700 text-white px-4 py-2 rounded-md font-medium hover:bg-green-800">
+                  Connect QuickBooks
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm text-gray-700">
+                  Connected to <span className="font-semibold text-gray-900">{qb.companyName || "your QuickBooks company"}</span>
+                  {qb.environment === "sandbox" && <span className="ml-2 px-1.5 border border-yellow-400 text-xs rounded">sandbox</span>}
+                </span>
+                <button onClick={pullMonthToDate} disabled={qbBusy} className="ml-auto bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {qbBusy ? "Working..." : "Pull month to date"}
+                </button>
+                <button onClick={disconnectQb} disabled={qbBusy} className="px-3 py-2 text-sm text-gray-600 hover:text-red-700 disabled:opacity-50">
+                  Disconnect
+                </button>
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap gap-x-4 text-sm">
+              <Msg m={qbMsg} />
+              {qbSnap && (
+                <span className="text-gray-500">
+                  Showing {qbSnap.start} to {qbSnap.end}, pulled {new Date(qbSnap.at).toLocaleString()}.
+                  {qbSnap.start.slice(0, 7) !== monthId(today) && " That was an earlier month - pull again for this one."}
+                </span>
+              )}
+            </div>
           </div>
+
+          {qbSnap && (() => {
+            const lines = liveBudget.categories.map((c) => ({ c, l: budgetLine(c, qbSnap, liveBudget) }));
+            const capped = lines.filter((x) => !x.c.untracked);
+            const tot = capped.reduce(
+              (a, x) => ({ limit: a.limit + x.l.limit, spent: a.spent + x.l.spent, proj: a.proj + x.l.projected }),
+              { limit: 0, spent: 0, proj: 0 }
+            );
+            return (
+              <div className="flex flex-wrap gap-x-10 gap-y-3 bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                <div>
+                  <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(tot.spent)}</div>
+                  <div className="text-sm text-gray-600">Spent so far (not materials, not payroll)</div>
+                </div>
+                <div>
+                  <div className="text-3xl font-semibold tabular-nums text-gray-900">{money(tot.limit)}</div>
+                  <div className="text-sm text-gray-600">Monthly ceiling</div>
+                </div>
+                <div>
+                  <div className={"text-3xl font-semibold tabular-nums " + (tot.proj > tot.limit ? "text-red-600" : "")} style={tot.proj > tot.limit ? undefined : { color: "#1A7FA6" }}>
+                    {money(tot.proj)}
+                  </div>
+                  <div className="text-sm text-gray-600">On track to finish the month at</div>
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="bg-white border border-gray-200 rounded-lg overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
                 <tr>
                   <th className="text-left px-3 py-2 font-semibold">Category</th>
                   <th className="text-left px-3 py-2 font-semibold">Monthly ceiling</th>
-                  <th className="text-left px-3 py-2 font-semibold">Kind</th>
+                  <th className="text-right px-3 py-2 font-semibold">Spent</th>
+                  <th className="text-right px-3 py-2 font-semibold">Left</th>
+                  <th className="text-right px-3 py-2 font-semibold">On track for</th>
+                  <th className="text-right px-3 py-2 font-semibold">Used</th>
+                  <th className="text-left px-3 py-2 font-semibold">QuickBooks accounts</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {budgetDraft.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-3 py-6 text-gray-600">
+                    <td colSpan={8} className="px-3 py-6 text-gray-600">
                       No categories yet. Add the overhead lines you want to keep a ceiling on.
                     </td>
                   </tr>
                 )}
                 {budgetDraft.map((c, i) => {
                   const set = (patch: Partial<BudgetDraft[number]>) => setBudgetDraft(budgetDraft.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+                  const live = draftToBudget([c]).categories[0];
+                  const l = qbSnap ? budgetLine(live, qbSnap, liveBudget) : null;
+                  const kind = c.untracked ? "tracked only" : c.fromCashFlow ? "from cash flow" : c.pctOfRevenue !== undefined ? "share of sales" : c.fixed ? "fixed monthly" : "builds through the month";
                   return (
-                    <tr key={i} className="border-b border-gray-100">
+                    <tr key={i} className="border-b border-gray-100 align-top">
                       <td className="px-3 py-1">
                         <input aria-label="Category name" value={c.name} onChange={(e) => set({ name: e.target.value })} className={inputCls} />
+                        <div className="text-xs text-gray-500 mt-0.5">{kind}</div>
                       </td>
-                      <td className="px-3 py-1 w-56">
+                      <td className="px-3 py-1 w-48">
                         {c.untracked ? (
-                          <span className="text-gray-500">not capped</span>
+                          <span className="text-gray-500 inline-block pt-2">not capped</span>
                         ) : c.pctOfRevenue !== undefined ? (
                           <div className="flex items-center gap-2">
                             <input aria-label={c.name + " percent of sales"} inputMode="decimal" value={c.pctText} onChange={(e) => set({ pctText: e.target.value })} className={inputCls + " max-w-[6rem]"} />
-                            <span className="text-gray-500 text-xs">of sales</span>
+                            <span className="text-gray-500 text-xs">of sales{l ? " = " + money(l.limit) : ""}</span>
                           </div>
                         ) : (
                           <input aria-label={c.name + " ceiling"} inputMode="decimal" value={c.limitText} onChange={(e) => set({ limitText: e.target.value })} className={inputCls} />
                         )}
                       </td>
-                      <td className="px-3 py-1 text-gray-500 text-xs whitespace-nowrap">
-                        {c.untracked ? "tracked only" : c.fromCashFlow ? "from cash flow" : c.pctOfRevenue !== undefined ? "share of sales" : c.fixed ? "fixed monthly" : "builds through the month"}
+                      <td className="px-3 py-2 text-right tabular-nums">{l ? money(l.spent) : "-"}</td>
+                      <td className={"px-3 py-2 text-right tabular-nums " + (l && !c.untracked && l.left < 0 ? "text-red-600" : "")}>
+                        {l && !c.untracked ? money(l.left) : "-"}
                       </td>
-                      <td className="px-3 py-1 text-right">
+                      <td className={"px-3 py-2 text-right tabular-nums " + (l && !c.untracked ? (l.over ? "text-red-600 font-semibold" : "text-green-700") : "")}>
+                        {l && !c.untracked ? money(l.projected) : "-"}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{l && !c.untracked && l.share !== null ? pct(l.share) : "-"}</td>
+                      <td className="px-3 py-1 min-w-[16rem]">
+                        <input
+                          aria-label={c.name + " QuickBooks accounts"}
+                          value={c.matchText}
+                          onChange={(e) => set({ matchText: e.target.value })}
+                          placeholder={c.fromCashFlow ? "owner's draw account (optional)" : "account names, comma separated"}
+                          className={inputCls + " text-xs"}
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right">
                         <button type="button" onClick={() => setBudgetDraft(budgetDraft.filter((_, j) => j !== i))} className="text-red-600 hover:text-red-800 text-xs font-medium">
                           Remove
                         </button>
@@ -965,7 +1224,7 @@ export default function FinancePage() {
                 })}
                 <tr className="bg-gray-100 font-semibold">
                   <td className="px-3 py-2">Total dollar ceilings</td>
-                  <td className="px-3 py-2 tabular-nums" colSpan={3}>
+                  <td className="px-3 py-2 tabular-nums" colSpan={7}>
                     {money(budgetDraft.filter((c) => !c.untracked && c.pctOfRevenue === undefined).reduce((a, c) => a + parseNum(c.limitText), 0))}
                   </td>
                 </tr>
@@ -975,18 +1234,36 @@ export default function FinancePage() {
           <div className="flex flex-wrap items-center gap-3 mt-4">
             <button
               type="button"
-              onClick={() => setBudgetDraft([...budgetDraft, { name: "New category", limit: 0, match: [], limitText: "0", pctText: "" }])}
+              onClick={() => setBudgetDraft([...budgetDraft, { name: "New category", limit: 0, match: [], limitText: "0", pctText: "", matchText: "" }])}
               className="px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Add category
             </button>
             <button onClick={saveBudget} disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">
-              {busy ? "Saving..." : "Save ceilings"}
+              {busy ? "Saving..." : "Save ceilings and accounts"}
             </button>
             <Msg m={budgetMsg} />
           </div>
+
+          {qbSnap && unmatched.length > 0 && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 mt-4 text-sm">
+              <p className="font-semibold text-gray-900 mb-1">QuickBooks accounts not in any category this month</p>
+              <p className="text-gray-600 mb-2">
+                They still count in the monthly tracker as overhead. To track one against a ceiling, type its name into a category&apos;s QuickBooks accounts box and save.
+              </p>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                {unmatched.map((u) => (
+                  <li key={u.name} className="flex justify-between gap-3">
+                    <span>{u.name}</span>
+                    <span className="tabular-nums">{money(u.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <p className="text-xs text-gray-500 mt-3 max-w-3xl">
-            Ceilings cover overhead only. Materials, shop supplies and payroll move with the work, so they are tracked but not capped. Fixed items like rent and insurance get paid once a month; everything else builds up through the month.
+            Ceilings cover overhead only. Materials, shop supplies and payroll move with the work, so they are tracked but not capped. &quot;On track for&quot; is where the month should land: spending that builds up through the month is scaled by how much of the month is left; fixed items like rent, insurance and your draw are just what has gone out, since they get paid once. Red means it lands over the ceiling. Account names must match QuickBooks exactly (capitals don&apos;t matter); naming a parent account counts everything under it.
           </p>
         </section>
       )}
@@ -1008,6 +1285,7 @@ export default function FinancePage() {
             ["Profit before draws", "Revenue minus steel, supplies, payroll, overhead, loan payments and equipment buys: what the business made before you took anything out."],
             ["Profit after everything", "The same, minus your draws too. New borrowing is left out, since borrowed money isn't profit. Margin is that profit as a share of revenue."],
             ["Draw it supports", "Operating profit, less the tax reserve, loan payments and the equipment fund from the Shop rate tab. Your draw shows red when it was more than that."],
+            ["Fill from QuickBooks", "With QuickBooks connected (Budget tab), the month form has a Fill from QuickBooks button. It reads that month's Profit and Loss and Statement of Cash Flows and fills every box except crew hours, using the same rules as above and the account names on the Budget tab. Check the numbers, add anything paid outside QuickBooks and the crew hours, then Save month. It is not offered on a month already marked final."],
             ["Month is final", "Tick it once the numbers are complete. The banner at the top checks for it, and only final months count toward the recovered rate."],
           ].map(([t, d]) => (
             <div key={t}>
