@@ -1118,7 +1118,9 @@ export default function FinancePage() {
               <Msg m={qbMsg} />
               {qbSnap && (
                 <span className="text-gray-500">
-                  Showing {qbSnap.start} to {qbSnap.end}, pulled {new Date(qbSnap.at).toLocaleString()}.
+                  Showing {qbSnap.start} to {qbSnap.end}
+                  {qbSnap.pl.basis ? ", " + qbSnap.pl.basis.toLowerCase() + " basis" : ", basis not stated (pulled before 2026-09-28 fix - pull again)"}
+                  , pulled {new Date(qbSnap.at).toLocaleString()}.
                   {qbSnap.start.slice(0, 7) !== monthId(today) && " That was an earlier month - pull again for this one."}
                 </span>
               )}
@@ -1244,6 +1246,46 @@ export default function FinancePage() {
             </button>
             <Msg m={budgetMsg} />
           </div>
+
+          {qbSnap && (
+            <details className="bg-white border border-gray-200 rounded-md p-3 mt-4 text-sm">
+              <summary className="cursor-pointer font-semibold text-gray-900">What QuickBooks sent (to compare with your Profit and Loss)</summary>
+              <p className="text-gray-600 mt-2 mb-2">
+                Exactly what came back for {qbSnap.pl.period || qbSnap.start + " to " + qbSnap.end}
+                {qbSnap.pl.basis ? " (" + qbSnap.pl.basis + ")" : ""}. Each line should match the same line on your QuickBooks report for the same dates and basis.
+              </p>
+              {[
+                { title: "Profit and Loss", rep: qbSnap.pl },
+                { title: "Statement of Cash Flows", rep: qbSnap.cf },
+              ].map(({ title, rep }) => {
+                const rows: { name: string; amount: number; depth: number; total: boolean }[] = [];
+                const walk = (nodes: QbSnapshot["pl"]["groups"][string][], depth: number) => {
+                  for (const n of nodes) {
+                    if (n.children) {
+                      if (n.children.length) walk(n.children, depth + 1);
+                      rows.push({ name: "Total " + n.name, amount: n.amount, depth, total: true });
+                    } else rows.push({ name: n.name, amount: n.amount, depth, total: false });
+                  }
+                };
+                walk(Object.values(rep.groups), 0);
+                return (
+                  <div key={title} className="mt-3">
+                    <p className="font-semibold text-gray-900">{title}</p>
+                    <table className="w-full max-w-xl text-sm tabular-nums">
+                      <tbody>
+                        {rows.map((r, i) => (
+                          <tr key={i} className={r.total ? "font-semibold border-t border-gray-200" : ""}>
+                            <td className="py-0.5" style={{ paddingLeft: r.depth * 16 }}>{r.name}</td>
+                            <td className="py-0.5 text-right">{money(r.amount, 2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </details>
+          )}
 
           {qbSnap && unmatched.length > 0 && (
             <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 mt-4 text-sm">

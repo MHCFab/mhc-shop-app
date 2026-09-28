@@ -31,7 +31,13 @@ export type QbNode = {
 };
 
 // A parsed report: its top-level sections, keyed by QuickBooks' group name.
-export type QbReport = { groups: Record<string, QbNode> };
+export type QbReport = {
+  groups: Record<string, QbNode>;
+  // What QuickBooks itself says it ran (from the report header), so the page
+  // can show it and nobody has to guess: "Accrual" or "Cash", and the dates.
+  basis?: string;
+  period?: string;
+};
 
 export type QbSnapshot = {
   at: string; // when it was pulled (ISO)
@@ -93,7 +99,12 @@ export function parseReport(json: unknown): QbReport {
     const key = r.group || node.name;
     if (key) groups[key] = node;
   }
-  return { groups };
+  const h = (json as { Header?: { ReportBasis?: string; StartPeriod?: string; EndPeriod?: string } })?.Header;
+  return {
+    groups,
+    basis: h?.ReportBasis || undefined,
+    period: h?.StartPeriod && h?.EndPeriod ? h.StartPeriod + " to " + h.EndPeriod : undefined,
+  };
 }
 
 // ---- matching --------------------------------------------------------------

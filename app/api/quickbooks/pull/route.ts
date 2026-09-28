@@ -2,7 +2,10 @@
 // Read the Profit and Loss and the Statement of Cash Flows from this shop's
 // QuickBooks for a date range. QUICKBOOKS-PULL-V1
 //
-// Body: { start: "YYYY-MM-DD", end: "YYYY-MM-DD", save?: boolean }
+// Body: { start: "YYYY-MM-DD", end: "YYYY-MM-DD", save?: boolean, basis?: "Accrual" | "Cash" }
+// basis defaults to Accrual. It is ALWAYS sent to QuickBooks - left out,
+// QuickBooks falls back to the company's report preference, which is not
+// necessarily the basis the owner looks at on screen.
 // Returns the two reports, parsed into a small tree (quickbooks-report.ts).
 //
 // save: true is the Budget tab's "Pull month to date". The result is stored
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
   const cfg = qboConfig();
   if (!cfg) return NextResponse.json({ error: "QuickBooks isn't set up on this server yet." }, { status: 503 });
 
-  let body: { start?: string; end?: string; save?: boolean };
+  let body: { start?: string; end?: string; save?: boolean; basis?: string };
   try {
     body = await req.json();
   } catch {
@@ -47,7 +50,7 @@ export async function POST(req: NextRequest) {
     if (!conn || conn.environment !== cfg.environment) {
       return NextResponse.json({ error: "QuickBooks isn't connected for this shop.", reconnect: true }, { status: 409 });
     }
-    const params = { start_date: start, end_date: end };
+    const params = { start_date: start, end_date: end, accounting_method: body.basis === "Cash" ? "Cash" : "Accrual" };
     // One after the other, not together: the first call may refresh the
     // token, and the second should use the refreshed one.
     const plRaw = await qboGet(cfg, admin, conn, "reports/ProfitAndLoss", params);
