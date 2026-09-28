@@ -45,6 +45,22 @@ export default async function AdminLayout({
     company = companyData;
   }
 
+  // Finances link (FINANCE-NAV-V1). Asked separately from the company name on
+  // purpose: if the finance columns are missing or the question fails, the nav
+  // simply leaves the link out - it must never cost the shop its name.
+  let showFinance = false;
+  if (profileData?.company_id) {
+    const { data: finRow } = await supabase
+      .from("companies")
+      .select("finance_enabled")
+      .eq("id", profileData.company_id)
+      .single();
+    if (finRow?.finance_enabled) {
+      const { data: allowed } = await supabase.rpc("has_finance_access");
+      showFinance = allowed === true;
+    }
+  }
+
   // Which shops this person belongs to. Renders nothing at all unless they
   // belong to more than one, or another shop has asked to add them.
   const { data: membershipRows } = await supabase.rpc("my_memberships");
@@ -76,7 +92,7 @@ export default async function AdminLayout({
       {access?.state === "grace" && (
         <PastDueBanner graceEndsAt={access.graceEndsAt} />
       )}
-      {profile && <NavBar profile={profile} company={company} />}
+      {profile && <NavBar profile={profile} company={company} showFinance={showFinance} />}
       <main>{children}</main>
     </>
   );

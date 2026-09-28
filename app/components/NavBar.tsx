@@ -19,9 +19,13 @@ type Company = {
 export default function NavBar({
   profile,
   company,
+  showFinance = false,
 }: {
   profile: Profile;
   company: Company;
+  // Finances link: only for admins the database says may see the finances,
+  // in a shop that has the page switched on. Worked out in app/admin/layout.
+  showFinance?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -50,6 +54,7 @@ export default function NavBar({
     { href: "/floor", label: "Floor View" },
     { href: "/admin/invoices", label: "Invoices" },
     { href: "/admin/archive", label: "Archive" },
+    ...(showFinance ? [{ href: "/admin/finance", label: "Finances" }] : []),
     { href: "/admin/settings", label: "Settings" },
   ];
 

@@ -19,6 +19,8 @@ type Employee = {
   status: string;
   is_active: boolean;
   created_at: string;
+  // Can this admin open the Finances page? (FINANCE-EMPLOYEES-V1)
+  seesFinances: boolean;
 };
 
 // A row of the memberships table: who belongs to this shop and how.
@@ -27,6 +29,7 @@ type MembershipRow = {
   user_id: string;
   role: string;
   status: string;
+  can_see_finances?: boolean;
 };
 
 // The person themselves. Name and email are the same in every shop they
@@ -54,6 +57,11 @@ export default function EmployeesPage() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"active" | "inactive">("active");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // Finances: is the page switched on for this shop, and do I have access?
+  // financeOn stays false until finance-schema.sql has been run, which keeps
+  // every finance control off this page until the database is ready.
+  const [financeOn, setFinanceOn] = useState(false);
+  const [myFinance, setMyFinance] = useState(false);
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -80,14 +88,39 @@ export default function EmployeesPage() {
       // company here. Customer portal logins are left out on purpose: they
       // belong on the Customers page, not here, where they could be made an
       // admin or removed with the employee tools.
-      supabase.from("memberships").select("id, user_id, role, status").in("role", ["admin", "employee"]),
+      supabase.from("memberships").select("id, user_id, role, status, can_see_finances").in("role", ["admin", "employee"]),
       // Names and email addresses, looked up separately because they belong to
       // the person rather than to any one shop.
       supabase.from("profiles").select("id, email, full_name, created_at"),
       supabase.from("employee_invitations").select("id, email, full_name, status, created_at").eq("status", "pending").order("created_at", { ascending: false }),
     ]);
 
-    if (memRes.error) setError(memRes.error.message);
+    // Before finance-schema.sql is run the can_see_finances column does not
+    // exist and the query above fails. Ask again without it so the Employees
+    // page keeps working exactly as before.
+    let memErr = memRes.error;
+    let memData = memRes.data as unknown;
+    let financeReady = true;
+    if (memErr) {
+      const retry = await supabase.from("memberships").select("id, user_id, role, status").in("role", ["admin", "employee"]);
+      memErr = retry.error;
+      memData = retry.data;
+      financeReady = false;
+    }
+    if (financeReady && userData.user) {
+      const { data: prof } = await supabase.from("profiles").select("company_id").eq("id", userData.user.id).single();
+      const { data: co } = prof?.company_id
+        ? await supabase.from("companies").select("finance_enabled").eq("id", prof.company_id).single()
+        : { data: null };
+      const { data: allowed } = await supabase.rpc("has_finance_access");
+      setFinanceOn(co?.finance_enabled === true);
+      setMyFinance(allowed === true);
+    } else {
+      setFinanceOn(false);
+      setMyFinance(false);
+    }
+
+    if (memErr) setError(memErr.message);
     else if (profRes.error) setError(profRes.error.message);
     else {
       setError(null);
@@ -95,7 +128,7 @@ export default function EmployeesPage() {
         ((profRes.data || []) as unknown as Person[]).map((p) => [p.id, p])
       );
       const rows: Employee[] = [];
-      for (const m of (memRes.data || []) as unknown as MembershipRow[]) {
+      for (const m of (memData || []) as MembershipRow[]) {
         const person = people.get(m.user_id);
         if (!person) continue;
         rows.push({
@@ -107,6 +140,7 @@ export default function EmployeesPage() {
           status: m.status,
           is_active: m.status === "active",
           created_at: person.created_at,
+          seesFinances: m.can_see_finances === true,
         });
       }
       rows.sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
@@ -278,6 +312,37 @@ export default function EmployeesPage() {
     loadData();
   }
 
+  // Finance access. The database decides who may change it (only someone who
+  // already has it, or anyone in a shop where nobody has it yet) - this just
+  // asks, and reports honestly when it is refused.
+  async function toggleFinance(emp: Employee) {
+    const name = emp.full_name || emp.email;
+    const giving = !emp.seesFinances;
+    const question = giving
+      ? (emp.id === currentUserId
+          ? "Give yourself access to the Finances page?"
+          : "Let " + name + " open the Finances page? They will see crew wages, loan payments and the owner's draw.")
+      : "Take away " + name + "'s access to the Finances page?";
+    if (!confirm(question)) return;
+    setBusyId(emp.id);
+    const { data, error } = await supabase
+      .from("memberships")
+      .update({ can_see_finances: giving })
+      .eq("id", emp.membershipId)
+      .select("id");
+    setBusyId(null);
+    if (error) {
+      alert("Not changed: " + error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      alert("Nothing was changed - the database refused that update.");
+      return;
+    }
+    flash(giving ? name + " can now open the Finances page." : name + " no longer has access to the Finances page.");
+    loadData();
+  }
+
   function openEditName(emp: Employee) {
     setEditingId(emp.id);
     setEditName(emp.full_name || "");
@@ -348,6 +413,11 @@ export default function EmployeesPage() {
   // Anyone with a still-pending invite has a login but has not set a password
   // yet. Badging them here is what stops Active team and Pending invites from
   // looking like they contradict each other.
+  // Who may hand out finance access from this screen: someone who has it, or
+  // anyone at all while nobody in the shop has it yet (a brand new shop).
+  const nobodyHasFinance = !employees.some((e) => e.role === "admin" && e.status === "active" && e.seesFinances);
+  const canGrantFinance = financeOn && (myFinance || nobodyHasFinance);
+
   const awaitingPassword = new Set(invitations.map((inv) => inv.email.toLowerCase()));
 
   // Somebody who has been asked to join but has not answered yet is not
@@ -473,6 +543,9 @@ export default function EmployeesPage() {
                       <span className={"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium " + (emp.role === "admin" ? "bg-purple-100 text-purple-800" : "bg-gray-100 text-gray-700")}>
                         {emp.role === "admin" ? "Admin" : "Employee"}
                       </span>
+                      {financeOn && emp.role === "admin" && emp.seesFinances && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 ml-2">Finances</span>
+                      )}
                       {emp.status === "pending" && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 ml-2">Waiting for them to accept</span>
                       )}
@@ -483,9 +556,21 @@ export default function EmployeesPage() {
                     <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
                       {emp.role === "admin" ? (
                         emp.id === currentUserId ? (
-                          <span className="text-gray-400">(you)</span>
+                          <>
+                            {canGrantFinance && !emp.seesFinances && emp.status === "active" && (
+                              <button onClick={() => toggleFinance(emp)} disabled={busy} className="text-green-700 hover:text-green-900 font-medium mr-3 disabled:opacity-50">Give me finance access</button>
+                            )}
+                            <span className="text-gray-400">(you)</span>
+                          </>
                         ) : (
-                          <button onClick={() => removeAdmin(emp)} disabled={busy} className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50">Remove admin</button>
+                          <>
+                            {canGrantFinance && emp.status === "active" && (
+                              <button onClick={() => toggleFinance(emp)} disabled={busy} className="text-green-700 hover:text-green-900 font-medium mr-3 disabled:opacity-50">
+                                {emp.seesFinances ? "Remove finance access" : "Give finance access"}
+                              </button>
+                            )}
+                            <button onClick={() => removeAdmin(emp)} disabled={busy} className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50">Remove admin</button>
+                          </>
                         )
                       ) : isEditing ? null : (
                         <>

@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [invTrackWallThickness, setInvTrackWallThickness] = useState(true);
   const [invTrackDrops, setInvTrackDrops] = useState(true);
   const [invUseNesting, setInvUseNesting] = useState(true);
+  // Finances page switch (FINANCE-SETTING-V1). null = the column isn't there
+  // yet (finance-schema.sql not run), so the switch is hidden.
+  const [financeEnabled, setFinanceEnabled] = useState<boolean | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -61,6 +64,13 @@ export default function SettingsPage() {
       setInvTrackDrops(invCompany.inv_track_drops !== false);
       setInvUseNesting(invCompany.inv_use_nesting !== false);
     }
+
+    const { data: finCompany, error: finError } = await supabase
+      .from("companies")
+      .select("finance_enabled")
+      .eq("id", profile.company_id)
+      .single();
+    setFinanceEnabled(finError || !finCompany ? null : finCompany.finance_enabled === true);
     setLoading(false);
   }, [supabase]);
 
@@ -125,6 +135,13 @@ export default function SettingsPage() {
         inv_use_nesting: invUseNesting,
       })
       .eq("id", companyId);
+
+    if (financeEnabled !== null) {
+      await supabase
+        .from("companies")
+        .update({ finance_enabled: financeEnabled })
+        .eq("id", companyId);
+    }
 
     setMessage("Saved.");
     setTimeout(() => setMessage(null), 2000);
@@ -230,6 +247,16 @@ export default function SettingsPage() {
             </label>
           </div>
         </div>
+
+        {financeEnabled !== null && (
+          <div className="pt-4 border-t border-gray-200">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">Finances</h2>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={financeEnabled} onChange={(e) => setFinanceEnabled(e.target.checked)} className="mt-1 h-4 w-4 rounded border-gray-300" />
+              <span className="text-sm"><span className="block font-medium text-gray-800">Finances page</span><span className="block text-xs text-gray-500">Shop rate, monthly profit tracker and overhead budget. Only admins you give finance access to on the Employees page can open it. Turning it off hides the page and keeps the numbers.</span></span>
+            </label>
+          </div>
+        )}
 
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{error}</div>}
         {message && <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">{message}</div>}
