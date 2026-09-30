@@ -77,13 +77,27 @@ const DEFAULT_SETTINGS: NestSettingsRow = {
 
 /**
  * Stick lengths the nest can plan on when the rack runs short, in inches.
- * "auto" tries both and keeps whichever buys the least steel.
+ * "auto" tries 20' and 24' and keeps whichever buys the least steel.
+ * 12' is only ever used when picked on purpose - left in auto it would win
+ * on waste alone, even for steel that is normally bought in 20' or 24'.
+ * "custom" (ORDER-LEN-CUSTOM) takes whatever length is typed in feet.
  */
 const ORDER_CHOICES: Record<string, number[]> = {
   auto: [240, 288],
+  "144": [144],
   "240": [240],
   "288": [288],
 };
+
+/** Longest stick the custom box accepts, in feet. */
+const MAX_ORDER_FEET = 60;
+
+/** "16" or "16.5" feet -> inches, or null if it isn't a sensible stick length. */
+function customOrderInches(feetText: string): number | null {
+  const ft = parseFloat(feetText);
+  if (!Number.isFinite(ft) || ft <= 0 || ft > MAX_ORDER_FEET) return null;
+  return Math.round(ft * 12 * 16) / 16;
+}
 
 /**
  * The paper cut sheet is rendered into document.body and printed with the
@@ -230,6 +244,8 @@ export default function CuttingNestOptimizer({
   const [pasteText, setPasteText] = useState("");
   /** Which lengths to plan on when the rack runs short - a key of ORDER_CHOICES. */
   const [orderChoice, setOrderChoice] = useState<string>("auto");
+  /** Feet typed in the "Other length" box, used when orderChoice is "custom". */
+  const [customOrderFeet, setCustomOrderFeet] = useState<string>("");
   /** Set when Print is pressed; the cut sheet exists only while this is set. */
   const [printedAt, setPrintedAt] = useState<string | null>(null);
   /** Other jobs' unapplied nests on this material, oldest first. */
@@ -352,7 +368,14 @@ export default function CuttingNestOptimizer({
       setAppliedAt((nest.applied_at as string | null) || null);
       // Put the order-length picker back the way it was when this nest was made.
       const offered = (nest.result as NestResult | null)?.orderLengths || [];
-      setOrderChoice(offered.length === 1 && ORDER_CHOICES[String(offered[0])] ? String(offered[0]) : "auto");
+      if (offered.length === 1 && ORDER_CHOICES[String(offered[0])]) {
+        setOrderChoice(String(offered[0]));
+      } else if (offered.length === 1) {
+        setOrderChoice("custom");
+        setCustomOrderFeet(String(+(offered[0] / 12).toFixed(3)));
+      } else {
+        setOrderChoice("auto");
+      }
     } else {
       setNestId(null);
       setSettings({
@@ -364,6 +387,7 @@ export default function CuttingNestOptimizer({
       setPlan(null);
       setAppliedAt(null);
       setOrderChoice("auto");
+      setCustomOrderFeet("");
     }
     setDirty(false);
     setLoading(false);
@@ -536,6 +560,15 @@ export default function CuttingNestOptimizer({
     return true;
   }
 
+  /** The lengths the nest may plan on buying, in inches, or null if the custom box is bad. */
+  function orderLengthsToOffer(): number[] | null {
+    if (orderChoice === "custom") {
+      const len = customOrderInches(customOrderFeet);
+      return len === null ? null : [len];
+    }
+    return ORDER_CHOICES[orderChoice] || ORDER_CHOICES.auto;
+  }
+
   function buildInputs(rack: { length: number; sticks: number }[], planned: PlannedDrop[]) {
     const parts: CutPartInput[] = usableRows().map((r) => ({
       id: r.id,
@@ -574,7 +607,7 @@ export default function CuttingNestOptimizer({
     }
     // Lengths that can be bought. The optimizer only plans on these once the
     // rack is used up, so whatever lands on them is what has to be ordered.
-    for (const len of ORDER_CHOICES[orderChoice] || ORDER_CHOICES.auto) {
+    for (const len of orderLengthsToOffer() || ORDER_CHOICES.auto) {
       stock.push({
         id: rawMaterialId + "-order-" + len,
         label: feetText(len) + " (to order)",
@@ -608,6 +641,10 @@ export default function CuttingNestOptimizer({
     setError(null);
     setNote(null);
     try {
+      if (!orderLengthsToOffer()) {
+        setError("Type the stick length you can buy, in feet (for example 16), up to " + MAX_ORDER_FEET + "'.");
+        return;
+      }
       if (dirty && !(await saveCutList())) return;
       // Read the other jobs' nests fresh - one may have changed in another tab.
       const fresh = await fetchOthers();
@@ -995,9 +1032,20 @@ export default function CuttingNestOptimizer({
             <select value={orderChoice} onChange={(e) => setOrderChoice(e.target.value)}
               className="w-full px-2 py-1.5 border border-gray-300 rounded text-gray-900 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="auto">20&apos; or 24&apos; sticks &mdash; whichever buys less</option>
+              <option value="144">12&apos; sticks</option>
               <option value="240">20&apos; sticks</option>
               <option value="288">24&apos; sticks</option>
+              <option value="custom">Other length&hellip;</option>
             </select>
+            {orderChoice === "custom" && (
+              <div className="mt-2 flex items-center gap-2">
+                <input type="number" inputMode="decimal" min="1" max={MAX_ORDER_FEET} step="any"
+                  value={customOrderFeet} onChange={(e) => setCustomOrderFeet(e.target.value)}
+                  placeholder="e.g. 16"
+                  className="w-24 px-2 py-1.5 border border-gray-300 rounded text-gray-900 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <span className="text-sm text-gray-700">ft sticks</span>
+              </div>
+            )}
           </div>
           <button onClick={runOptimize} disabled={busy}
             className="mt-3 w-full px-4 py-2 bg-blue-600 text-white rounded-md font-medium text-sm hover:bg-blue-700 disabled:opacity-50">
