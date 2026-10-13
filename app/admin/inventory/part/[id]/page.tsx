@@ -20,6 +20,25 @@ function categoryLabel(c: string) {
   return CATEGORIES.find((x) => x.value === c)?.label || c;
 }
 
+// PART-PURCHASE-EDIT-V1: purchase history lines can be edited / deleted (mirrors raw materials).
+function entryTypeLabel(t: string | null): string {
+  switch (t) {
+    case "purchase": return "Purchase";
+    case "opening": return "Opening stock";
+    case "pull": return "Used on job";
+    case "adjustment": return "Adjustment";
+    case "reversal": return "Reversal";
+    default: return "\u2014";
+  }
+}
+
+// Only manually-entered stock rows can be edited/deleted here. Job pulls (written when a
+// job is marked invoiced) and reversals belong to the job and must not be changed here.
+const EDITABLE_ENTRY_TYPES = ["purchase", "opening", "adjustment"];
+function isEditableEntry(t: string | null): boolean {
+  return t != null && EDITABLE_ENTRY_TYPES.includes(t);
+}
+
 type PurchasedPart = {
   id: string;
   name: string;
@@ -38,6 +57,7 @@ type Batch = {
   purchase_date: string;
   notes: string | null;
   entry_type: string | null;
+  supplier_id: string | null;
   suppliers: { name: string } | null;
 };
 
@@ -61,6 +81,14 @@ export default function PartDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
+  const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
+
+  // Edit / delete a single history entry (purchases, opening stock, adjustments)
+  const [editEntry, setEditEntry] = useState<Batch | null>(null);
+  const [entryForm, setEntryForm] = useState({ purchase_date: "", quantity: "", cost_each: "", supplier_id: "", notes: "" });
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const [savingEntry, setSavingEntry] = useState(false);
+  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
 
   // Manual adjustment modal
   const [showAdjust, setShowAdjust] = useState(false);
@@ -96,11 +124,11 @@ export default function PartDetailPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [partRes, batchRes, allocRes, custRes] = await Promise.all([
+    const [partRes, batchRes, allocRes, custRes, supRes] = await Promise.all([
       supabase.from("purchased_parts").select("id, name, part_number, category, description, current_cost_each, is_active, customer_id").eq("id", id).single(),
       supabase
         .from("purchased_parts_inventory")
-        .select("id, quantity, cost_each, purchase_date, notes, entry_type, suppliers(name)")
+        .select("id, quantity, cost_each, purchase_date, notes, entry_type, supplier_id, suppliers(name)")
         .eq("purchased_part_id", id)
         .order("purchase_date", { ascending: false }),
       supabase
@@ -108,6 +136,7 @@ export default function PartDetailPage() {
         .select("id, allocated_quantity, basis, jobs(id, job_number, status)")
         .eq("purchased_part_id", id),
       supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+      supabase.from("suppliers").select("id, name").order("name"),
     ]);
 
     if (partRes.error) {
@@ -119,6 +148,7 @@ export default function PartDetailPage() {
     setBatches((batchRes.data || []) as unknown as Batch[]);
     setAllocations((allocRes.data || []) as unknown as Allocation[]);
     setCustomers((custRes.data || []) as unknown as { id: string; name: string }[]);
+    setSuppliers((supRes.data || []) as unknown as { id: string; name: string }[]);
     setLoading(false);
   }, [supabase, id]);
 
@@ -176,6 +206,72 @@ export default function PartDetailPage() {
     await recalcPartCost(id);
     setShowAdjust(false);
     setAdjustForm({ quantity: "", cost_each: "", note: "" });
+    loadData();
+  }
+
+  function openEntryEdit(b: Batch) {
+    setEntryError(null);
+    setEntryForm({
+      purchase_date: b.purchase_date,
+      quantity: String(Number(b.quantity)),
+      cost_each: String(Number(b.cost_each)),
+      supplier_id: b.supplier_id || "",
+      notes: b.notes || "",
+    });
+    setEditEntry(b);
+  }
+
+  async function saveEntryEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editEntry) return;
+    setEntryError(null);
+    const qty = parseInt(entryForm.quantity, 10);
+    const cost = parseFloat(entryForm.cost_each);
+    const isStockIn = editEntry.entry_type === "purchase" || editEntry.entry_type === "opening";
+    if (isNaN(qty) || qty === 0) { setEntryError("Enter a quantity. To remove this line completely, use Delete instead."); return; }
+    if (isStockIn && qty < 0) { setEntryError("A purchase or opening stock quantity must be positive. Use Adjust inventory to remove stock."); return; }
+    if (isNaN(cost) || cost < 0) { setEntryError("Enter a valid cost each."); return; }
+    if (!entryForm.purchase_date) { setEntryError("Enter a date."); return; }
+    setSavingEntry(true);
+    const { data, error } = await supabase
+      .from("purchased_parts_inventory")
+      .update({
+        purchase_date: entryForm.purchase_date,
+        quantity: qty,
+        cost_each: cost,
+        supplier_id: entryForm.supplier_id || null,
+        notes: entryForm.notes.trim() || null,
+      })
+      .eq("id", editEntry.id)
+      .select("id");
+    setSavingEntry(false);
+    if (error) { setEntryError(error.message); return; }
+    if (!data || data.length === 0) {
+      setEntryError("Nothing was saved \u2014 the database did not allow this change. (The parts edit permission may not be set up yet.)");
+      return;
+    }
+    await recalcPartCost(id);
+    setEditEntry(null);
+    loadData();
+  }
+
+  async function deleteEntry(b: Batch) {
+    const ok = confirm(
+      "Delete this " + entryTypeLabel(b.entry_type).toLowerCase() + " entry from " + b.purchase_date +
+      " (" + Number(b.quantity).toFixed(0) + " @ $" + Number(b.cost_each).toFixed(4) + ")?\n\n" +
+      "This removes it from stock and from the cost history. This cannot be undone."
+    );
+    if (!ok) return;
+    setDeletingEntryId(b.id);
+    const { data, error } = await supabase
+      .from("purchased_parts_inventory")
+      .delete()
+      .eq("id", b.id)
+      .select("id");
+    setDeletingEntryId(null);
+    if (error) { alert("Could not delete this entry.\n\nDetails: " + error.message); return; }
+    if (!data || data.length === 0) { alert("Nothing was deleted \u2014 the database did not allow it."); return; }
+    await recalcPartCost(id);
     loadData();
   }
 
@@ -376,32 +472,51 @@ export default function PartDetailPage() {
       <section className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
         <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
           <h3 className="text-base font-semibold text-gray-900">Purchase history</h3>
+          <p className="text-sm text-gray-600">Every stock movement, newest first. You can edit or delete purchases, opening stock, and manual adjustments; parts used on jobs are recorded when the job is marked invoiced and can&apos;t be changed here.</p>
         </div>
         {batches.length === 0 ? (
           <p className="px-4 py-6 text-sm text-gray-600">No purchases recorded.</p>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Date</th>
+                <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Type</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Supplier</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Quantity</th>
                 <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Cost each</th>
                 <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700">Notes</th>
+                <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {batches.map((b) => (
-                <tr key={b.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-4 py-3 text-sm text-gray-900">{b.purchase_date}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900 text-right font-mono">{Number(b.quantity).toFixed(0)}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_each).toFixed(4)}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{b.notes || "-"}</td>
-                </tr>
-              ))}
+              {batches.map((b) => {
+                const qty = Number(b.quantity);
+                return (
+                  <tr key={b.id} className="border-b border-gray-100 last:border-0">
+                    <td className="px-4 py-3 text-sm text-gray-900">{b.purchase_date}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{entryTypeLabel(b.entry_type)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{b.suppliers?.name || "-"}</td>
+                    <td className={"px-4 py-3 text-sm text-right font-mono " + (qty < 0 ? "text-red-600" : "text-gray-900")}>{qty > 0 ? "+" : ""}{qty.toFixed(0)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 text-right font-mono">${Number(b.cost_each).toFixed(4)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{b.notes || "-"}</td>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {isEditableEntry(b.entry_type) ? (
+                        <span className="inline-flex gap-3 justify-end">
+                          <button onClick={() => openEntryEdit(b)} className="text-blue-600 hover:text-blue-800 font-medium">Edit</button>
+                          <button onClick={() => deleteEntry(b)} disabled={deletingEntryId === b.id} className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50">{deletingEntryId === b.id ? "Deleting..." : "Delete"}</button>
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">&mdash;</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
 
@@ -514,6 +629,49 @@ export default function PartDetailPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowEdit(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
                 <button type="submit" disabled={savingEdit} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingEdit ? "Saving..." : "Save"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editEntry && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <form onSubmit={saveEntryEdit} className="p-6 space-y-3">
+              <h2 className="text-xl font-bold text-gray-900">Edit {entryTypeLabel(editEntry.entry_type).toLowerCase()} entry</h2>
+              <p className="text-sm text-gray-600">Fixing an entry recalculates stock and cost on hand automatically.{editEntry.entry_type === "adjustment" ? " Use a negative quantity for stock that was removed." : ""}</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={entryForm.purchase_date} onChange={(e) => setEntryForm({ ...entryForm, purchase_date: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{editEntry.entry_type === "adjustment" ? "Qty (+/-)" : "Quantity"}</label>
+                  <input type="number" step="1" value={entryForm.quantity} onChange={(e) => setEntryForm({ ...entryForm, quantity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost each</label>
+                  <input type="number" step="0.0001" min="0" value={entryForm.cost_each} onChange={(e) => setEntryForm({ ...entryForm, cost_each: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+                <select value={entryForm.supplier_id} onChange={(e) => setEntryForm({ ...entryForm, supplier_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">&mdash; None &mdash;</option>
+                  {suppliers.map((sp) => (
+                    <option key={sp.id} value={sp.id}>{sp.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <input type="text" value={entryForm.notes} onChange={(e) => setEntryForm({ ...entryForm, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {entryError && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">{entryError}</div>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setEditEntry(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md font-medium">Cancel</button>
+                <button type="submit" disabled={savingEntry} className="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50">{savingEntry ? "Saving..." : "Save changes"}</button>
               </div>
             </form>
           </div>
