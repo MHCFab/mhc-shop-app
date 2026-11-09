@@ -242,6 +242,7 @@ type JobTask = {
   sort_order: number;
   job_line_item_id: string | null;
   completed_at: string | null;
+  estimated_minutes_total: number | null;
   job_line_items: { product_templates: { name: string } | null } | null;
 };
 
@@ -297,7 +298,7 @@ function FloorTasks({
     const [taskRes, allEntriesRes] = await Promise.all([
       supabase
         .from("job_tasks")
-        .select("id, name, description, batch_quantity, status, sort_order, job_line_item_id, completed_at, job_line_items(product_templates(name))")
+        .select("id, name, description, batch_quantity, status, sort_order, job_line_item_id, completed_at, estimated_minutes_total, job_line_items(product_templates(name))")
         .eq("job_id", jobId)
         .order("job_line_item_id")
         .order("sort_order"),
@@ -466,6 +467,44 @@ function FloorTasks({
     return (h > 0 ? h + ":" : "") + pad(m) + ":" + pad(s);
   }
 
+  // FLOOR-EST-TIME-V1: estimated time per task, from the admin Tasks tab.
+  // estimated_minutes_total is the whole task on this job (all units), so it
+  // compares straight against the total time logged on the task.
+  function taskEstSeconds(t: JobTask) {
+    return Math.max(0, Math.round(Number(t.estimated_minutes_total || 0) * 60));
+  }
+
+  // "Logged vs estimate" readout with a progress bar. Blue while under,
+  // red once the logged time passes the estimate. No estimate = just the total.
+  function timeVsEstimate(logged: number, est: number, done: boolean, big: boolean) {
+    const numCls = big ? "text-xl font-bold font-mono text-gray-900" : "text-sm text-gray-600 font-mono";
+    if (est <= 0) {
+      return <div className={numCls}>{big ? "" : "Total: "}{formatHMS(logged)}</div>;
+    }
+    const over = logged > est;
+    const pct = Math.min(100, (logged / est) * 100);
+    const diff = over ? logged - est : est - logged;
+    const diffText = over
+      ? formatHMS(diff) + " over"
+      : done
+        ? formatHMS(diff) + " under"
+        : formatHMS(diff) + " left";
+    const diffCls = over ? "text-red-700" : done ? "text-green-700" : "text-gray-600";
+    return (
+      <div className={big ? "text-right" : ""}>
+        <div className={numCls}>
+          {big ? "" : "Total: "}
+          {formatHMS(logged)}
+          <span className={big ? "text-base font-medium text-gray-500" : "text-gray-500"}> / est {formatHMS(est)}</span>
+        </div>
+        <div className={(big ? "h-2 w-48 ml-auto " : "h-1.5 w-full max-w-xs ") + "bg-gray-200 rounded-full overflow-hidden mt-1"}>
+          <div className={"h-full rounded-full " + (over ? "bg-red-600" : "bg-blue-600")} style={{ width: pct + "%" }} />
+        </div>
+        <div className={"text-sm font-mono mt-0.5 " + diffCls}>{diffText}</div>
+      </div>
+    );
+  }
+
   // Compact product summary shown at the top of the Tasks tab so the crew sees
   // what/how many to build and can jump to build notes without leaving this page.
   const productStrip = lineItems.length > 0 && (
@@ -522,7 +561,12 @@ function FloorTasks({
 
       <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
         <span className="text-sm font-medium text-gray-700">Total time logged on this job</span>
-        <span className="text-xl font-bold font-mono text-gray-900">{formatHMS(jobTotalSeconds())}</span>
+        {timeVsEstimate(
+          jobTotalSeconds(),
+          tasks.reduce((sum, t) => sum + taskEstSeconds(t), 0),
+          tasks.every((t) => t.status === "complete"),
+          true
+        )}
       </div>
 
       {Object.entries(groups).map(([key, group]) => (
@@ -543,7 +587,7 @@ function FloorTasks({
                   <div className="flex-1">
                       <div className={"font-medium " + (isComplete ? "text-gray-400 line-through" : "text-gray-900")}>{t.name}</div>
                       {t.description && <div className="text-sm text-gray-600 mt-0.5">{t.description}</div>}
-                      <div className="text-sm text-gray-600 font-mono mt-1">Total: {formatHMS(taskTotalSeconds(t.id))}</div>
+                      <div className="mt-1">{timeVsEstimate(taskTotalSeconds(t.id), taskEstSeconds(t), isComplete, false)}</div>
                       {clockedIn && (
                         <div className="text-sm text-amber-700 font-mono mt-0.5">You: clocked in {elapsed(entry.started_at)}</div>
                       )}
