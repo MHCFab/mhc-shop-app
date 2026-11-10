@@ -90,6 +90,11 @@ export default function CuttingNestTab({
   // Drop form per material
   const [dropForm, setDropForm] = useState<Record<string, { length: string; unit: "ft" | "in"; qty: string }>>({});
 
+  // NEST-MATERIAL-TABS-V1: one tab per material instead of one long scroll.
+  // Holds the pick list item id of the material on screen. The other materials
+  // stay mounted (just hidden) so an unsaved cut list isn't lost on a tab switch.
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+
   const loadCompanyId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -399,6 +404,7 @@ export default function CuttingNestTab({
   }
 
   const isFinalized = !!finalizedAt;
+  const shownItemId = items.some((i) => i.id === activeItemId) ? activeItemId : items[0].id;
 
   return (
     <div className="space-y-4">
@@ -450,6 +456,40 @@ export default function CuttingNestTab({
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Materials">
+        {items.map((item) => {
+          const selected = item.id === shownItemId;
+          const nesting = nestOn[item.raw_material_id] === true;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setActiveItemId(item.id)}
+              className={
+                "px-3 py-2 rounded-md text-sm font-medium border transition-colors text-left " +
+                (selected
+                  ? "bg-blue-600 border-blue-600 text-white"
+                  : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50")
+              }
+            >
+              {describeMaterial(item.raw_materials)}
+              {nesting && (
+                <span
+                  className={
+                    "ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold " +
+                    (selected ? "bg-white/20 text-white" : "bg-blue-50 text-blue-700")
+                  }
+                >
+                  Nest
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="space-y-3">
         {items.map((item) => {
           const lengths = availableLengths[item.raw_material_id] || [];
@@ -463,7 +503,7 @@ export default function CuttingNestTab({
           const dForm = dropForm[item.id] || { length: "", unit: "in" as const, qty: "" };
 
           return (
-            <div key={item.id} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div key={item.id} hidden={item.id !== shownItemId} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-3 flex-wrap">
                 <h4 className="text-sm font-semibold text-gray-900">{describeMaterial(item.raw_materials)}</h4>
                 {!isFinalized && (
