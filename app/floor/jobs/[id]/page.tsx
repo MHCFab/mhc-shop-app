@@ -948,6 +948,8 @@ function FloorCutNest({ jobId }: { jobId: string }) {
   const supabase = createClient();
   const [nests, setNests] = useState<FloorNest[]>([]);
   const [loading, setLoading] = useState(true);
+  // NEST-MATERIAL-TABS-V1: one tab per material instead of one long scroll.
+  const [activeNestId, setActiveNestId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -990,15 +992,42 @@ function FloorCutNest({ jobId }: { jobId: string }) {
     );
   }
 
+  const shownNestId = ready.some((n) => n.id === activeNestId) ? activeNestId : ready[0].id;
+
   return (
     <div className="space-y-4">
+      {ready.length > 1 && (
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Materials">
+          {ready.map((n) => {
+            const selected = n.id === shownNestId;
+            return (
+              <button
+                key={n.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setActiveNestId(n.id)}
+                className={
+                  "px-4 py-3 rounded-md text-base font-medium border transition-colors text-left " +
+                  (selected
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "bg-white border-gray-300 text-gray-800 hover:bg-gray-50")
+                }
+              >
+                {materialLabel(n)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-900">
         Cut these sticks in this order. Each bar is drawn to scale along its length, and mitered ends lean
         the way they sit in the saw. Where two pieces meet on one line, that is a single blade pass &mdash;
         do not cut it twice. Lengths are LONG POINT, in inches.
       </div>
 
-      {ready.map((n) => {
+      {ready.filter((n) => n.id === shownNestId).map((n) => {
         const sticks = n.result!.sticks;
         const keep = sticks.filter((s) => s.usableDrop).length;
         return (

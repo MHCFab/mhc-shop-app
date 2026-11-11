@@ -28,7 +28,9 @@ function describeMaterial(m: {
 export type PlanLine = { lineItemId: string; templateId: string; quantity: number };
 
 export type PlannedTask = {
-  sourceTaskId: string;
+  // null for tasks ShopWorks adds itself (the automatic Setup task), which
+  // don't come from any product template task.
+  sourceTaskId: string | null;
   name: string;
   description: string | null;
   batchQuantity: number;
@@ -62,6 +64,33 @@ export type JobPlan = {
   // behave exactly as they always have.
   cutItems: PlannedCutItem[];
 };
+
+// AUTO-SETUP-TASK-V1: every job built from products gets a Setup task at the
+// top of its list. It is a flat time for the whole job (batch of 1), never
+// multiplied by quantity. A job whose templates already carry a task named
+// "Setup" keeps that one instead, so there are never two.
+export const SETUP_TASK_NAME = "Setup";
+export const SETUP_TASK_MINUTES = 20;
+
+function withSetupTask(tasks: PlannedTask[], items: PlanLine[], merged: boolean): PlannedTask[] {
+  if (items.length === 0) return tasks;
+  if (tasks.some((t) => t.name.trim().toLowerCase() === SETUP_TASK_NAME.toLowerCase())) return tasks;
+  // Merged jobs share one job-wide list; otherwise Setup heads the first product's list.
+  const lineItemId = merged ? null : items[0].lineItemId;
+  const shifted = tasks.map((t) => (t.lineItemId === lineItemId ? { ...t, sortOrder: t.sortOrder + 1 } : t));
+  return [
+    {
+      sourceTaskId: null,
+      name: SETUP_TASK_NAME,
+      description: null,
+      batchQuantity: 1,
+      minutes: SETUP_TASK_MINUTES,
+      sortOrder: 0,
+      lineItemId,
+    },
+    ...shifted,
+  ];
+}
 
 // Works out everything a job needs from its product lines: material, parts,
 // stockable sub-assemblies pulled from fabricated stock, and tasks.
@@ -367,7 +396,7 @@ export async function computeJobPlan(
     materials: matMap,
     parts: partMap,
     fabricated: fabricatedQtyTotals,
-    tasks: mergeTasks ? Array.from(mergedTasks.values()) : perLineTasks,
+    tasks: withSetupTask(mergeTasks ? Array.from(mergedTasks.values()) : perLineTasks, items, mergeTasks),
     cutItems,
   };
 }

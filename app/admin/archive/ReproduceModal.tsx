@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase";
+import { SETUP_TASK_NAME, SETUP_TASK_MINUTES } from "../../lib/job-generation";
 
 type Customer = { id: string; name: string };
 
@@ -215,7 +216,22 @@ export default function ReproduceModal({
       }
 
       // 4) Tasks — rescaled to the new quantity via saved minutes-per-unit.
-      const taskRows = tasks.map((t, idx) => ({
+      // The Setup task is a flat time per job, so it is never rescaled: any saved
+      // Setup is dropped and a fresh one goes at the top (AUTO-SETUP-TASK-V1).
+      const recipeTasks = tasks.filter((t) => t.name.trim().toLowerCase() !== SETUP_TASK_NAME.toLowerCase());
+      const setupRow = {
+        company_id: companyId,
+        job_id: job.id,
+        job_line_item_id: lineItemId,
+        source_task_id: null,
+        name: SETUP_TASK_NAME,
+        description: null,
+        batch_quantity: 1,
+        estimated_minutes_total: SETUP_TASK_MINUTES,
+        status: "not_started",
+        sort_order: 0,
+      };
+      const recipeRows = recipeTasks.map((t, idx) => ({
         company_id: companyId,
         job_id: job.id,
         job_line_item_id: lineItemId,
@@ -225,8 +241,9 @@ export default function ReproduceModal({
         batch_quantity: newQty,
         estimated_minutes_total: Math.round(Number(t.minutes_per_unit) * newQty * 100) / 100,
         status: "not_started",
-        sort_order: t.sort_order ?? idx,
+        sort_order: (t.sort_order ?? idx) + 1,
       }));
+      const taskRows = [setupRow, ...recipeRows];
       if (taskRows.length > 0) {
         const { error: taskErr } = await supabase.from("job_tasks").insert(taskRows);
         if (taskErr) throw new Error("Job created, but tasks failed: " + taskErr.message);
