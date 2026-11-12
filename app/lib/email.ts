@@ -318,3 +318,51 @@ export async function sendOwnerAlertEmail(params: {
 
   return sendEmail({ to, subject: params.subject, html, text });
 }
+
+// ---------------------------------------------------------------------------
+// The onboarding spreadsheets, to the person who just bought the onboarding.
+// Sent from the Stripe webhook on checkout.session.completed. The billing page
+// shows the same links; this is the copy they can find again next week.
+// ---------------------------------------------------------------------------
+export async function sendOnboardingSpreadsheetsEmail(params: {
+  to: string;
+  shopName: string | null;
+  files: { title: string; what: string; url: string }[];
+  returnTo: string;
+}): Promise<SendResult> {
+  const shop = params.shopName || "your shop";
+  const subject = "Your ShopWorks onboarding spreadsheets";
+
+  const textLines = [
+    "Thanks for signing up " + shop + " for onboarding.",
+    "",
+    "Here are the three spreadsheets. Fill them in on your own computer - the first tab of each explains what goes where:",
+    "",
+    ...params.files.flatMap((f) => [f.title + " - " + f.what, f.url, ""]),
+    "When you're done, email all three back to " + params.returnTo +
+      " with your shop name in the subject. We'll load them and let you know when your shop is ready to check.",
+    "",
+    "Questions? Just reply to this email.",
+  ];
+
+  const html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#111;">' +
+    "<p>Thanks for signing up " + escapeHtml(shop) + " for onboarding.</p>" +
+    "<p>Here are the three spreadsheets. Fill them in on your own computer &mdash; the first tab of each explains what goes where:</p>" +
+    "<ul>" +
+    params.files
+      .map(
+        (f) =>
+          '<li style="margin-bottom:10px;"><a href="' + escapeHtml(f.url) + '">' +
+          escapeHtml(f.title) + "</a><br />" + escapeHtml(f.what) + "</li>"
+      )
+      .join("") +
+    "</ul>" +
+    "<p>When you&#39;re done, email all three back to " +
+    '<a href="mailto:' + escapeHtml(params.returnTo) + '">' + escapeHtml(params.returnTo) + "</a>" +
+    " with your shop name in the subject. We&#39;ll load them and let you know when your shop is ready to check.</p>" +
+    "<p>Questions? Just reply to this email.</p>" +
+    "</div>";
+
+  return sendEmail({ to: params.to, subject, html, text: textLines.join("\n") + "\n" });
+}

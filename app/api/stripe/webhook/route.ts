@@ -28,7 +28,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 import { getStripe, stripeConfigured, periodEndOf, toIso } from "@/app/lib/stripe";
-import { sendOwnerAlertEmail } from "@/app/lib/email";
+import { sendOwnerAlertEmail, sendOnboardingSpreadsheetsEmail } from "@/app/lib/email";
+import {
+  ONBOARDING_FILES,
+  ONBOARDING_RETURN_EMAIL,
+  onboardingUrl,
+} from "@/app/lib/onboarding-files";
 import { planById, intervalById, priceLabel } from "@/app/lib/plans";
 import type { PlanId, IntervalId } from "@/app/lib/plans";
 
@@ -385,6 +390,31 @@ async function handleEvent(admin: SupabaseClient, event: Stripe.Event) {
           "You do not need to do anything - they are switched on already.",
         ],
       });
+
+      // They bought the onboarding: send them the three spreadsheets. A mail
+      // failure must NOT fail the webhook - the shop is already switched on,
+      // and a 500 here would make Stripe retry an event that worked. The
+      // billing page shows the same links, and the failure is logged.
+      if (session.metadata?.onboarding === "yes") {
+        const to = session.customer_details?.email || session.customer_email || "";
+        if (to) {
+          const sent = await sendOnboardingSpreadsheetsEmail({
+            to,
+            shopName: (company.name as string | null) || null,
+            files: ONBOARDING_FILES.map((f) => ({
+              title: f.title,
+              what: f.what,
+              url: onboardingUrl(f),
+            })),
+            returnTo: ONBOARDING_RETURN_EMAIL,
+          });
+          if (!sent.ok) {
+            console.error("[ShopWorks] onboarding spreadsheet email failed:", sent.error);
+          }
+        } else {
+          console.error("[ShopWorks] onboarding bought but checkout had no email address");
+        }
+      }
       return;
     }
 

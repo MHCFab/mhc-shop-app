@@ -273,7 +273,11 @@ export async function POST(req: NextRequest) {
         onboarding: wantsOnboarding ? "yes" : "no",
       },
 
-      success_url: base + "/billing?checkout=success",
+      // onboarding=1 tells the billing page to show the spreadsheet links
+      // straight away. The webhook emails the same links, so this is only
+      // the convenience copy - nothing depends on it being there.
+      success_url:
+        base + "/billing?checkout=success" + (wantsOnboarding ? "&onboarding=1" : ""),
       cancel_url: base + "/billing?checkout=cancelled",
     });
 

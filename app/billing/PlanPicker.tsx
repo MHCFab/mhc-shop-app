@@ -194,7 +194,8 @@ export default function PlanPicker({
           {onboarding && (
             <span className="mt-1 block text-xs text-gray-500">
               This goes on your first invoice rather than being spread over the
-              subscription.
+              subscription. The three spreadsheets to fill in are on the next
+              page after checkout, and we email them to you as well.
             </span>
           )}
         </span>

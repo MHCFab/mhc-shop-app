@@ -24,6 +24,7 @@ import { createServerSupabaseClient } from "../lib/supabase-server";
 import { getShopAccess } from "../lib/shop-access";
 import PlanPicker from "./PlanPicker";
 import ManageBillingButton from "./ManageBillingButton";
+import OnboardingDownloads from "./OnboardingDownloads";
 import {
   isTestMode,
   pendingPlanChange,
@@ -101,6 +102,7 @@ export default async function BillingPage({
 }) {
   const params = await searchParams;
   const checkout = typeof params.checkout === "string" ? params.checkout : null;
+  const boughtOnboarding = params.onboarding === "1";
 
   // ⚠️ IS THIS DEPLOYMENT WIRED TO A STRIPE SANDBOX?
   // The one genuinely expensive mistake available here is shipping to real
@@ -256,6 +258,8 @@ export default async function BillingPage({
             </p>
           </div>
         )}
+
+        {checkout === "success" && boughtOnboarding && <OnboardingDownloads />}
 
         {checkout === "cancelled" && (
           <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6">

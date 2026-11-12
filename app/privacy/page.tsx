@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" effectiveDate="September 3, 2026">
+    <LegalPage title="Privacy Policy" effectiveDate="November 11, 2026">
       <p>
         This policy explains what information ShopWorks handles, why, and who
         else touches it. ShopWorks is operated by Mad House Customs LLC (
@@ -95,9 +95,15 @@ export default function PrivacyPage() {
         </p>
         <ul className="list-disc pl-6 space-y-2">
           <li>
-            <strong>Supabase</strong> — the database, login system, file
-            storage for photos and drawings, and the delivery of invitation and
-            password-reset emails. Data is stored in the United States.
+            <strong>Supabase</strong> — the database, login system, and file
+            storage for photos and drawings. Data is stored in the United
+            States.
+          </li>
+          <li>
+            <strong>Resend</strong> — delivery of the emails ShopWorks sends,
+            such as invitations, password resets, signup confirmations, and
+            account notices. It receives the recipient&apos;s email address and
+            the content of the message.
           </li>
           <li>
             <strong>Vercel</strong> — hosting and delivery of the application
@@ -106,6 +112,14 @@ export default function PrivacyPage() {
           <li>
             <strong>Stripe</strong> — subscription payments. Card
             details go to them directly and are never stored by ShopWorks.
+          </li>
+          <li>
+            <strong>Intuit QuickBooks</strong> — only if your shop chooses to
+            connect its QuickBooks account on the Finances page. ShopWorks then
+            reads summary reports (profit and loss, cash flow) to fill in that
+            page, and stores the connection and the figures it pulled. It does
+            not write anything back to QuickBooks. You can disconnect at any
+            time.
           </li>
         </ul>
         <p>

@@ -16,7 +16,7 @@ const SUPABASE_TIMEOUT_MS = 2000;
 
 // Paths that don't require a logged-in user.
 const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/shops",
-  "/api/stripe",
+  "/api/stripe", "/onboarding/",
   "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Paths that don't need Supabase in the middleware at all. These pages run
@@ -37,8 +37,10 @@ const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/sho
 // failed, and no shop would ever get switched on after paying. The webhook
 // does something far stronger than a session check instead: it verifies
 // Stripe's signature on the raw body before it reads a single field.
+// /onboarding/ is the three blank onboarding spreadsheets in public/. The
+// emailed links have to open for somebody who is not signed in on that device.
 const NO_AUTH_PATHS = ["/signup", "/api/signup", "/new-shop", "/api/shops",
-  "/api/stripe",
+  "/api/stripe", "/onboarding/",
   "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Resolves to the promise's value, or to null if it rejects or takes too long.
@@ -65,8 +67,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
-  // Public paths that don't require auth
-  const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
+  // Public paths that don't require auth.
+  // "/" is matched EXACTLY - it is the landing page for visitors, and
+  // app/page.tsx itself sends anyone signed in on to their own area. It cannot
+  // go in PUBLIC_PATHS, because every path starts with "/".
+  const isPublic = path === "/" || PUBLIC_PATHS.some((p) => path.startsWith(p));
 
   let supabaseResponse = NextResponse.next({ request });
 

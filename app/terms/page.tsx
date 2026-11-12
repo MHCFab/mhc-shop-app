@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" effectiveDate="September 3, 2026">
+    <LegalPage title="Terms of Service" effectiveDate="November 11, 2026">
       <p>
         These Terms of Service (the <strong>Terms</strong>) are an agreement
         between Mad House Customs LLC, a North Carolina limited liability company (
@@ -110,11 +110,29 @@ export default function TermsPage() {
           end of the trial, continued use requires a paid subscription.
         </p>
         <p>
-          Subscriptions are billed monthly in advance at the price shown when
-          you subscribe. Fees are non-refundable except where the law requires
-          otherwise. We may change prices with at least 30 days notice, which
-          takes effect at your next renewal. Any applicable taxes are yours to
-          pay.
+          You can pay monthly, or prepay for three months, six months, or a
+          year at a discount. Whichever term you choose is billed in advance at
+          the price shown when you subscribe, and renews automatically for the
+          same term until you cancel. We may change prices with at least 30
+          days notice, which takes effect at your next renewal. Any applicable
+          taxes are yours to pay.
+        </p>
+        <p>
+          Onboarding is optional. If you choose it, the one-time onboarding fee
+          is charged with your first subscription payment.
+        </p>
+        <p>
+          Fees are non-refundable except where the law requires otherwise. That
+          includes prepaid terms: if you cancel part-way through a quarter,
+          half-year, or year, you keep access until the end of that term, the
+          subscription does not renew, and the unused part of the term is not
+          refunded.
+        </p>
+        <p>
+          If you move to a larger plan or a longer term part-way through, the
+          difference for the rest of your current term is charged straight
+          away. A move to a smaller plan or a shorter term takes effect at your
+          next renewal.
         </p>
         <p>
           You can cancel at any time; cancellation takes effect at the end of
