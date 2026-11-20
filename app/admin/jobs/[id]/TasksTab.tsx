@@ -180,6 +180,14 @@ export default function TasksTab({ jobId }: { jobId: string }) {
 
   async function deleteTask(t: JobTask) {
     if (!confirm("Delete task " + t.name + "? Any time logged against it will also be removed.")) return;
+    // TASK-DELETE-TIME-V1: remove the task's time entries FIRST. The database
+    // keeps them when the task goes (the link just empties), and they would go
+    // on counting toward the job's labor cost while showing under no task.
+    const { error: timeErr } = await supabase.from("time_entries").delete().eq("job_task_id", t.id);
+    if (timeErr) {
+      alert("Failed to remove this task's time: " + timeErr.message + "\n\nThe task was not deleted.");
+      return;
+    }
     const { error } = await supabase.from("job_tasks").delete().eq("id", t.id);
     if (error) {
       alert("Failed to delete task: " + error.message);
@@ -271,7 +279,16 @@ export default function TasksTab({ jobId }: { jobId: string }) {
       alert("Could not determine your company. Try refreshing the page.");
       return;
     }
-    const anyInProgress = tasks.some((t) => t.status === "in_progress" || t.status === "paused" || t.status === "complete");
+    // Time can be on a task that never left "not started" (time added by an
+    // admin), so check the time itself, not just the task statuses.
+    const { count: loggedCount } = await supabase
+      .from("time_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("job_id", jobId)
+      .not("job_task_id", "is", null);
+    const anyInProgress =
+      (loggedCount || 0) > 0 ||
+      tasks.some((t) => t.status === "in_progress" || t.status === "paused" || t.status === "complete");
     const confirmText = anyInProgress
       ? "Regenerate the task list? Tasks that are in progress, paused, or complete will be lost along with any time entries. This cannot be undone."
       : "Regenerate the task list from the current product templates? This will delete the existing tasks and rebuild them from scratch (including sub-assembly tasks).";
@@ -294,6 +311,20 @@ export default function TasksTab({ jobId }: { jobId: string }) {
     const templateLines = (lineItems as unknown as { id: string; product_template_id: string | null; quantity: number }[])
       .filter((li) => li.product_template_id)
       .map((li) => ({ lineItemId: li.id, templateId: li.product_template_id as string, quantity: Number(li.quantity) }));
+
+    // TASK-DELETE-TIME-V1: the warning above says time entries go with the
+    // tasks, so remove them first -- otherwise they stay on the job, keep
+    // counting toward its labor cost, and show under no task.
+    const { error: timeDelError } = await supabase
+      .from("time_entries")
+      .delete()
+      .eq("job_id", jobId)
+      .not("job_task_id", "is", null);
+    if (timeDelError) {
+      alert("Failed to remove the old tasks' time: " + timeDelError.message + "\n\nNothing was changed.");
+      setRegenerating(false);
+      return;
+    }
 
     // Delete existing tasks
     const { error: delError } = await supabase.from("job_tasks").delete().eq("job_id", jobId);
