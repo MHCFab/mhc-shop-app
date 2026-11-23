@@ -19,6 +19,7 @@ import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "./lib/supabase-server";
 import PricingTable from "./components/landing/PricingTable";
 import AuthHashForwarder from "./components/landing/AuthHashForwarder";
+import { PLANS } from "./lib/plans";
 
 // System fonts on purpose: next/font/google fetches from Google AT BUILD TIME,
 // and a build that can fail because somebody else's server is slow is not a
@@ -26,10 +27,52 @@ import AuthHashForwarder from "./components/landing/AuthHashForwarder";
 const SANS =
   '"Helvetica Neue", "Segoe UI", Roboto, Arial, system-ui, sans-serif';
 
+const PAGE_TITLE = "ShopWorks | Fabrication & Job Shop Management Software";
+const PAGE_DESCRIPTION =
+  "Shop management software built by a metal fabricator: jobs, raw material inventory, cutting nests, a shop floor app, job costing and a customer portal. One flat price per shop, from $149/month. 14-day free trial, no card.";
+
 export const metadata: Metadata = {
-  title: "ShopWorks - shop management software built by a fabricator",
-  description:
-    "Jobs, material, the shop floor, job costing and a customer portal in one app. One flat price per shop, everything included. 14-day free trial, no card.",
+  title: PAGE_TITLE,
+  description: PAGE_DESCRIPTION,
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName: "ShopWorks",
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
+  },
+};
+
+// What Google reads to show ShopWorks as a software product with a price
+// (SEO-BASICS-V1). Prices come from plans.ts so they can't drift from checkout.
+const STRUCTURED_DATA = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "ShopWorks",
+  url: "https://www.shopworks.app/",
+  applicationCategory: "BusinessApplication",
+  applicationSubCategory: "Shop management software for fabrication and job shops",
+  operatingSystem: "Web browser",
+  description: PAGE_DESCRIPTION,
+  offers: {
+    "@type": "AggregateOffer",
+    priceCurrency: "USD",
+    lowPrice: Math.min(...PLANS.map((p) => p.prices.monthly)),
+    highPrice: Math.max(...PLANS.map((p) => p.prices.monthly)),
+    offerCount: PLANS.length,
+  },
+  publisher: {
+    "@type": "Organization",
+    name: "Mad House Customs LLC",
+    url: "https://www.shopworks.app/",
+    email: "support@mhcfab.com",
+  },
 };
 
 const TIMEOUT_MS = 2000;
@@ -147,6 +190,10 @@ export default async function HomePage() {
   return (
     <div className="bg-[#181e24] text-white antialiased" style={{ fontFamily: SANS }}>
       <AuthHashForwarder />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(STRUCTURED_DATA) }}
+      />
 
       {/* ------------------------------------------------------------ header */}
       <header className="sticky top-0 z-20 border-b border-[#2a333d] bg-[#181e24]/95 backdrop-blur">

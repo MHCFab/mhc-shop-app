@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  // Lets every page's link-preview image and canonical address be written as
+  // a short path ("/") and come out as a full www.shopworks.app address.
+  metadataBase: new URL("https://www.shopworks.app"),
   title: "ShopWorks",
   description: "Shop management, built for the floor.",
   manifest: "/manifest.webmanifest",

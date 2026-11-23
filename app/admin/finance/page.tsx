@@ -37,6 +37,15 @@
 // steel bought for stock and bills dated a month late). QB COGS is still
 // stored and shown beside it. rate.swCogsFrom picks the first month that uses
 // SW ("auto" = first month with any ShopWorks data); earlier months use QB.
+//
+// SW hours (SW-HOURS-V1, 2026-11-23): every hour logged on jobs in ShopWorks
+// (time_entries), by the month it was worked - everyone's time, build orders
+// included (Erik's call). Shown beside the typed crew hours with the share of
+// paid hours that landed on jobs. rate.swHoursFrom picks the first month whose
+// per-hour math (cost / recovered / margin per hr) uses SW hours; "" = never.
+// Time entries are kept for good since KEEP-TIME-V1 - before that, entries
+// were deleted 30 days after their job was invoiced, so months before
+// November 2026 are short.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -308,6 +317,9 @@ export default function FinancePage() {
   // ShopWorks COGS by 'YYYY-MM' (see SW COGS above). null = not loaded / failed.
   const [swCogs, setSwCogs] = useState<Record<string, { cost: number; jobs: number }> | null>(null);
   const [swError, setSwError] = useState<string | null>(null);
+  // Hours logged on jobs by 'YYYY-MM' (see SW hours above). null = not loaded / failed.
+  const [swHours, setSwHours] = useState<Record<string, number> | null>(null);
+  const [swHoursError, setSwHoursError] = useState<string | null>(null);
   const [targetMsg, setTargetMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [qb, setQb] = useState<QbStatus | null>(null);
@@ -398,6 +410,44 @@ export default function FinancePage() {
       }
       setSwCogs(byMonth);
     }
+
+    // ShopWorks hours: every time entry, split at month boundaries (local
+    // time), a running timer counted up to now. Paged - the API returns at
+    // most 1000 rows a call.
+    {
+      const byMonth: Record<string, number> = {};
+      let failed: string | null = null;
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const te = await supabase
+          .from("time_entries")
+          .select("id, started_at, ended_at")
+          .eq("company_id", cid)
+          .order("started_at")
+          .order("id")
+          .range(from, from + PAGE - 1);
+        if (te.error) {
+          failed = te.error.message;
+          break;
+        }
+        const rows = (te.data || []) as unknown as { started_at: string; ended_at: string | null }[];
+        for (const e of rows) {
+          let s = new Date(e.started_at).getTime();
+          const end = e.ended_at ? new Date(e.ended_at).getTime() : Date.now();
+          while (s < end) {
+            const d = new Date(s);
+            const next = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+            const segEnd = Math.min(end, next);
+            const id = monthId(d);
+            byMonth[id] = (byMonth[id] || 0) + (segEnd - s) / 3600000;
+            s = segEnd;
+          }
+        }
+        if (rows.length < PAGE) break;
+      }
+      if (failed) setSwHoursError(failed);
+      else setSwHours(byMonth);
+    }
     setAccess("yes");
 
     // QuickBooks: the last month-to-date pull, then whether we are connected.
@@ -449,8 +499,19 @@ export default function FinancePage() {
   const swFrom = !swCogs ? "" : swSetting === "auto" ? swIds[0] || "" : swSetting;
   const usesSw = (id: string) => !!swFrom && id >= swFrom;
   const swOf = (id: string) => swCogs?.[id]?.cost ?? 0;
+  // Same idea for hours: eff[] swaps in ShopWorks logged hours from the
+  // chosen month; months[] keeps the typed crew hours.
+  const swHoursFrom = swHours ? rate?.swHoursFrom ?? "" : "";
+  const usesSwHours = (id: string) => !!swHoursFrom && id >= swHoursFrom;
+  const swHrsOf = (id: string) => swHours?.[id] ?? 0;
+  const loggedPct = (logged: number, paid: number) => (paid ? logged / paid : NaN);
   const eff: Record<string, MonthRow> = {};
-  for (const id of ids) eff[id] = usesSw(id) ? { ...months[id], materials: swOf(id) } : months[id];
+  for (const id of ids) {
+    let m = months[id];
+    if (usesSw(id)) m = { ...m, materials: swOf(id) };
+    if (usesSwHours(id)) m = { ...m, crew_hours: swHrsOf(id) };
+    eff[id] = m;
+  }
   const last3 = finalIds.slice(-3).map((id) => eff[id]);
   const last3Calc = last3.length ? calcMonth(sumMonths(last3), rate) : null;
 
@@ -570,7 +631,7 @@ export default function FinancePage() {
   async function saveRate() {
     if (!companyId || !rateDraft) return;
     // The shop rate form doesn't hold the target, so carry the saved one over.
-    const r = { ...draftToRate(rateDraft), targetProfit: rate?.targetProfit ?? 0, swCogsFrom: rate?.swCogsFrom ?? "auto" };
+    const r = { ...draftToRate(rateDraft), targetProfit: rate?.targetProfit ?? 0, swCogsFrom: rate?.swCogsFrom ?? "auto", swHoursFrom: rate?.swHoursFrom ?? "" };
     setBusy(true);
     setRateMsg(null);
     const { data, error } = await supabase
@@ -606,6 +667,23 @@ export default function FinancePage() {
     setRate(r);
     setTargetText(r.targetProfit.toLocaleString("en-US", { maximumFractionDigits: 2 }));
     setTargetMsg({ ok: true, text: "Target saved." });
+  }
+
+  // "Use ShopWorks hours from" - saved straight away, like the COGS picker.
+  async function saveSwHoursFrom(value: string) {
+    if (!companyId || !rate) return;
+    const r = { ...rate, swHoursFrom: value };
+    setBusy(true);
+    const { data, error } = await supabase
+      .from("finance_settings")
+      .upsert({ company_id: companyId, rate: r, updated_at: new Date().toISOString(), updated_by: userId }, { onConflict: "company_id" })
+      .select("company_id");
+    setBusy(false);
+    if (error || !data || data.length === 0) {
+      setMonthMsg({ ok: false, text: "Didn't save" + (error ? ": " + error.message : " - the database refused it.") });
+      return;
+    }
+    setRate(r);
   }
 
   // "Use ShopWorks COGS from" - saved straight away, like the target.
@@ -705,7 +783,7 @@ export default function FinancePage() {
   function downloadCsv() {
     const head = [
       "Month", "Revenue", "QB COGS", "SW COGS", "COGS used", "Shop supplies", "Payroll all-in", "Other overhead", "Loan payments",
-      "Owner draws", "Equipment buys", "New borrowing", "Crew hours", "Final", "Revenue after COGS",
+      "Owner draws", "Equipment buys", "New borrowing", "Crew hours", "Final", "SW hours", "Hours used", "Revenue after COGS",
       "Out not COGS", "Cost per hr", "Recovered per hr", "Margin per hr", "Profit before draws",
       "Margin before draws", "Profit after everything", "Margin after", "Draw it supports",
     ];
@@ -718,6 +796,7 @@ export default function FinancePage() {
         [
           monthLabel(id), num(m.revenue), num(m.materials), swCogs ? num(swOf(id)) : "", usesSw(id) ? "SW" : "QB",
           ...MONTH_FIELDS.filter((f) => f !== "revenue" && f !== "materials").map((f) => num(m[f])), m.is_final ? "Y" : "N",
+          swHours ? num(swHrsOf(id)) : "", usesSwHours(id) ? "SW" : "Crew",
           num(c.after), num(c.out), num(c.cost), num(c.rec), num(c.margin), num(c.pre), num(c.prePct),
           num(c.profit), num(c.pct), num(c.supports),
         ].join(",")
@@ -996,6 +1075,8 @@ export default function FinancePage() {
                   <th className="px-3 py-2 font-semibold">Revenue<br />after COGS</th>
                   <th className="px-3 py-2 font-semibold">Out, not<br />COGS</th>
                   <th className="px-3 py-2 font-semibold">Crew<br />hours</th>
+                  <th className="px-3 py-2 font-semibold">SW<br />hours</th>
+                  <th className="px-3 py-2 font-semibold" title="Share of paid crew hours that were logged on jobs in ShopWorks">On<br />jobs</th>
                   <th className="px-3 py-2 font-semibold">Cost<br />/ hr</th>
                   <th className="px-3 py-2 font-semibold">Recovered<br />/ hr</th>
                   <th className="px-3 py-2 font-semibold">Margin<br />/ hr</th>
@@ -1010,7 +1091,7 @@ export default function FinancePage() {
               <tbody className="tabular-nums">
                 {ids.length === 0 && (
                   <tr>
-                    <td colSpan={16} className="px-3 py-6 text-gray-600">
+                    <td colSpan={18} className="px-3 py-6 text-gray-600">
                       No months yet. Use Add next month to enter the first one.
                     </td>
                   </tr>
@@ -1040,7 +1121,9 @@ export default function FinancePage() {
                       </td>
                       <td className="px-3 py-2">{money(c.after)}</td>
                       <td className="px-3 py-2">{money(c.out)}</td>
-                      <td className="px-3 py-2">{hrs(c.h)}</td>
+                      <td className={"px-3 py-2 " + (usesSwHours(id) ? "text-gray-400" : "")}>{hrs(m.crew_hours)}</td>
+                      <td className={"px-3 py-2 " + (usesSwHours(id) ? "" : "text-gray-400")}>{swHours ? hrs(swHrsOf(id)) : "-"}</td>
+                      <td className="px-3 py-2">{swHours ? pct(loggedPct(swHrsOf(id), m.crew_hours)) : "-"}</td>
                       <td className="px-3 py-2">{money(c.cost)}</td>
                       <td className="px-3 py-2">{money(c.rec)}</td>
                       <td className={"px-3 py-2 " + signCls(c.margin)}>{money(c.margin)}</td>
@@ -1062,6 +1145,8 @@ export default function FinancePage() {
                     const t = sumMonths(s.ids.map((id) => eff[id]));
                     const qbTotal = s.ids.reduce((a, id) => a + months[id].materials, 0);
                     const swTotal = s.ids.reduce((a, id) => a + swOf(id), 0);
+                    const crewTotal = s.ids.reduce((a, id) => a + months[id].crew_hours, 0);
+                    const swHrsTotal = s.ids.reduce((a, id) => a + swHrsOf(id), 0);
                     const c = calcMonth(t, rate);
                     return (
                       <tr key={s.name} className="bg-gray-100 font-semibold text-right border-b border-gray-200">
@@ -1071,7 +1156,9 @@ export default function FinancePage() {
                         <td className="px-3 py-2">{swCogs ? money(swTotal) : "-"}</td>
                         <td className="px-3 py-2">{money(c.after)}</td>
                         <td className="px-3 py-2">{money(c.out)}</td>
-                        <td className="px-3 py-2">{hrs(c.h)}</td>
+                        <td className="px-3 py-2">{hrs(crewTotal)}</td>
+                        <td className="px-3 py-2">{swHours ? hrs(swHrsTotal) : "-"}</td>
+                        <td className="px-3 py-2">{swHours ? pct(loggedPct(swHrsTotal, crewTotal)) : "-"}</td>
                         <td className="px-3 py-2">{money(c.cost)}</td>
                         <td className="px-3 py-2">{money(c.rec)}</td>
                         <td className={"px-3 py-2 " + signCls(c.margin)}>{money(c.margin)}</td>
@@ -1116,11 +1203,35 @@ export default function FinancePage() {
                 </select>
               </label>
             )}
+            {swHours && rate && (
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                Use ShopWorks hours from
+                <select
+                  value={rate.swHoursFrom}
+                  disabled={busy}
+                  onChange={(e) => saveSwHoursFrom(e.target.value)}
+                  className="px-2 py-1.5 border border-gray-300 rounded-md text-gray-900"
+                >
+                  <option value="">Never - use crew hours</option>
+                  {ids.map((id) => (
+                    <option key={id} value={id}>
+                      {monthLabel(id)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <p className="text-xs text-gray-500 mt-2">
             SW COGS is what ShopWorks recorded on the jobs marked invoiced that month: material, parts, one-off items and fabricated units, everything but labor
             (build orders count when their units go out on a job). The greyed COGS column is the one not being used. Every figure after it uses the other.
             {swError && <span className="text-red-600"> ShopWorks COGS couldn&apos;t load ({swError}), so QuickBooks COGS is used everywhere.</span>}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            SW hours is every hour logged on jobs in ShopWorks that month, everyone&apos;s time, build orders included. On jobs is SW hours as a share of the crew
+            hours you entered. The greyed hours column is the one not being used for cost, recovered and margin per hour. Months before November 2026 are short:
+            ShopWorks used to delete time entries 30 days after a job was invoiced.
+            {swHoursError && <span className="text-red-600"> ShopWorks hours couldn&apos;t load ({swHoursError}), so crew hours are used everywhere.</span>}
           </p>
 
           {editing && monthDraft && (
@@ -1148,6 +1259,12 @@ export default function FinancePage() {
                       <p className="text-xs text-gray-500 mt-1">
                         ShopWorks: {money(swOf(editing))} from {swCogs[editing]?.jobs ?? 0} job{swCogs[editing]?.jobs === 1 ? "" : "s"} marked invoiced
                         {usesSw(editing) ? " - this is the one used." : " - not used for this month."}
+                      </p>
+                    )}
+                    {f.key === "crew_hours" && swHours && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        ShopWorks: {hrs(swHrsOf(editing))} hrs logged on jobs
+                        {usesSwHours(editing) ? " - these are used for the per-hour figures." : " - not used for this month."}
                       </p>
                     )}
                   </div>

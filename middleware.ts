@@ -39,8 +39,12 @@ const PUBLIC_PATHS = ["/login", "/signup", "/api/signup", "/new-shop", "/api/sho
 // Stripe's signature on the raw body before it reads a single field.
 // /onboarding/ is the three blank onboarding spreadsheets in public/. The
 // emailed links have to open for somebody who is not signed in on that device.
+// /robots.txt, /sitemap.xml and /opengraph-image are for search engines and
+// link previews - none of them is signed in. /manifest.webmanifest is the
+// app-install file, which phones fetch before anyone logs in.
 const NO_AUTH_PATHS = ["/signup", "/api/signup", "/new-shop", "/api/shops",
   "/api/stripe", "/onboarding/",
+  "/robots.txt", "/sitemap.xml", "/opengraph-image", "/manifest.webmanifest",
   "/accept-invite", "/reset-password", "/auth", "/terms", "/privacy"];
 
 // Resolves to the promise's value, or to null if it rejects or takes too long.

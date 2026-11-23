@@ -33,6 +33,7 @@ export type RateConfig = {
   equipFund: number;
   targetProfit: number; // the Target card: profit to keep each month AFTER draw + loans
   swCogsFrom: string; // 'YYYY-MM': months from here on use ShopWorks COGS; "" = never; "auto" = first month with ShopWorks data
+  swHoursFrom: string; // 'YYYY-MM': months from here on use ShopWorks logged hours for the per-hour math; "" = never (SW-HOURS-V1)
 };
 
 export type BudgetCategory = {
@@ -93,6 +94,7 @@ export const EMPTY_RATE: RateConfig = {
   equipFund: 0,
   targetProfit: 0,
   swCogsFrom: "auto",
+  swHoursFrom: "",
 };
 
 const n = (v: unknown) => {
@@ -131,6 +133,7 @@ export function normaliseRate(raw: unknown): RateConfig {
     equipFund: n(r.equipFund),
     targetProfit: n(r.targetProfit),
     swCogsFrom: typeof r.swCogsFrom === "string" ? r.swCogsFrom : "auto",
+    swHoursFrom: typeof r.swHoursFrom === "string" ? r.swHoursFrom : "",
   };
 }
 

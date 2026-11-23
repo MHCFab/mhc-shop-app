@@ -51,6 +51,8 @@ export default function TimeReportPage() {
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [jobs, setJobs] = useState<Record<string, JobInfo>>({});
   const [taskNames, setTaskNames] = useState<Record<string, string>>({});
+  // job number -> customer, for invoiced (archived) jobs
+  const [archivedCustomers, setArchivedCustomers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   const weekStart = weekStartFor(weekOffset);
@@ -63,10 +65,7 @@ export default function TimeReportPage() {
     const startIso = weekStart.toISOString();
     const endIso = weekEnd.toISOString();
 
-    // Auto-cleanup: drop entries whose job was invoiced more than 30 days ago.
-    const purgeCutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    await supabase.from("time_entries").delete().not("invoiced_on", "is", null).lt("invoiced_on", purgeCutoff);
-
+    // Time from invoiced jobs is kept for good (KEEP-TIME-V1) - no cleanup here.
     const { data: entryData } = await supabase
       .from("time_entries")
       .select("id, job_id, job_task_id, employee_id, started_at, ended_at, archived_job_number, archived_task_name, invoiced_on")
@@ -102,6 +101,23 @@ export default function TimeReportPage() {
       setJobs(jobMap);
     } else {
       setJobs({});
+    }
+
+    // Invoiced jobs are gone from jobs - look the customer up on the archive
+    // record by the job number stamped on the entry.
+    const archNums = Array.from(new Set(entryList.filter((e) => !e.job_id && e.archived_job_number).map((e) => e.archived_job_number as string)));
+    if (archNums.length > 0) {
+      const { data: archData } = await supabase
+        .from("completed_jobs_archive")
+        .select("job_number, customer_name")
+        .in("job_number", archNums);
+      const custMap: Record<string, string> = {};
+      for (const a of (archData || []) as unknown as { job_number: string; customer_name: string | null }[]) {
+        if (a.customer_name) custMap[a.job_number] = a.customer_name;
+      }
+      setArchivedCustomers(custMap);
+    } else {
+      setArchivedCustomers({});
     }
 
     if (taskIds.length > 0) {
@@ -274,6 +290,9 @@ export default function TimeReportPage() {
                             </span>
                           )}
                           {job?.customers?.name && <span className="text-gray-600 ml-2">{job.customers.name}</span>}
+                          {!job && !jr.live && archivedCustomers[jr.archivedLabel] && (
+                            <span className="text-gray-600 ml-2">{archivedCustomers[jr.archivedLabel]}</span>
+                          )}
                         </div>
                         <span className="font-mono text-sm font-semibold text-gray-900">{fmtHM(jr.jobTotal)}</span>
                       </div>
@@ -295,8 +314,8 @@ export default function TimeReportPage() {
       )}
 
       <p className="text-xs text-gray-500 mt-6">
-        Time from invoiced jobs stays on this report for 30 days after invoicing (marked &quot;Invoiced&quot;), then its
-        detailed entries are removed automatically. The labor totals live on in each job&apos;s archived cost summary.
+        Time from invoiced jobs stays on this report for good, marked &quot;Invoiced&quot;, under the job number it was
+        tracked on.
       </p>
     </div>
   );
